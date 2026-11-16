@@ -740,7 +740,8 @@ def _list_states(root: Path) -> dict:
 
 def _state_listing(root: Path) -> dict:
     """stem → (path, stat, mtime) of the state files. On the stat path the listing outlives the cycle while
-    the directory's key is unchanged; a reuse replays what the listing observed."""
+    the directory's key is unchanged; a reuse replays what the listing observed. The kept dict is shared
+    and read-only for callers."""
     if snapshot.stat_cycle_generation() is None:
         return _list_states(root)
     key = state_key(root)

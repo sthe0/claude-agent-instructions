@@ -342,7 +342,9 @@ def stat_cycle_generation() -> int | None:
 
 def result_key(root) -> tuple | None:
     """``(dev, ino, mtime_ns, ctime_ns, size)`` of a directory whose entries are only created, renamed or
-    replaced: a result read from it stays right for as long as the key is the one read before the read."""
+    replaced (``store.save``, ``record_drive``, the delivery and enumerate sidecars all write a temporary name
+    and ``os.replace`` it): a result read from it stays right for as long as the key is the one read before
+    the read. A file rewritten in place moves no key and would stay unseen; no writer here does that."""
     try:
         st = KEPT.stat(root)
     except OSError:
@@ -704,11 +706,11 @@ class BindingScan:
         """``(harness_index, driven)``: the harness sessions bound to each engine session in file-name order,
         and each harness session's engine sessions in drive order. Under a presumption a file it holds for is
         not read and drives none, and the index is a ``PresumedIndex``."""
+        presumption = self.presumption
+        generation = stat_cycle_generation()
+        if generation is None:
+            return self._pass(presumption)
         with self._lock:
-            presumption = self.presumption
-            generation = stat_cycle_generation()
-            if generation is None:
-                return self._pass(presumption)
             shared = shared_this_cycle(self.cycle, generation, presumption)
             if shared is not None:
                 return shared
