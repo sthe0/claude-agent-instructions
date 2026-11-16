@@ -9,6 +9,7 @@ from __future__ import annotations
 import collections
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -709,3 +710,117 @@ def test_an_edited_tree_keeps_the_executable_bit_of_an_edited_file(tmp_path):
 def test_the_planted_k3_sources_compile():
     for source in (control.K3_REGRESSION, control.K3_WIDE_SOURCE, control.K3_NARROW_SOURCE, control.K3_ANCHOR):
         compile(source, "test_planted.py", "exec")
+
+
+def test_dependents_count_readers_and_probers_of_a_path_but_not_listers():
+    deps = {"t::read": [("file", "lib/a.py", "d")], "t::probe": [("probe", "lib/a.py", "d")],
+            "t::list": [("listing", "lib", "d")]}
+    assert control.dependents_by_path(deps) == {"lib/a.py": {"t::read", "t::probe"}}
+
+
+@pytest.fixture
+def small_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i"],
+                   check=True)
+    return repo
+
+
+def _worktrees(repo: Path) -> str:
+    return subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True,
+                          check=True).stdout
+
+
+def _remove_control_dir(path: Path) -> None:
+    if path.name.startswith("cls-control-"):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_an_experiment_whose_setup_raises_leaves_no_directory_and_restores_the_environment(small_repo, monkeypatch):
+    names = ("CORE_RESULT_STORE", "SUITE_GATE_FLAKY_JOURNAL")
+    before = {name: os.environ.get(name) for name in names}
+    experiment = control.Experiment(small_repo, "setup-fails")
+
+    def failing_commit(*_args, **_kw):
+        raise RuntimeError("planted setup failure")
+
+    monkeypatch.setattr(control, "_commit", failing_commit)
+    try:
+        with pytest.raises(RuntimeError, match="planted setup failure"):
+            experiment.__enter__()
+        assert not experiment.base.exists()
+        assert {name: os.environ.get(name) for name in names} == before
+    finally:
+        _remove_control_dir(experiment.base)
+
+
+SIGTERM_RUN = """\
+import sys, time
+sys.path.insert(0, {tests!r})
+import gate_speedup_control as control
+control.exit_on_sigterm()
+from pathlib import Path
+with control.Experiment(Path({repo!r}), "sigterm") as exp:
+    exp.candidate(exp.head_tree, "x")
+    print(exp.base, flush=True)
+    time.sleep(120)
+"""
+
+
+def test_a_run_killed_with_sigterm_leaves_no_directory_worktree_or_registration(small_repo):
+    proc = subprocess.Popen([sys.executable, "-c", SIGTERM_RUN.format(tests=str(TESTS_DIR), repo=str(small_repo))],
+                            stdout=subprocess.PIPE, text=True)
+    base = Path(proc.stdout.readline().strip())
+    try:
+        assert base.is_dir() and str(base / "work") in _worktrees(small_repo)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=60) == 128 + signal.SIGTERM
+        assert not base.exists()
+        assert str(base) not in _worktrees(small_repo)
+    finally:
+        proc.kill()
+        proc.wait()
+        _remove_control_dir(base)
+
+
+def test_the_sweep_removes_the_entries_of_dead_pids_only(small_repo, tmp_path):
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        dead_dir = scratch / f"cls-control-{dead.pid}-reuse"
+        (dead_dir / "work").mkdir(parents=True)
+        (dead_dir / "work" / "big.bin").write_bytes(b"x" * 1000)
+        dead_journal = scratch / f"cls-control-{dead.pid}-journal.jsonl"
+        dead_journal.write_text("{}\n")
+        live_dir = scratch / f"cls-control-{live.pid}-reuse"
+        live_dir.mkdir()
+        scratch_dir = scratch / "cls-control-index-abc"
+        scratch_dir.mkdir()
+        removed = control.sweep_dead_control_dirs(small_repo, scratch)
+        assert sorted(removed) == sorted([dead_dir.name, dead_journal.name])
+        assert not dead_dir.exists() and not dead_journal.exists()
+        assert live_dir.exists() and scratch_dir.exists()
+    finally:
+        live.kill()
+        live.wait()
+
+
+def test_the_sweep_unregisters_the_worktree_of_a_dead_run(small_repo, tmp_path):
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    work = scratch / f"cls-control-{dead.pid}-reuse" / "work"
+    work.parent.mkdir()
+    subprocess.run(["git", "-C", str(small_repo), "worktree", "add", "--detach", str(work)], check=True,
+                   capture_output=True)
+    assert str(work) in _worktrees(small_repo)
+    control.sweep_dead_control_dirs(small_repo, scratch)
+    assert not work.parent.exists() and str(work) not in _worktrees(small_repo)

@@ -945,6 +945,58 @@ def flake_list_checks(repo: Path, work: Path, candidate: str, tip: str, case: Ve
     return found, problems
 
 
+CONTROL_ENTRY_RE = re.compile(r"^cls-control-(\d+)-")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def sweep_dead_control_dirs(repo: Path, tmp: Path = Path("/tmp")) -> list[str]:
+    """Remove what a control run that was killed left under ``tmp/cls-control-<pid>-*`` (its pid is dead).
+
+    Entries of a live pid, and ones that do not follow the pid naming (the ``cls-control-index-`` scratch
+    directories clean up through their own ``TemporaryDirectory``), are left alone. A registered worktree
+    is removed through git first so that its metadata in the repository goes with it."""
+    removed = []
+    for entry in sorted(tmp.glob("cls-control-*")):
+        match = CONTROL_ENTRY_RE.match(entry.name)
+        if match is None or _pid_alive(int(match.group(1))):
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            for tree in (entry / "work", entry):
+                subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(tree)],
+                               capture_output=True, text=True)
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+        removed.append(entry.name)
+    if removed:
+        subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True, text=True)
+    return removed
+
+
+def exit_on_sigterm() -> None:
+    """Turn SIGTERM into ``SystemExit`` so that the ``with`` and ``finally`` blocks of a run clean up."""
+    def handler(signum, _frame):
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, handler)
+
+
+def begin_control_run(repo: Path) -> None:
+    """Start of a control that makes ``/tmp/cls-control-<pid>-*`` entries: clear dead runs' leftovers, die cleanly."""
+    removed = sweep_dead_control_dirs(repo)
+    if removed:
+        _say(f"removed {len(removed)} leftover entries of dead control runs: {', '.join(removed[:6])}")
+    exit_on_sigterm()
+
+
 def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path) -> int:
     """Run one planted-test case through the real gate; 0 every expectation holds, 4 a verdict or
     classification disagrees (or the live journal changed), 1 any other error."""
@@ -973,8 +1025,8 @@ def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path
             files[flake_list.LIST_PATH] = flake_list.render_list(table)
         candidate = _commit(repo, reduced_tree(repo, files), tip, f"cls-control candidate {nonce}")
         _say(f"{case_name}: tip {tip[:12]}, candidate {candidate[:12]}")
-        _git(repo, "worktree", "add", "--detach", str(work), candidate)
         added = True
+        _git(repo, "worktree", "add", "--detach", str(work), candidate)
 
         def runner(r, sha, root, *, select, timeout_s):
             return gate.default_runner(r, sha, root, select=select, timeout_s=timeout_s, slots=2,
@@ -997,6 +1049,8 @@ def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path
         if added:
             subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(work)],
                            capture_output=True, text=True)
+            if work.name.startswith("cls-control-"):
+                shutil.rmtree(work, ignore_errors=True)
         subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True, text=True)
         for leftover in (journal, journal.with_name(journal.name + ".lock")):
             leftover.unlink(missing_ok=True)
@@ -1473,17 +1527,22 @@ class Experiment:
         free_gb = shutil.disk_usage("/").free / 2**30
         if free_gb < MIN_FREE_GB:
             raise SystemExit(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
-        live = result_store.store_path(Path(gate.shared.git_common_dir(self.repo)))
-        self.base.mkdir(parents=True)
-        result_store.copy_store(live, self.store)
-        for name, value in ((result_store.STORE_ENV, self.store), (flake_list.JOURNAL_ENV, self.journal)):
-            self._saved[name] = os.environ.get(name)
-            os.environ[name] = str(value)
-        self.head_tree = _git(self.repo, "rev-parse", "HEAD^{tree}")
-        self.tip = _commit(self.repo, self.head_tree, "HEAD", f"cls-control tip {self.base.name}")
+        try:
+            live = result_store.store_path(Path(gate.shared.git_common_dir(self.repo)))
+            self.base.mkdir(parents=True)
+            result_store.copy_store(live, self.store)
+            for name, value in ((result_store.STORE_ENV, self.store), (flake_list.JOURNAL_ENV, self.journal)):
+                self._saved[name] = os.environ.get(name)
+                os.environ[name] = str(value)
+            self.head_tree = _git(self.repo, "rev-parse", "HEAD^{tree}")
+            self.tip = _commit(self.repo, self.head_tree, "HEAD", f"cls-control tip {self.base.name}")
+        except BaseException:
+            self.__exit__()
+            raise
         return self
 
     def __exit__(self, *_exc) -> None:
+        """Restore the environment and remove the worktree and the directory, on a pass, a failure or a kill."""
         for name, value in self._saved.items():
             if value is None:
                 os.environ.pop(name, None)
@@ -1500,8 +1559,8 @@ class Experiment:
         """A commit of ``tree`` on top of the tip; the first one also becomes the detached worktree."""
         sha = _commit(self.repo, tree, self.tip, f"cls-control {label} {self.base.name}")
         if not self._worktree:
-            _git(self.repo, "worktree", "add", "--detach", str(self.work), sha)
             self._worktree = True
+            _git(self.repo, "worktree", "add", "--detach", str(self.work), sha)
         return sha
 
     def run(self, sha: str, tip_reader=None) -> tuple[dict, float]:
@@ -1582,6 +1641,16 @@ def reuse_assertions(record: dict, *, named: str, touched_ids: set[str], hit_ids
     return found
 
 
+def dependents_by_path(deps: dict[str, list]) -> dict[str, set[str]]:
+    """Per repository path the tests whose stored key changes when its content does: its readers and its probers."""
+    dependents: dict[str, set[str]] = {}
+    for test_id, dep_list in deps.items():
+        for kind, path, _digest in dep_list:
+            if kind in (result_store.FILE, result_store.PROBE):
+                dependents.setdefault(path, set()).add(test_id)
+    return dependents
+
+
 def reuse_scenario(repo: Path, out: Path, *, mutate: bool, disk_max_mb: float, cpu_max_s: float | None,
                    wall_max_s: float | None) -> int:
     """Edit three files the stored runs read (a lib module, a script only a subprocess runs, a data
@@ -1590,11 +1659,7 @@ def reuse_scenario(repo: Path, out: Path, *, mutate: bool, disk_max_mb: float, c
     with Experiment(repo, "reuse") as exp:
         state = exp.prepare()
         deps = state["deps"]
-        dependents: dict[str, set[str]] = {}
-        for test_id, dep_list in deps.items():
-            for kind, path, _digest in dep_list:
-                if kind == result_store.FILE:
-                    dependents.setdefault(path, set()).add(test_id)
+        dependents = dependents_by_path(deps)
         if NAMED_TEST not in deps:
             why = ("always-rerun" if NAMED_TEST in state["always_rerun"] else
                    "failed" if NAMED_TEST in state["failed"] else
@@ -1608,6 +1673,7 @@ def reuse_scenario(repo: Path, out: Path, *, mutate: bool, disk_max_mb: float, c
         if lib is None or data is None:
             raise SystemExit(f"no stored test depends on any of {LIB_CANDIDATES if lib is None else DATA_CANDIDATES}")
         touched = [NAMED_SCRIPT, lib, data]
+        _say(f"touched: {', '.join(touched)}")
         candidate = exp.candidate(edited_tree(repo, {p: with_nonce_comment(_head_text(repo, p), nonce)
                                                      for p in touched}), "reuse")
         touched_ids = set().union(*(dependents[p] for p in touched))
@@ -1992,12 +2058,14 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_SERIES_ENVIRONMENT
     if args.command == "verdict-scenario":
         try:
+            begin_control_run(args.repo.resolve())
             return verdict_scenario(args.repo.resolve(), args.case, args.sabotage, args.out)
         except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a verdict mismatch is exit 1
             _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
             return EXIT_VERDICT_ERROR
     if args.command == "reuse-scenario":
         try:
+            begin_control_run(args.repo.resolve())
             return reuse_scenario(args.repo.resolve(), args.out, mutate=args.mutate_unrecorded,
                                   disk_max_mb=args.disk_max_mb, cpu_max_s=args.cpu_max_s, wall_max_s=args.wall_max_s)
         except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but an assertion mismatch is exit 2
@@ -2010,6 +2078,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.out is None:
                 _say("k3-negative needs --out (or --judge-only FILE)")
                 return EXIT_REUSE_ERROR
+            begin_control_run(args.repo.resolve())
             return k3_negative(args.repo.resolve(), args.out)
         except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a refused case is exit 2
             _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
