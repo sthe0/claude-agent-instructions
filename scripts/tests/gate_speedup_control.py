@@ -1962,8 +1962,10 @@ def judge_mutation(outcomes: dict, min_reused_s: float = MUTATION_MIN_REUSED_S) 
     a: an edit outside every narrowed set reuses every catalogue, ``min_reused_s`` test-seconds at least;
     b: an edit of a file only the mandate set holds reruns that catalogue alone;
     c: a pass older than the bound reruns every catalogue;
-    d, e: an edit of an import-closure file / of a file a named test reads reruns its catalogue;
-    f: a planted narrowing of every set is reported by the registry's own check."""
+    d, e: an edit of a file of the catalogue module's import closure / of a file of its named tests' import
+       closure or named by literal path reruns exactly the catalogues whose sets hold that file, and a
+       catalogue other than mandate that does not hold it is reused;
+    f: the stored row of every catalogue holds every file the module rewrites (``missed`` lists the others)."""
     subjects, unstored = set(outcomes["subjects"]), set(outcomes["unstored"])
     failed = []
     if (unstored or outcomes["a"]["rerun"] or outcomes["a"]["reused_s"] < min_reused_s):
@@ -1973,7 +1975,9 @@ def judge_mutation(outcomes: dict, min_reused_s: float = MUTATION_MIN_REUSED_S) 
     if not (subjects - unstored) <= set(outcomes["c"]["rerun"]):
         failed.append("c")
     for case in ("d", "e"):
-        if outcomes[case]["subject"] not in outcomes[case]["rerun"]:
+        found = outcomes[case]
+        if (set(found["rerun"]) - unstored != set(found["holders"]) - unstored or outcomes[case]["subject"] not in found["rerun"]
+                or not found["untouched_reused"]):
             failed.append(case)
     if outcomes["f"]["missed"]:
         failed.append("f")
@@ -1985,31 +1989,48 @@ def _reruns(registry, ids: list[str], hits: dict) -> list[str]:
     return sorted({s.name for i in ids if (s := registry.find(i)) is not None and i not in hits})
 
 
-def mandate_only_file(repo: Path, registry, deps: dict, rewritten: list[str]) -> str:
-    """A file only the mandate catalogue's narrowed set (paths and named-test reads) holds; its rewritten files first."""
+def unkeyed_rewritten(registry, ids: list[str], deps: dict, rewritten_by_name: dict) -> list[str]:
+    """Catalogues whose stored row (``deps``: collected id -> the deps behind its hit) lacks a file the module
+    rewrites from its key set, or that have no stored row at all."""
+    missed = []
+    for subject in registry.subjects:
+        rows = [{path for _kind, path, _digest in deps[i]} for i in ids if subject.covers(i) and i in deps]
+        if not rows or set(rewritten_by_name[subject.name]) - set.intersection(*rows):
+            missed.append(subject.name)
+    return sorted(missed)
+
+
+def tracked_files(repo: Path) -> list[str]:
+    """The repository's tracked files under scripts/, sorted."""
+    proc = subprocess.run(["git", "-C", str(repo), "ls-files", "-z", "scripts"], capture_output=True, text=True, check=True)
+    return sorted(p for p in proc.stdout.split("\0") if p)
+
+
+def mandate_only_file(repo: Path, registry, rewritten: list[str]) -> str:
+    """A file only the mandate catalogue's set holds; its rewritten files first."""
     subjects = {s.name: s for s in registry.subjects}
-    allowed = {n: set(s.paths) | {p for i in s.named for _k, p, _d in deps.get(i, [])} for n, s in subjects.items()}
-    others = set().union(*(a for n, a in allowed.items() if n != MUTATION_ONLY))
-    mine = sorted(allowed[MUTATION_ONLY] - others, key=lambda p: (p not in rewritten, p))
+    others = set().union(*(s.paths for n, s in subjects.items() if n != MUTATION_ONLY))
+    mine = sorted(subjects[MUTATION_ONLY].paths - others, key=lambda p: (p not in rewritten, p))
     return next((p for p in mine if p.startswith("scripts/") and p.endswith(EDITABLE_SUFFIXES)
                  and (repo / p).is_file()), "")
 
 
-def _catalogue_edit_files(repo: Path, registry, deps: dict, rewritten_by_name: dict,
-                          modules: dict[str, str], b_file: str) -> dict[str, tuple[str, str]]:
+def _catalogue_edit_files(repo: Path, registry, rewritten_by_name: dict, modules: dict[str, str],
+                          b_file: str) -> dict[str, tuple[str, str]]:
     """The file each case edits, and the catalogue it is aimed at: ``{"a"|"b"|"d"|"e": (path, name)}``.
 
-    Every choice is read from the registry and the stored dependencies, never named here."""
+    Every choice is read from the registry: a (a file outside every set), b (``b_file``), d (a file of a
+    module's import closure that no catalogue rewrites or runs), e (a file of the named tests' import closure
+    or named by literal path, outside the module's closure)."""
     subjects = {s.name: s for s in registry.subjects}
-    named_reads = {name: {p for i in s.named for _k, p, _d in deps.get(i, [])} for name, s in subjects.items()}
-    allowed = {name: set(s.paths) | named_reads[name] for name, s in subjects.items()}
-    union = set().union(*allowed.values())
+    union = set().union(*(s.paths for s in subjects.values()))
+    in_suite = {t.partition("::")[0] for s in subjects.values() for t in s.tests}
+    rewritten = set().union(*(set(r) for r in rewritten_by_name.values()))
 
     def editable(path: str) -> bool:
         return path.startswith("scripts/") and path.endswith(EDITABLE_SUFFIXES) and (repo / path).is_file()
 
-    dependents = dependents_by_path(deps)
-    outside = sorted((p for p in dependents if editable(p) and p not in union), key=lambda p: (len(dependents[p]), p))
+    outside = [p for p in tracked_files(repo) if editable(p) and p not in union]
     picked: dict[str, tuple[str, str]] = {}
     if b_file:
         picked["b"] = (b_file, MUTATION_ONLY)
@@ -2017,30 +2038,26 @@ def _catalogue_edit_files(repo: Path, registry, deps: dict, rewritten_by_name: d
         picked["a"] = (outside[0], "")
     taken = {path for path, _name in picked.values()}
     for name, s in sorted(subjects.items()):
-        in_suite = {t.partition("::")[0] for t in s.tests}
-        closure = sorted(p for p in catalogue_key.import_closure(repo, modules[name]) - {modules[name]}
-                         if editable(p) and p not in taken and p not in rewritten_by_name[name] and p not in in_suite)
-        reads = sorted(p for p in named_reads[name] - s.paths if editable(p) and p not in taken)
+        closure = sorted(p for p in s.module_closure - {modules[name]}
+                         if editable(p) and p not in taken and p not in rewritten and p not in in_suite)
+        named = sorted(p for p in (s.named_closure | s.literal) - s.module_closure
+                       if editable(p) and p not in taken and p not in rewritten and p not in in_suite)
         if closure and "d" not in picked:
             picked["d"] = (closure[0], name)
-        if reads and "e" not in picked:
-            picked["e"] = (reads[0], name)
+        if named and "e" not in picked:
+            picked["e"] = (named[0], name)
     return picked
 
 
-def _pick_diagnostics(registry, deps: dict, rewritten_by_name: dict) -> dict:
+def _pick_diagnostics(registry, rewritten_by_name: dict) -> dict:
     """Why no file qualified for a case: per catalogue the sizes of its sets, and which catalogues hold each
     file mandate rewrites."""
     subjects = {s.name: s for s in registry.subjects}
-    reads = {n: {p for i in s.named for _k, p, _d in deps.get(i, [])} for n, s in subjects.items()}
     return {
-        "sets": {n: {"paths": len(s.paths), "named": len(s.named), "named_with_deps": sum(i in deps for i in s.named),
-                     "named_reads": len(reads[n])} for n, s in subjects.items()},
-        "mandate_rewritten_held_by": {p: sorted(n for n, s in subjects.items()
-                                                if n != MUTATION_ONLY and (p in s.paths or p in reads[n]))
+        "sets": {n: {"paths": len(s.paths), "rewritten": len(s.rewritten), "module_closure": len(s.module_closure),
+                     "named_closure": len(s.named_closure), "literal": len(s.literal)} for n, s in subjects.items()},
+        "mandate_rewritten_held_by": {p: sorted(n for n, s in subjects.items() if n != MUTATION_ONLY and p in s.paths)
                                       for p in rewritten_by_name[MUTATION_ONLY]},
-        "dependents_outside_every_set": sorted(
-            p for p in dependents_by_path(deps) if p not in set().union(*(s.paths | reads[n] for n, s in subjects.items())))[:40],
     }
 
 
@@ -2067,17 +2084,17 @@ def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool, warm_store:
     saved = os.environ.get(catalogue_key.EXCLUDE_ENV)
     os.environ.pop(catalogue_key.EXCLUDE_ENV, None)
     picks: dict[str, tuple[str, str]] = {}
+    observed: dict[str, dict] = {}
 
     def pick(exp: "Experiment", state: dict) -> None:
-        b_file = mandate_only_file(repo, state["registry"], state["deps"], rewritten_by_name[MUTATION_ONLY])
-        picks.update(_catalogue_edit_files(repo, state["registry"], state["deps"], rewritten_by_name, modules, b_file))
+        b_file = mandate_only_file(repo, state["registry"], rewritten_by_name[MUTATION_ONLY])
+        picks.update(_catalogue_edit_files(repo, state["registry"], rewritten_by_name, modules, b_file))
+        observed["f"] = {"missed": unkeyed_rewritten(state["registry"], state["ids"], state["deps"], rewritten_by_name)}
         missing = [case for case in "abde" if case not in picks]
         if missing:
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps(_pick_diagnostics(state["registry"], state["deps"], rewritten_by_name), indent=2) + "\n")
+            out.write_text(json.dumps(_pick_diagnostics(state["registry"], rewritten_by_name), indent=2) + "\n")
             raise SystemExit(f"no file to edit for case(s) {missing}: {picks}")
-
-    observed: dict[str, dict] = {}
 
     def observe(exp: "Experiment", state: dict) -> dict:
         registry = state["registry"]
@@ -2087,7 +2104,12 @@ def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool, warm_store:
             sha = exp.candidate(edited_tree(repo, {path: with_nonce_comment(_head_text(repo, path), nonce)}),
                                 f"mutation-{case}")
             found = exp.preview(sha)
-            observed[case] = {"path": path, "subject": name, "rerun": _reruns(registry, found["ids"], found["hits"]),
+            rerun = _reruns(registry, found["ids"], found["hits"])
+            holders = sorted(s.name for s in registry.subjects if path in s.paths)
+            observed[case] = {"path": path, "subject": name, "rerun": rerun, "holders": holders,
+                              "untouched_reused": sorted(s.name for s in registry.subjects
+                                                         if s.name not in holders and s.name != MUTATION_ONLY
+                                                         and s.name not in rerun and s.name not in unstored),
                               "reused_s": sum(found["hits"][i].duration_s for i in found["ids"]
                                               if registry.find(i) is not None and i in found["hits"])}
         aged = exp.preview(state["warm_sha"], now=time.time() + catalogue_key.max_age_s() + 3600)
@@ -2110,19 +2132,12 @@ def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool, warm_store:
                 seen = observe(exp, state)
     finally:
         if own_warm is not None and own_warm.name.startswith("cls-control-"):
-            own_warm.unlink(missing_ok=True)
+            for sidecar in ("", "-wal", "-shm"):
+                Path(f"{own_warm}{sidecar}").unlink(missing_ok=True)
         if saved is None:
             os.environ.pop(catalogue_key.EXCLUDE_ENV, None)
         else:
             os.environ[catalogue_key.EXCLUDE_ENV] = saved
-    own = catalogue_key.load(repo, {})
-    missed = []
-    for subject in own.subjects:
-        victim = rewritten_by_name[subject.name][0]
-        narrowed = catalogue_key.Subject(subject.name, subject.tests, subject.paths - {victim}, subject.named)
-        if subject.uncovered(rewritten_by_name[subject.name]) or narrowed.uncovered(rewritten_by_name[subject.name]) != [victim]:
-            missed.append(subject.name)
-    observed["f"] = {"missed": missed}
     outcomes = {"subjects": seen["subjects"], "unstored": seen["unstored"], **observed}
     failed = judge_mutation(outcomes)
     base_ids = seen["base_ids"]

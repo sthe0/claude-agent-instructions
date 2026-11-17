@@ -892,8 +892,10 @@ def test_the_sweep_unregisters_the_worktree_of_a_dead_run(small_repo, tmp_path):
 def mutation_outcomes(**changes) -> dict:
     names = ["mandate", "rx", "reaper"]
     base = {"subjects": names, "unstored": [], "a": {"rerun": [], "reused_s": 3000.0}, "b": {"rerun": ["mandate"]},
-            "c": {"rerun": names}, "d": {"subject": "rx", "rerun": ["rx"]},
-            "e": {"subject": "reaper", "rerun": ["reaper"]}, "f": {"missed": []}}
+            "c": {"rerun": names},
+            "d": {"subject": "rx", "rerun": ["rx"], "holders": ["rx"], "untouched_reused": ["reaper"]},
+            "e": {"subject": "reaper", "rerun": ["reaper"], "holders": ["reaper"], "untouched_reused": ["rx"]},
+            "f": {"missed": []}}
     return {**base, **changes}
 
 
@@ -908,8 +910,10 @@ def test_every_case_holding_fails_none():
     ("b", {"b": {"rerun": []}}),
     ("b", {"b": {"rerun": ["mandate", "rx"]}}),
     ("c", {"c": {"rerun": ["mandate"]}}),
-    ("d", {"d": {"subject": "rx", "rerun": []}}),
-    ("e", {"e": {"subject": "reaper", "rerun": ["mandate"]}}),
+    ("d", {"d": {"subject": "rx", "rerun": [], "holders": ["rx"], "untouched_reused": ["reaper"]}}),
+    ("d", {"d": {"subject": "rx", "rerun": ["rx", "reaper"], "holders": ["rx"], "untouched_reused": ["reaper"]}}),
+    ("d", {"d": {"subject": "rx", "rerun": ["rx"], "holders": ["rx"], "untouched_reused": []}}),
+    ("e", {"e": {"subject": "reaper", "rerun": ["mandate"], "holders": ["reaper"], "untouched_reused": ["rx"]}}),
     ("f", {"f": {"missed": ["rx"]}}),
 ])
 def test_a_case_that_does_not_hold_is_named_alone(case, change):
@@ -967,3 +971,36 @@ def test_the_mutation_drop_control_without_a_warm_store_saves_its_own_copy_and_r
     with pytest.raises(Exception):
         control.mutation_scenario(control.REPO_DIR, Path("/nonexistent/out.json"), drop_from_key=True)
     assert len(saved) == 1 and saved[0].name.startswith("cls-control-") and not saved[0].exists()
+
+
+def test_a_failing_run_deletes_the_stored_passes_of_the_catalogue_it_failed_and_keeps_the_others(tmp_path):
+    from lib import catalogue_key, result_store
+    failing, kept = "t::cat_fails", "t::cat_kept"
+    registry = catalogue_key.Registry((
+        catalogue_key.Subject("fails", (failing,), frozenset({"lib/a.py"}), ("t::n",)),
+        catalogue_key.Subject("kept", (kept,), frozenset({"lib/a.py"}), ("t::n",))))
+    core = tmp_path / "core"
+    (core / "lib").mkdir(parents=True)
+    (core / "lib/a.py").write_text("A = 1\n")
+    environment = result_store.current_environment({"dists": [], "git": "g"})
+    store_path = tmp_path / "db" / "r.sqlite"
+    with result_store.ResultStore(store_path) as opened:
+        old = [(result_store.FILE, "lib/a.py", "a" * 64)]
+        opened.put("b" * 40, environment, {failing: old, kept: old})
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    lines = [{"kind": "file", "id": 0, "path": "lib/a.py", "digest": "sha256:aa"}]
+    lines += [{"kind": "test", "id": i, "files": [0], "listings": {}, "probes": {}, "always_rerun": []}
+              for i in (failing, kept)]
+    (trace / "main.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+    report = tmp_path / "tests.jsonl"
+    records = [{"kind": "collected", "nodeid": i} for i in (failing, kept)]
+    records += [{"kind": "report", "nodeid": failing, "when": "call", "outcome": "failed"},
+                {"kind": "report", "nodeid": kept, "when": "call", "outcome": "passed"}]
+    report.write_text("".join(json.dumps(line) + "\n" for line in records))
+    sha = "c" * 40
+    plan = gate.ReusePlan(store_path, environment, trace, tmp_path / "out", {}, registry, core)
+    gate.settle_reuse(plan, sha, gate.SuiteRun(1, (failing,), sha, report_path=str(report), hermetic=True))
+    with result_store.ResultStore(store_path) as opened:
+        assert opened.rows_of(failing) == []
+        assert opened.rows_of(kept)
