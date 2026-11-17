@@ -244,46 +244,30 @@ class ResultStore:
             ids.append([coord, value])
         return ids
 
-    def _newest_deps(self, test_id: str) -> list[Dep] | None:
-        rows = self._db.execute(
-            "SELECT deps FROM result WHERE test_id=? ORDER BY stored_at DESC, id DESC LIMIT 1", (test_id,)).fetchone()
-        return self.stored_deps(rows[0]) if rows else None
-
-    def _named_deps(self, subject: catalogue_key.Subject, batch: Mapping[str, Sequence[Dep]] | None = None
-                    ) -> dict[str, Sequence[Dep]]:
-        """The dependencies of the tests ``subject`` names: this run's where it has them, else the newest stored."""
-        found: dict[str, Sequence[Dep]] = {}
-        for test_id in subject.named:
-            deps = batch[test_id] if batch is not None and test_id in batch else self._newest_deps(test_id)
-            if deps is not None:
-                found[test_id] = deps
-        return found
-
     def put(self, candidate_sha: str, environment: Environment,
             results: Mapping[str, Sequence[Dep]], now: float | None = None,
             registry: catalogue_key.Registry | None = None,
-            durations: Mapping[str, float] | None = None) -> int:
+            durations: Mapping[str, float] | None = None,
+            clean_tree: Callable[[str, str], str] | None = None) -> int:
         """Store the passes of one run; returns how many rows were written. The caller filters (PASS only).
 
-        A test of a registered catalogue is keyed on its narrowed dependencies (``catalogue_key``) and written
-        after the other tests of the batch; one whose named tests have no known dependencies is not stored.
-        ``candidate_sha`` must name the committed tree the run was made in: a catalogue row stands for it."""
+        A test of a registered catalogue is keyed and stored on its declared set (``catalogue_key.narrow``)
+        at the digests ``clean_tree`` gives, the resolver of the committed tree ``candidate_sha`` names; without
+        ``clean_tree`` no catalogue row is written."""
         stamp = time.time() if now is None else now
         written = 0
         subjects = {i: registry.find(i) for i in results} if registry is not None else {}
-        order = sorted(results, key=lambda i: subjects.get(i) is not None)
         self._db.execute("BEGIN IMMEDIATE")
         try:
-            for test_id in order:
-                ordered = sorted(results[test_id])
+            for test_id in results:
+                stored_deps = sorted(results[test_id])
                 subject = subjects.get(test_id)
-                keyed = ordered
                 if subject is not None:
-                    keyed = registry.narrow(subject, ordered, self._named_deps(subject, results))
-                    if keyed is None:
+                    if clean_tree is None:
                         continue
-                key = compute_key(test_id, keyed, environment)
-                blob = zlib.compress(json.dumps(self._interned(ordered), separators=(",", ":")).encode())
+                    stored_deps = catalogue_key.narrow(subject, clean_tree)
+                key = compute_key(test_id, stored_deps, environment)
+                blob = zlib.compress(json.dumps(self._interned(stored_deps), separators=(",", ":")).encode())
                 self._db.execute(
                     "INSERT INTO result (test_id, key, env, deps, candidate, stored_at, last_used, duration_s, catalogue) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (test_id, key) DO UPDATE SET "
@@ -302,9 +286,9 @@ class ResultStore:
             raise
         return written
 
-    def _rows(self, test_id: str) -> list[tuple[str, str, bytes, float, float]]:
+    def _rows(self, test_id: str) -> list[tuple[str, str, bytes, float, float, int]]:
         return self._db.execute(
-            "SELECT key, candidate, deps, stored_at, duration_s FROM result WHERE test_id=? "
+            "SELECT key, candidate, deps, stored_at, duration_s, catalogue FROM result WHERE test_id=? "
             "ORDER BY stored_at DESC, id DESC LIMIT ?", (test_id, ROWS_PER_TEST)).fetchall()
 
     def stored_deps(self, blob: bytes) -> list[Dep]:
@@ -331,17 +315,17 @@ class ResultStore:
         asked = time.time() if now is None else now
         for test_id in test_ids:
             subject = registry.find(test_id) if registry is not None else None
-            named = self._named_deps(subject) if subject is not None else {}
-            for key, candidate, blob, stored_at, duration in self._rows(test_id):
-                if subject is not None and max_catalogue_age_s is not None and asked - stored_at > max_catalogue_age_s:
+            declared = catalogue_key.narrow(subject, resolve) if subject is not None else None
+            for key, candidate, blob, stored_at, duration, catalogue in self._rows(test_id):
+                if catalogue and max_catalogue_age_s is not None and asked - stored_at > max_catalogue_age_s:
                     continue
-                stored = self.stored_deps(blob)
-                if subject is not None:
-                    stored = registry.narrow(subject, stored, named)
-                    if stored is None:
+                if declared is not None:
+                    if compute_key(test_id, declared, environment) == key:
+                        hits[test_id] = Hit(candidate, key, duration)
                         break
+                    continue
                 nowdeps = []
-                for kind, path, _old in stored:
+                for kind, path, _old in self.stored_deps(blob):
                     if (kind, path) not in current:
                         current[(kind, path)] = resolve(kind, path)
                     nowdeps.append((kind, path, current[(kind, path)]))
@@ -372,7 +356,14 @@ class ResultStore:
     def rows_of(self, test_id: str) -> list[dict]:
         return [{"key": key, "candidate": candidate, "deps": self.stored_deps(blob),
                  "stored_at": stored_at, "duration_s": duration}
-                for key, candidate, blob, stored_at, duration in self._rows(test_id)]
+                for key, candidate, blob, stored_at, duration, _catalogue in self._rows(test_id)]
+
+    def forget(self, test_ids: Iterable[str]) -> int:
+        """Delete every stored row of ``test_ids`` (a run that failed them contradicts their stored passes); the count."""
+        count = 0
+        for test_id in test_ids:
+            count += self._db.execute("DELETE FROM result WHERE test_id=?", (test_id,)).rowcount
+        return count
 
     def drop_stale_catalogue_rows(self, max_age_s: float, now: float | None = None) -> int:
         """Delete the catalogue rows stored more than ``max_age_s`` ago (lookup would never reuse them); the count."""

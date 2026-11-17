@@ -2,27 +2,28 @@
 
 Difficulty removed: a catalogue test copies the whole ``scripts/`` tree into a scratch directory, so the
 dependency tracer records every file there and any edit of the repository reruns the catalogue, though what
-decides its verdict is far smaller: the catalogue module, the files it rewrites, what the module imports, and
-whatever the tests that must kill its mutants read.
+decides its verdict is far smaller: the files its mutants rewrite and the tests that must kill them.
 
 ``scripts/tests/mutation_catalogues.toml`` registers a catalogue: its module, and the in-suite tests that run it.
-For one registered test the result key is taken over the recorded dependencies that lie inside
+The result key of a registered test is taken over the declared set, never over what a run happened to read:
 
-  - the catalogue module, the in-suite test files, and every file the module rewrites (its own
-    ``rewritten_files()``),
-  - the static import closure of the module,
-  - the dependencies stored for the tests the module names (``named_tests()``): the files those tests read.
+  - the files the module rewrites (its own ``rewritten_files()``),
+  - the catalogue module and its static import closure,
+  - the in-suite test files and the files of the tests the module names (``named_tests()``), with their
+    static import closure,
+  - the repository files any of those files names by a literal path (string constants of their syntax trees).
 
-``narrow`` is the one function ``ResultStore.put`` and ``ResultStore.lookup`` both use, so what is stored is
-what is looked up. A test the registry does not name, a catalogue whose module cannot be read, and a
-catalogue whose named tests have no stored result are not narrowed: they run whenever the full key differs, and
-a catalogue with an unknown named test is never stored.
+``narrow`` is the one function ``ResultStore.put`` and ``ResultStore.lookup`` both use: digests from the
+clean candidate tree at put, from the candidate's tree at lookup. A test the registry does not name, a catalogue
+whose module cannot be resolved, one whose test files cannot be scanned and one whose named test is not
+defined where its id says are not narrowed: they run whenever the full key differs.
 
-A catalogue pass older than ``suite-gate-catalogue-max-age-h`` (config.md) is never reused: a code change
-the narrowed set cannot see ages out within a day.
+A catalogue pass older than ``suite-gate-catalogue-max-age-h`` (config.md) is never reused: what the declared set
+cannot see (what rewritten code calls at runtime) ages out within a day. A run that fails a catalogue deletes
+its stored passes.
 
-``CORE_CATALOGUE_KEY_EXCLUDE`` (a repository-relative path) removes one path from every narrowed set. It exists
-for the negative control of the scenario that proves the narrowed set holds every rewritten file; the gate
+``CORE_CATALOGUE_KEY_EXCLUDE`` (a repository-relative path) removes one path from every set. It exists
+for the negative control of the scenario that proves the set holds every rewritten file; the gate
 refuses to start with it set unless its result store is a private copy (``control_refusal``).
 """
 from __future__ import annotations
@@ -35,15 +36,17 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 REGISTRY_PATH = "scripts/tests/mutation_catalogues.toml"
 EXCLUDE_ENV = "CORE_CATALOGUE_KEY_EXCLUDE"
 MAX_AGE_KEY = "suite-gate-catalogue-max-age-h"
 DEFAULT_MAX_AGE_H = 24
 RESOLVE_TIMEOUT_S = 120
+MAX_LITERAL_CHARS = 300
 SEARCH_DIRS = ("scripts/tests", "scripts/lib", "scripts")
 
+FILE = "file"
 Dep = tuple[str, str, str]
 
 _RESOLVE_CODE = (
@@ -56,19 +59,25 @@ _RESOLVE_CODE = (
 
 @dataclasses.dataclass(frozen=True)
 class Subject:
-    """One registered catalogue: the in-suite tests that run it, the files its verdict depends on by name, and the tests that kill its mutants."""
+    """One registered catalogue: the in-suite tests that run it, the declared file set its verdict depends on,
+    and the tests that kill its mutants. ``rewritten``, ``module_closure``, ``named_closure`` and ``literal``
+    are the parts of ``paths`` by origin."""
     name: str
     tests: tuple[str, ...]
     paths: frozenset[str]
     named: tuple[str, ...]
+    rewritten: frozenset[str] = frozenset()
+    module_closure: frozenset[str] = frozenset()
+    named_closure: frozenset[str] = frozenset()
+    literal: frozenset[str] = frozenset()
 
     def uncovered(self, rewritten: Sequence[str]) -> list[str]:
-        """The files of ``rewritten`` the narrowed set does not hold: an edit of one would not rerun the catalogue."""
+        """The files of ``rewritten`` the set does not hold: an edit of one would not rerun the catalogue."""
         return sorted(set(rewritten) - self.paths)
 
     def covers(self, test_id: str) -> bool:
-        return any(test_id == entry or (("::" not in entry) and test_id.startswith(f"{entry}::"))
-                   for entry in self.tests)
+        """``tests`` entries are ``file::name`` ids (a parametrized test is covered by its bracketed ids)."""
+        return any(test_id == entry or test_id.startswith(f"{entry}[") for entry in self.tests)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -79,23 +88,10 @@ class Registry:
     def find(self, test_id: str) -> Subject | None:
         return next((s for s in self.subjects if s.covers(test_id)), None)
 
-    def named_ids(self) -> frozenset[str]:
-        return frozenset(i for s in self.subjects for i in s.named)
 
-    def narrow(self, subject: Subject, deps: Sequence[Dep], named: Mapping[str, Sequence[Dep]]) -> list[Dep] | None:
-        """The dependencies a catalogue's key is taken over, sorted; None when a named test has no known dependencies."""
-        extra: list[Dep] = []
-        for test_id in subject.named:
-            if test_id not in named:
-                return None
-            extra.extend(named[test_id])
-        allowed = set(subject.paths) | {path for _kind, path, _digest in extra}
-        allowed.discard(self.excluded)
-        kept = {(kind, path): digest for kind, path, digest in deps if path in allowed}
-        for kind, path, digest in extra:
-            if path in allowed:
-                kept.setdefault((kind, path), digest)
-        return sorted((kind, path, digest) for (kind, path), digest in kept.items())
+def narrow(subject: Subject, resolve: Callable[[str, str], str]) -> list[Dep]:
+    """The dependencies a catalogue's key is taken over: its declared set at the digests ``resolve`` gives, sorted."""
+    return [(FILE, path, resolve(FILE, path)) for path in sorted(subject.paths)]
 
 
 def max_age_s(config_path: str | Path | None = None) -> float:
@@ -115,7 +111,8 @@ def max_age_s(config_path: str | Path | None = None) -> float:
 
 
 def control_refusal(env: Mapping[str, str], private_store: bool) -> str:
-    """Why the gate must not start: the control-only key exclusion is set and the store is not a private copy."""
+    """Why the gate must not start: the control-only key exclusion is set and the store is not a private copy
+    (``private_store``: ``CORE_RESULT_STORE`` is set and names a store other than the live one)."""
     if env.get(EXCLUDE_ENV) and not private_store:
         return (f"{EXCLUDE_ENV} is a control-only setting and the live result store would learn keys it "
                 "narrowed on purpose; point CORE_RESULT_STORE at a private copy of the store")
@@ -167,11 +164,9 @@ def import_closure(core: str | Path, start: str) -> frozenset[str]:
         if rel in seen:
             continue
         seen.add(rel)
-        try:
-            tree = ast.parse((core / rel).read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, ValueError):
-            continue
-        queue.extend(_import_targets(core, rel, tree) - seen)
+        tree = _tree_of(core, rel)
+        if tree is not None:
+            queue.extend(_import_targets(core, rel, tree) - seen)
     return frozenset(seen)
 
 
@@ -191,9 +186,56 @@ def _declared(core: Path, module: str) -> tuple[list[str], list[str]] | None:
         return None
 
 
+def _tree_of(core: Path, rel: str) -> ast.AST | None:
+    try:
+        return ast.parse((core / rel).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return None
+
+
+def _defines(tree: ast.AST, name: str) -> bool:
+    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name for n in ast.walk(tree))
+
+
+def literal_files(core: Path, sources: Iterable[str]) -> frozenset[str]:
+    """Repository files that string constants in ``sources`` name: relative to the repository root or to the
+    source's own directory; regular files only (a directory is not a dependency), inside the repository."""
+    found: set[str] = set()
+    for rel in sources:
+        tree = _tree_of(core, rel)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            text = node.value.strip()
+            if not text or "\n" in text or len(text) > MAX_LITERAL_CHARS or text.startswith("/"):
+                continue
+            for base in ("", Path(rel).parent.as_posix()):
+                candidate = os.path.normpath(os.path.join(base, text))
+                if candidate.startswith(".."):
+                    continue
+                try:
+                    if (core / candidate).is_file():
+                        found.add(Path(candidate).as_posix())
+                except (OSError, ValueError):
+                    continue
+    return frozenset(found)
+
+
+def _named_scannable(core: Path, named: Sequence[str]) -> bool:
+    """Every named test is defined, by the last part of its id, in a test file that parses."""
+    for test_id in named:
+        file, _, rest = test_id.partition("::")
+        tree = _tree_of(core, file)
+        if tree is None or not rest or not _defines(tree, rest.split("::")[-1].split("[")[0]):
+            return False
+    return True
+
+
 def load(core_root: str | Path, env: Mapping[str, str] | None = None,
          declared: Callable[[Path, str], tuple[list[str], list[str]] | None] = _declared) -> Registry:
-    """The registry of the tree at ``core_root``; a catalogue that cannot be resolved is left out (it always runs)."""
+    """The registry of the tree at ``core_root``; a catalogue that cannot be resolved or scanned is left out (it always runs)."""
     core = Path(core_root)
     excluded = (os.environ if env is None else env).get(EXCLUDE_ENV, "")
     try:
@@ -212,6 +254,14 @@ def load(core_root: str | Path, env: Mapping[str, str] | None = None,
             continue
         rewritten, named = reported
         test_files = {t.partition("::")[0] for t in tests}
-        paths = ({module, *test_files, *rewritten} | set(import_closure(core, module))) - {excluded}
-        subjects.append(Subject(name, tests, frozenset(paths), tuple(sorted(named))))
+        named_files = {t.partition("::")[0] for t in named}
+        if not named or not _named_scannable(core, named) or any(_tree_of(core, f) is None for f in test_files):
+            continue
+        module_closure = import_closure(core, module)
+        named_closure = frozenset().union(*(import_closure(core, f) for f in test_files | named_files))
+        literal = literal_files(core, module_closure | named_closure)
+        paths = ({module, *rewritten} | module_closure | named_closure | literal) - {excluded}
+        subjects.append(Subject(name, tests, frozenset(paths), tuple(sorted(named)),
+                                frozenset(rewritten) - {excluded}, module_closure - {excluded},
+                                named_closure - {excluded}, literal - {excluded}))
     return Registry(tuple(subjects), excluded)

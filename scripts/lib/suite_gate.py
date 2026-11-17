@@ -830,6 +830,14 @@ def hermetic_unavailable() -> str:
     return one_line(proc.stderr.strip() or f"hermetic_run.py --check exited {proc.returncode}", 160)
 
 
+def _store_is_private(repo: Path) -> bool:
+    """``CORE_RESULT_STORE`` is set and names a database other than the live store under the git common dir."""
+    if not os.environ.get(result_store.STORE_ENV):
+        return False
+    live = result_store.results_dir(Path(_common_dir(repo))) / result_store.STORE_ENTRY / result_store.DB_NAME
+    return result_store.store_path(Path(_common_dir(repo))).resolve() != live.resolve()
+
+
 def _common_dir(repo: Path) -> str:
     proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                           capture_output=True, text=True, env=shared.clean_env())
@@ -901,6 +909,7 @@ class ReusePlan:
     out_prefix: Path
     hits: Mapping[str, result_store.Hit]
     registry: catalogue_key.Registry = catalogue_key.Registry()
+    core: Path = Path()
 
 
 def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tuple[ReusePlan | None, str]:
@@ -925,7 +934,7 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
     (root / REUSE_IDS_NAME).write_text("".join(f"{i}\n" for i in sorted(hits)), encoding="utf-8")
     env.update({TRACER_ENV: "1", TRACER_DIR_ENV: str(tracer_dir),
                 "CORE_RESULT_REUSE_IDS": str(root / REUSE_IDS_NAME), "CORE_RESULT_REUSE_OUT": str(out_prefix)})
-    return ReusePlan(path, environment, tracer_dir, out_prefix, hits, registry), ""
+    return ReusePlan(path, environment, tracer_dir, out_prefix, hits, registry, root / "core"), ""
 
 
 def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
@@ -950,9 +959,13 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
                 reasons.update(records[i]["always_rerun"])
             passing = {i: result_store.deps_of(records[i]) for i in ran
                        if outcome.get(i) == "passed" and i not in run.failures and not records[i]["always_rerun"]}
+            failed_catalogues = [i for i in _test_report().collected_ids(lines) if plan.registry.find(i) is not None
+                                 and i not in left_out and (outcome.get(i) != "passed" or i in run.failures)]
             with result_store.ResultStore(plan.store) as store:
+                store.forget(failed_catalogues)
                 stored = store.put(sha, plan.environment, passing, registry=plan.registry,
-                                   durations=junit_durations(run.junit_path, passing))
+                                   durations=junit_durations(run.junit_path, passing),
+                                   clean_tree=result_store.tree_resolver(plan.core))
                 store.set_meta(result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)))
                 store.set_meta(result_store.FAILED_META, json.dumps(
                     sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)))
@@ -1408,7 +1421,8 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
     re-reads the remote tip after the reruns; a tip that moved makes the verdict UNAVAILABLE. Unconfirmed
     ids are appended to the flaky journal (``flake_list.journal_path``); the tree is never written.
     """
-    refusal = catalogue_key.control_refusal(os.environ, bool(os.environ.get(result_store.STORE_ENV)))
+    refusal = catalogue_key.control_refusal(
+        os.environ, bool(os.environ.get(catalogue_key.EXCLUDE_ENV)) and _store_is_private(Path(repo)))
     if refusal:
         raise GateError(refusal, refused=True)
     repo = Path(repo)
