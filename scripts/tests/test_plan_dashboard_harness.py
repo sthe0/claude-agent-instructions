@@ -1529,7 +1529,7 @@ def test_a_change_after_the_last_sweep_is_found_by_the_closing_sweep(tmp_path, m
     late = [{"path": "/a", "kind": "state", "change_ns": ns(8.0)}]
     taker = h.SweepTaker(lambda ids: late, now=lambda: now[0])
     taker.busy = True
-    assert taker.close({"id"}, sleep=lambda s: setattr(taker, "busy", False)) is True
+    assert taker.closing_sweep({"id"}, sleep=lambda s: setattr(taker, "busy", False)) is True
     assert taker.sweeps == [{"start_ns": ns(30.0), "end_ns": ns(30.0), "changes": late}] and not taker.busy
     cycles = stat_cycles(6)
     assert not any(c["covered"] is False for c in h.check_cycle_coverage(cycles, h.due_by_change_time(cycles, [], 0, 1000), 0))
@@ -1644,7 +1644,7 @@ def test_the_smoke_exits_2_when_it_could_not_run(tmp_path, smoke_runner, monkeyp
 def test_a_closing_sweep_does_not_start_beside_a_running_one(capsys):
     taker = h.SweepTaker(lambda ids: [], now=lambda: 0)
     taker.busy = True
-    assert taker.close({"id"}, sleep=lambda s: None, wait_s=0.0) is False
+    assert taker.closing_sweep({"id"}, sleep=lambda s: None, wait_s=0.0) is False
     assert taker.sweeps == [] and taker.busy and "closing sweep skipped" in capsys.readouterr().out
 
 

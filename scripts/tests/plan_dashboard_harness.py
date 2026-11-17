@@ -995,7 +995,7 @@ class SweepTaker:
         finally:
             self.busy, self.arrived = False, 0
 
-    def close(self, screen_ids: set[str], *, sleep=time.sleep, wait_s: float = 60.0) -> bool:
+    def closing_sweep(self, screen_ids: set[str], *, sleep=time.sleep, wait_s: float = 60.0) -> bool:
         """One more sweep, after the run's last cycle and the end of any sweep still running: it finds the changes
         written after the last sweep. It starts after the last cycle, so no cycle shares the machine with it, and
         it judges coverage only. A sweep still running when ``wait_s`` has passed is logged and no second sweep
@@ -2189,7 +2189,7 @@ class RealRunner:
                             stop=lambda t: timed_cycle_count(t.events, t.t0_ns, list(sweeper.sweeps)) > R3_CYCLES)
         finally:
             observer.stop()
-        closed = not stat_path or sweeper.close(ContractWatcher.screen_ids(trace.frames))
+        closed = not stat_path or sweeper.closing_sweep(ContractWatcher.screen_ids(trace.frames))
         events, sweeps = trace.events, list(sweeper.sweeps)
         cycles = cycle_records(events, trace.t0_ns)
         resolution = mtime_resolution(self.state_dir)["value_ns"]

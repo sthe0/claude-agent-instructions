@@ -1525,16 +1525,16 @@ def _stat_due_as_sweep_start(original):
 
 def _closing_sweep_skipped(original):
     class Mutated(original):
-        def close(self, screen_ids, **kwargs):
+        def closing_sweep(self, screen_ids, **kwargs):
             return True
     return Mutated
 
 
 def _closing_sweep_beside_a_running_one(original):
     class Mutated(original):
-        def close(self, screen_ids, **kwargs):
+        def closing_sweep(self, screen_ids, **kwargs):
             self.busy = False
-            return super().close(screen_ids, **kwargs)
+            return super().closing_sweep(screen_ids, **kwargs)
     return Mutated
 
 
