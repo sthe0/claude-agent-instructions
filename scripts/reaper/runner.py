@@ -64,6 +64,15 @@ forced pass would keep. It never writes the throttle stamp, runs under a no-wait
 ``<stamp dir>/pressure.lock`` and appends one line per pass to ``<config root>/reaper/pressure.jsonl``.
 A missing or invalid row disarms it. It exits 0 on every path except invalid argv and,
 with ``--dry-run`` (which prints a status line per reaper and takes no lock), a runner error.
+Each pressure row also carries ``threshold_source`` (``config`` or ``flag``) and the pass's
+provenance (``trigger``, and ``invocation_id`` under a reaper unit).
+
+Explicit-invocation controls, reachable only from a command line a person types, never from a hook,
+unit or config file: ``--pressure-threshold PCT`` (with ``--on-pressure``: replaces the config row for
+that pass), ``--on-pressure --only NAME`` (only NAME can become due), ``--on-pressure --force-run``
+(the pressure cooldown is ignored and no cooldown stamp is written) and ``--param NAME.KEY=VALUE``
+(``ctx.params[NAME][KEY]``, laid over the opt-in ``[params.NAME]`` table; ``ctx.param_sources`` says
+``cli`` or ``table``; the value is never written to any file).
 """
 from __future__ import annotations
 
@@ -84,7 +93,7 @@ from typing import Callable, Iterator, Sequence, TextIO
 
 from agentctl import config as agentctl_config
 from lib import config_root
-from reaper import liveness, registry
+from reaper import liveness, opt_in, registry
 from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict, session_sources_problem
 from session_scope import registry as scope_registry
 
@@ -407,11 +416,13 @@ def pressure_readings(
     threshold: float,
     stamps: Path,
     free_fn: "Callable[[str], float | None]" = free_percent,
+    ignore_cooldown: bool = False,
 ) -> "list[PressureReading]":
     """One reading per reaper that names readable ``pressure_paths``, judged on its lowest free
     percentage: ``due`` below the threshold once its cooldown has elapsed, ``cooldown`` below it
     before then, ``ok`` otherwise (a value equal to the threshold is ok). A reaper whose paths
-    cannot be named or read gets no reading and is never due."""
+    cannot be named or read gets no reading and is never due. ``ignore_cooldown`` (an explicit
+    ``--force-run``) reads a cooled-down reaper as ``due``."""
     readings = []
     for reaper in reapers:
         paths_of = getattr(reaper.module, "pressure_paths", None)
@@ -428,7 +439,7 @@ def pressure_readings(
             status = "ok"
         else:
             prev = _read_stamp(stamps, f"{reaper.name}.pressure")
-            elapsed = prev is None or (ctx.now - prev) >= PRESSURE_COOLDOWN_MIN * 60.0
+            elapsed = ignore_cooldown or prev is None or (ctx.now - prev) >= PRESSURE_COOLDOWN_MIN * 60.0
             status = "due" if elapsed else "cooldown"
         readings.append(PressureReading(reaper.name, free, status))
     return readings
@@ -609,18 +620,25 @@ def execute_pressure(
     skipped_modules: "Sequence[str]" = (),
     kept_dir: "Path | None" = None,
     observe: "dict[str, int] | None" = None,
+    threshold_source: str = "config",
+    only: "str | None" = None,
+    force: bool = False,
 ) -> None:
     """One ``--on-pressure`` pass: read the free space of each reaper that names pressure paths,
     run the due ones through ``execute_pass`` and start their cooldown.
 
+    ``only`` lets just that reaper become due; ``force`` ignores the cooldown and starts none. Both,
+    like a threshold other than the config row (``threshold_source`` ``flag``), come from an
+    explicit command line only.
+
     A dry run prints one status line per reaper, then what the pass would do; it writes no
     cooldown stamp and no pressure record. A live run prints only the readings that are not ok.
     """
-    readings = pressure_readings(reapers, ctx, threshold, stamps, free_percent)
+    readings = pressure_readings(reapers, ctx, threshold, stamps, free_percent, ignore_cooldown=force)
     for reading in readings:
         if ctx.dry_run or reading.status != "ok":
             print(reading.line(threshold), file=out if ctx.dry_run else err)
-    due = frozenset(r.name for r in readings if r.status == "due")
+    due = frozenset(r.name for r in readings if r.status == "due" and only in (None, r.name))
     if not due:
         return
     removed = execute_pass(
@@ -631,11 +649,13 @@ def execute_pressure(
     )
     if ctx.dry_run:
         return
-    for name in due:
-        _write_stamp(stamps, f"{name}.pressure", ctx.now)
+    if not force:
+        for name in due:
+            _write_stamp(stamps, f"{name}.pressure", ctx.now)
     record = {
-        "ts": _iso(ctx.now), "threshold": threshold,
+        "ts": _iso(ctx.now), "threshold": threshold, "threshold_source": threshold_source,
         "free": {r.name: round(r.free, 2) for r in readings}, "due": sorted(due), "removed": removed,
+        **_provenance(pressured=True, manual=False),
     }
     try:
         pressure_log.parent.mkdir(parents=True, exist_ok=True)
@@ -708,6 +728,36 @@ def build_context(*, now: float, dry_run: bool) -> ReapContext:
         scope_records=records,
         scope_registry_error=error,
     )
+
+
+PARAM_FORMAT = re.compile(r"([^.=\s]+)\.([^=\s]+)=(.*)", re.DOTALL)
+
+
+def parse_params(items: "Sequence[str]") -> "dict[str, dict[str, str]]":
+    """``--param NAME.KEY=VALUE`` items as ``{NAME: {KEY: VALUE}}``; ValueError on a malformed item."""
+    parsed: "dict[str, dict[str, str]]" = {}
+    for item in items:
+        match = PARAM_FORMAT.fullmatch(item)
+        if not match:
+            raise ValueError(f"--param {item!r} is not NAME.KEY=VALUE")
+        parsed.setdefault(match[1], {})[match[2]] = match[3]
+    return parsed
+
+
+def resolve_params(
+    names: "Sequence[str]", cli: "dict[str, dict[str, str]]",
+) -> "tuple[dict[str, dict[str, object]], dict[str, dict[str, str]]]":
+    """Each reaper's parameters: its opt-in ``[params.NAME]`` table with the command-line values laid over it,
+    and the source (``cli`` or ``table``) of every key. Nothing here is written anywhere."""
+    values: "dict[str, dict[str, object]]" = {}
+    sources: "dict[str, dict[str, str]]" = {}
+    for name in names:
+        table = opt_in.params(name)
+        given = cli.get(name, {})
+        if table or given:
+            values[name] = {**table, **given}
+            sources[name] = {**{key: "table" for key in table}, **{key: "cli" for key in given}}
+    return values, sources
 
 
 def _list(reapers: "list[registry.Reaper]", out: TextIO) -> None:
@@ -783,8 +833,9 @@ def write_unit_observation(observe: "dict[str, int]", err: TextIO) -> None:
 
 def _run_on_pressure(
     reapers: "list[registry.Reaper]", ctx: ReapContext, skipped: "list[str]", observe: "dict[str, int] | None" = None,
+    *, threshold_override: "float | None" = None, only: "str | None" = None, force: bool = False,
 ) -> None:
-    threshold = read_pressure_threshold()
+    threshold = read_pressure_threshold() if threshold_override is None else threshold_override
     if threshold is None:
         print(f"reaper: pressure mode disarmed: config.md row {PRESSURE_THRESHOLD_KEY} is missing or not a percentage above 0 and below 100", file=sys.stderr)
         return
@@ -794,6 +845,7 @@ def _run_on_pressure(
             reapers, ctx, threshold=threshold, stamps=stamp_dir(), log_path=removal_log_path(),
             pressure_log=pressure_log_path(), out=sys.stdout, err=sys.stderr, skipped_modules=skipped,
             kept_dir=kept_snapshot_dir(), observe=observe,
+            threshold_source="config" if threshold_override is None else "flag", only=only, force=force,
         )
 
     if ctx.dry_run:
@@ -802,6 +854,16 @@ def _run_on_pressure(
     with _upkeep_lock(pressure_lock_path(), 0.0, sys.stderr) as acquired:
         if acquired:
             run()
+
+
+def _threshold_arg(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = float("nan")
+    if not 0.0 < value <= 100.0:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a percentage above 0 and at most 100")
+    return value
 
 
 def main(
@@ -817,14 +879,26 @@ def main(
     parser.add_argument("--upkeep-only", action="store_true", help="run only each reaper's upkeep (e.g. the branch backup push), under a lock")
     parser.add_argument("--no-wait", action="store_true", help="with --upkeep-only: exit 0 at once if another upkeep run holds the lock")
     parser.add_argument("--on-pressure", action="store_true", help="run the reapers whose pressure paths are short of free space (config.md row reaper-pressure-free-percent), under a no-wait lock")
+    parser.add_argument("--pressure-threshold", type=_threshold_arg, metavar="PCT", help="with --on-pressure: use this free-space percentage (above 0, at most 100) instead of the config.md row, for this pass only")
+    parser.add_argument("--param", action="append", default=[], metavar="NAME.KEY=VALUE", help="per-invocation parameter of reaper NAME, laid over its opt-in [params.NAME] table; with --dry-run, --force-run, --only or --on-pressure; never stored")
     parser.add_argument("--holders", nargs="+", metavar="PATH", help="print who holds each path (free, held or unknown) and exit 0 if all free, 3 if any held, 4 if any unknown; changes nothing")
     args = parser.parse_args(argv)
     if args.holders and (args.dry_run or args.force_run or args.only or args.list or args.upkeep_only or args.no_wait or args.on_pressure):
         parser.error("--holders combines with no other flag")
     if args.no_wait and not args.upkeep_only:
         parser.error("--no-wait needs --upkeep-only")
-    if args.on_pressure and (args.upkeep_only or args.only or args.force_run):
-        parser.error("--on-pressure combines only with --dry-run")
+    if args.on_pressure and args.upkeep_only:
+        parser.error("--on-pressure does not combine with --upkeep-only")
+    if args.pressure_threshold is not None and not args.on_pressure:
+        parser.error("--pressure-threshold needs --on-pressure")
+    if args.param and (args.list or args.upkeep_only or args.holders):
+        parser.error("--param does not combine with --list, --upkeep-only or --holders")
+    if args.param and not (args.dry_run or args.force_run or args.only or args.on_pressure):
+        parser.error("--param needs --dry-run, --force-run, --only or --on-pressure")
+    try:
+        cli_params = parse_params(args.param)
+    except ValueError as exc:
+        parser.error(str(exc))
     fail_open = not (args.dry_run or args.force_run or args.only or args.list or args.holders) or args.upkeep_only
     observe = {"reapers_run": 0, "errors": 0}
     records_pass = not (args.list or args.upkeep_only or args.dry_run or args.holders)
@@ -848,6 +922,12 @@ def main(
         if args.only and args.only not in {r.name for r in reapers}:
             print(f"reaper: no reaper named {args.only!r} (have: {', '.join(r.name for r in reapers) or 'none'})", file=sys.stderr)
             return 2
+        unknown = sorted(set(cli_params) - {r.name for r in reapers})
+        if unknown:
+            print(f"reaper: --param names no reaper: {', '.join(unknown)}", file=sys.stderr)
+            return 2
+        params, param_sources = resolve_params([r.name for r in reapers], cli_params)
+        ctx = dataclasses.replace(ctx, params=params, param_sources=param_sources)
         if args.upkeep_only:
             wait_s = 0.0 if args.no_wait else UPKEEP_LOCK_WAIT_S
             with _upkeep_lock(upkeep_lock_path(), wait_s, sys.stderr) as acquired:
@@ -855,7 +935,10 @@ def main(
                     execute_upkeep(reapers, ctx, only=args.only, out=sys.stdout, err=sys.stderr)
             return 0
         if args.on_pressure:
-            _run_on_pressure(reapers, ctx, skipped, observe)
+            _run_on_pressure(
+                reapers, ctx, skipped, observe,
+                threshold_override=args.pressure_threshold, only=args.only, force=args.force_run,
+            )
             return 0
         if not manual and any(
             hasattr(r.module, "SESSION_SOURCES") and _throttle_elapsed(r, stamp_dir(), now) for r in reapers

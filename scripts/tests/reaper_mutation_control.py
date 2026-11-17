@@ -55,6 +55,9 @@ T_LIVENESS = "tests/test_reaper_liveness.py"
 T_RESIDUE = "tests/test_reaper_temp_residue.py"
 T_HOLDERS = "tests/test_reaper_holders.py"
 
+TIMER_SCRIPT = "install-reaper-timer.sh"
+OPT_IN = "reaper/opt_in.py"
+GUARD = "test_no_trigger_command_line_carries_an_explicit_invocation_control"
 GATE_MATRIX = "test_a_gated_reaper_is_due_only_in_a_fresh_interactive_top_level_start"
 PLANTED_HOLDERS = "test_each_holder_kind_in_a_planted_proc_root_is_found_under_its_own_kind"
 
@@ -831,6 +834,109 @@ CATALOGUE: "dict[str, Mutant]" = {
     "session-payload-read-always": Mutant(
         RUNNER, " and _throttle_elapsed(r, stamp_dir(), now) for r in reapers\n", " for r in reapers\n",
         _ids(T_RUNNER, "test_a_start_where_every_gated_reaper_is_inside_its_throttle_does_not_read_stdin"),
+    ),
+    "runner-threshold-flag-ignored": Mutant(
+        RUNNER,
+        "threshold = read_pressure_threshold() if threshold_override is None else threshold_override",
+        "threshold = read_pressure_threshold()",
+        _ids(
+            T_RUNNER,
+            "test_the_threshold_flag_makes_a_reaper_due_above_the_config_threshold_and_is_recorded",
+            "test_the_threshold_flag_works_when_the_config_row_is_missing",
+        ),
+    ),
+    "runner-pressure-only-ignored": Mutant(
+        RUNNER, 'if r.status == "due" and only in (None, r.name))', 'if r.status == "due")',
+        _ids(T_RUNNER, "test_only_under_pressure_runs_only_that_reaper"),
+    ),
+    "runner-pressure-force-writes-stamp": Mutant(
+        RUNNER, "    if not force:\n        for name in due:", "    if True:\n        for name in due:",
+        _ids(
+            T_RUNNER,
+            "test_force_run_under_pressure_ignores_the_cooldown_and_writes_no_stamp",
+            "test_force_run_under_pressure_leaves_no_stamp_where_there_was_none",
+        ),
+    ),
+    "runner-param-not-passed": Mutant(
+        RUNNER,
+        "ctx = dataclasses.replace(ctx, params=params, param_sources=param_sources)",
+        "ctx = dataclasses.replace(ctx)",
+        _ids(
+            T_RUNNER,
+            "test_a_param_is_laid_over_the_opt_in_table_and_reaches_a_dry_run_with_its_source",
+            "test_a_table_value_reaches_a_pass_with_param_source_table",
+            "test_a_param_is_passed_to_a_pressure_pass",
+        ),
+    ),
+    "runner-param-persisted": Mutant(
+        RUNNER,
+        "        params, param_sources = resolve_params([r.name for r in reapers], cli_params)\n",
+        "        params, param_sources = resolve_params([r.name for r in reapers], cli_params)\n"
+        "        (config_root.agent_home() / 'reaper').mkdir(parents=True, exist_ok=True)\n"
+        "        (config_root.agent_home() / 'reaper' / 'params.json').write_text(json.dumps(params))\n",
+        _ids(T_RUNNER, "test_a_param_value_is_written_to_no_file_by_a_live_pass"),
+    ),
+    "runner-pressure-row-no-provenance": Mutant(
+        RUNNER, "        **_provenance(pressured=True, manual=False),\n    }", "    }",
+        _ids(
+            T_RUNNER,
+            "test_a_pressure_row_names_its_trigger",
+            "test_a_pressure_row_under_a_reaper_unit_carries_the_trigger_unit_and_the_invocation_id",
+        ),
+    ),
+    "unit-carries-override": Mutant(
+        TIMER_SCRIPT, "ExecStart=$PYTHON $HOOK --on-pressure\n", "ExecStart=$PYTHON $HOOK --on-pressure --pressure-threshold 99\n",
+        _ids(T_RUNNER, GUARD),
+    ),
+    "hook-carries-override": Mutant(
+        HOOK_BACKUP, '_spawn_detached("pressure.log", "--on-pressure")',
+        '_spawn_detached("pressure.log", "--on-pressure", "--pressure-threshold", "99")',
+        _ids(T_RUNNER, GUARD),
+    ),
+    "runner-force-honours-cooldown": Mutant(
+        RUNNER, "free_percent, ignore_cooldown=force)", "free_percent)",
+        _ids(T_RUNNER, "test_force_run_under_pressure_ignores_the_cooldown_and_writes_no_stamp"),
+    ),
+    "runner-flag-validation-dropped": Mutant(
+        RUNNER,
+        '    if args.pressure_threshold is not None and not args.on_pressure:\n'
+        '        parser.error("--pressure-threshold needs --on-pressure")\n'
+        '    if args.param and (args.list or args.upkeep_only or args.holders):\n'
+        '        parser.error("--param does not combine with --list, --upkeep-only or --holders")\n',
+        "",
+        _ids(
+            T_RUNNER,
+            "test_a_threshold_flag_without_on_pressure_exits_two",
+            "test_a_param_with_list_exits_two",
+        ),
+    ),
+    "runner-param-source-lost": Mutant(
+        RUNNER, '{key: "cli" for key in given}', '{key: "table" for key in given}',
+        _ids(
+            T_RUNNER,
+            "test_a_param_is_laid_over_the_opt_in_table_and_reaches_a_dry_run_with_its_source",
+            "test_a_param_is_passed_to_a_pressure_pass",
+        ),
+    ),
+    "opt-in-params-table-disables": Mutant(
+        OPT_IN, "        return tomllib.load(handle)\n",
+        "        data = tomllib.load(handle)\n"
+        "        if any(isinstance(v, dict) for v in data.values()):\n"
+        "            raise ValueError('table')\n"
+        "        return data\n",
+        _ids(
+            T_RUNNER,
+            "test_an_opt_in_file_with_a_params_table_keeps_every_boolean_reaper_enabled",
+            "test_a_param_is_laid_over_the_opt_in_table_and_reaches_a_dry_run_with_its_source",
+        ),
+    ),
+    "unit-carries-pressure-only": Mutant(
+        TIMER_SCRIPT, "ExecStart=$PYTHON $HOOK --on-pressure\n", "ExecStart=$PYTHON $HOOK --on-pressure --only temp-residue\n",
+        _ids(T_RUNNER, GUARD),
+    ),
+    "unit-carries-pressure-force": Mutant(
+        TIMER_SCRIPT, "ExecStart=$PYTHON $HOOK --force-run\n", "ExecStart=$PYTHON $HOOK --force-run --on-pressure\n",
+        _ids(T_RUNNER, GUARD),
     ),
 }
 

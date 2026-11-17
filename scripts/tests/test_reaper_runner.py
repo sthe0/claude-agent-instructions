@@ -10,7 +10,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
+import tempfile
 import textwrap
 import types
 from pathlib import Path
@@ -1149,6 +1151,326 @@ def test_every_catalogue_mutant_is_killed_and_the_control_is_green():
         survivors = dict(zip(names, pool.map(control.run_mutant, names)))
     assert survivors == {name: control.KILLED for name in names}
     assert control.run_control() == 0
+
+
+# ── explicit-invocation controls (--pressure-threshold, --on-pressure --only/--force-run, --param) ─────
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+
+
+def pressured(name, *, free_paths, verdicts=()):
+    fake = Fake(name, list(verdicts))
+    fake.reaper.module.pressure_paths = lambda ctx: list(free_paths)
+    return fake
+
+
+def discover_of(*fakes):
+    return lambda project, warn: [f.reaper for f in fakes]
+
+
+@pytest.fixture
+def armed(hermetic, monkeypatch):
+    from agentctl import config as agentctl_config
+
+    config = hermetic / "config.md"
+    config.write_text("| Key | Value |\n|---|---|\n| `reaper-pressure-free-percent` | `10` | basis |\n", encoding="utf-8")
+    monkeypatch.setattr(agentctl_config, "CONFIG_MD", config)
+    monkeypatch.setattr(runner, "free_percent", lambda path: 20.0)
+    return hermetic
+
+
+def pressure_rows(root):
+    path = root / "config" / "reaper" / "pressure.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+
+def cooldown_stamp(root, name="a"):
+    return root / "home" / ".local" / "state" / "claude-reaper" / f"{name}.pressure.stamp"
+
+
+def test_the_threshold_flag_makes_a_reaper_due_above_the_config_threshold_and_is_recorded(armed):
+    victim = armed / "victim"
+    victim.mkdir()
+    a = pressured("a", free_paths=[str(armed)], verdicts=[rm(victim)])
+    assert runner.main(["--on-pressure"], discover=discover_of(a)) == 0
+    assert a.removed == [] and pressure_rows(armed) == []
+    assert runner.main(["--on-pressure", "--pressure-threshold", "30"], discover=discover_of(a)) == 0
+    assert a.removed == [str(victim)]
+    [row] = pressure_rows(armed)
+    assert (row["threshold"], row["threshold_source"]) == (30.0, "flag")
+
+
+def test_without_the_threshold_flag_the_config_row_rules_and_is_recorded(armed, monkeypatch):
+    monkeypatch.setattr(runner, "free_percent", lambda path: 4.0)
+    a = pressured("a", free_paths=[str(armed)])
+    assert runner.main(["--on-pressure"], discover=discover_of(a)) == 0
+    [row] = pressure_rows(armed)
+    assert (row["threshold"], row["threshold_source"]) == (10.0, "config")
+
+
+@pytest.mark.parametrize("argv", [
+    ["--on-pressure", "--pressure-threshold", "0"],
+    ["--on-pressure", "--pressure-threshold", "-5"],
+    ["--on-pressure", "--pressure-threshold", "100.5"],
+    ["--on-pressure", "--pressure-threshold", "nan"],
+    ["--on-pressure", "--pressure-threshold", "ten"],
+    ["--pressure-threshold", "30"],
+    ["--pressure-threshold", "30", "--dry-run"],
+    ["--on-pressure", "--upkeep-only"],
+    ["--param", "a.k=v"],
+    ["--param", "no-dot-or-equals", "--dry-run"],
+    ["--param", "a.k=v", "--list"],
+    ["--param", "a.k=v", "--upkeep-only"],
+    ["--param", "a.k=v", "--holders", "/x"],
+])
+def test_an_invalid_flag_or_combination_exits_two(armed, argv):
+    with pytest.raises(SystemExit) as raised:
+        runner.main(argv, discover=discover_of())
+    assert raised.value.code == 2
+
+
+def test_a_threshold_flag_without_on_pressure_exits_two(armed):
+    with pytest.raises(SystemExit) as raised:
+        runner.main(["--dry-run", "--pressure-threshold", "30"], discover=discover_of())
+    assert raised.value.code == 2
+
+
+def test_a_param_with_list_exits_two(armed):
+    with pytest.raises(SystemExit) as raised:
+        runner.main(["--list", "--dry-run", "--param", "a.k=v"], discover=discover_of())
+    assert raised.value.code == 2
+
+
+def test_a_param_naming_no_reaper_exits_two(armed):
+    assert runner.main(["--dry-run", "--param", "ghost.k=v"], discover=discover_of(Fake("a"))) == 2
+
+
+def test_a_threshold_of_exactly_one_hundred_is_accepted(armed, monkeypatch):
+    monkeypatch.setattr(runner, "free_percent", lambda path: 99.0)
+    a = pressured("a", free_paths=[str(armed)])
+    assert runner.main(["--on-pressure", "--pressure-threshold", "100"], discover=discover_of(a)) == 0
+    assert pressure_rows(armed)[0]["due"] == ["a"]
+
+
+def test_the_threshold_flag_works_when_the_config_row_is_missing(hermetic, monkeypatch):
+    from agentctl import config as agentctl_config
+
+    monkeypatch.setattr(agentctl_config, "CONFIG_MD", hermetic / "absent.md")
+    monkeypatch.setattr(runner, "free_percent", lambda path: 5.0)
+    a = pressured("a", free_paths=[str(hermetic)])
+    assert runner.main(["--on-pressure", "--pressure-threshold", "10"], discover=discover_of(a)) == 0
+    assert pressure_rows(hermetic)[0]["threshold_source"] == "flag"
+
+
+def test_only_under_pressure_runs_only_that_reaper(armed, monkeypatch):
+    monkeypatch.setattr(runner, "free_percent", lambda path: 4.0)
+    first, second = armed / "first", armed / "second"
+    first.mkdir()
+    second.mkdir()
+    a = pressured("a", free_paths=[str(armed)], verdicts=[rm(first)])
+    b = pressured("b", free_paths=[str(armed)], verdicts=[rm(second)])
+    assert runner.main(["--on-pressure", "--only", "a"], discover=discover_of(a, b)) == 0
+    assert (a.removed, b.removed) == ([str(first)], [])
+    assert pressure_rows(armed)[0]["due"] == ["a"]
+    assert cooldown_stamp(armed, "a").is_file() and not cooldown_stamp(armed, "b").exists()
+
+
+def test_force_run_under_pressure_ignores_the_cooldown_and_writes_no_stamp(armed, monkeypatch):
+    import time
+
+    monkeypatch.setattr(runner, "free_percent", lambda path: 4.0)
+    victim = armed / "victim"
+    victim.mkdir()
+    a = pressured("a", free_paths=[str(armed)], verdicts=[rm(victim)])
+    stamp = cooldown_stamp(armed)
+    stamp.parent.mkdir(parents=True)
+    written = str(time.time())
+    stamp.write_text(written, encoding="utf-8")
+    assert runner.main(["--on-pressure"], discover=discover_of(a)) == 0
+    assert a.removed == []
+    assert runner.main(["--on-pressure", "--force-run"], discover=discover_of(a)) == 0
+    assert a.removed == [str(victim)]
+    assert stamp.read_text(encoding="utf-8") == written
+
+
+def test_force_run_under_pressure_leaves_no_stamp_where_there_was_none(armed, monkeypatch):
+    monkeypatch.setattr(runner, "free_percent", lambda path: 4.0)
+    a = pressured("a", free_paths=[str(armed)])
+    assert runner.main(["--on-pressure", "--force-run"], discover=discover_of(a)) == 0
+    assert not cooldown_stamp(armed).exists() and len(pressure_rows(armed)) == 1
+
+
+def capturing(fake):
+    seen = []
+    inner = fake.reaper.module.scan
+
+    def scan(ctx):
+        seen.append(ctx)
+        return inner(ctx)
+
+    fake.reaper.module.scan = scan
+    return seen
+
+
+def write_opt_in(root, text):
+    path = root / "config" / "reaper" / "opt-in.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_a_param_is_laid_over_the_opt_in_table_and_reaches_a_dry_run_with_its_source(hermetic):
+    write_opt_in(hermetic, 'a = true\n[params.a]\nk1 = "table1"\nk2 = "table2"\n')
+    a = Fake("a")
+    seen = capturing(a)
+    assert runner.main(["--dry-run", "--param", "a.k2=cli2", "--param", "a.k3=cli3"], discover=discover_of(a)) == 0
+    [ctx] = seen
+    assert ctx.params == {"a": {"k1": "table1", "k2": "cli2", "k3": "cli3"}}
+    assert ctx.param_sources == {"a": {"k1": "table", "k2": "cli", "k3": "cli"}}
+
+
+def test_a_table_value_reaches_a_pass_with_param_source_table(hermetic):
+    write_opt_in(hermetic, "[params.a]\nk1 = 7\n")
+    a = Fake("a")
+    seen = capturing(a)
+    assert runner.main(["--dry-run", "--param", "b.x=1"], discover=discover_of(a, Fake("b"))) == 0
+    assert seen[0].params["a"] == {"k1": 7} and seen[0].param_sources["a"] == {"k1": "table"}
+
+
+def test_a_param_is_passed_to_a_pressure_pass(armed, monkeypatch):
+    monkeypatch.setattr(runner, "free_percent", lambda path: 4.0)
+    a = pressured("a", free_paths=[str(armed)])
+    seen = capturing(a)
+    assert runner.main(["--on-pressure", "--param", "a.limit=5"], discover=discover_of(a)) == 0
+    assert seen[0].params == {"a": {"limit": "5"}} and seen[0].param_sources == {"a": {"limit": "cli"}}
+
+
+def test_a_param_value_is_written_to_no_file_by_a_live_pass(hermetic, monkeypatch):
+    victim = hermetic / "victim"
+    victim.mkdir()
+    a = Fake("a", [rm(victim)])
+    monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
+    value = "unique-secret-5c1f9e"
+    assert runner.main(["--force-run", "--param", f"a.k={value}"], discover=discover_of(a)) == 0
+    assert a.removed == [str(victim)]
+    holders = [
+        path for path in hermetic.rglob("*")
+        if path.is_file() and value.encode() in path.read_bytes()
+    ]
+    assert holders == []
+
+
+def test_an_opt_in_file_with_a_params_table_keeps_every_boolean_reaper_enabled(tmp_path):
+    from reaper import opt_in
+
+    path = tmp_path / "opt-in.toml"
+    path.write_text('alpha = true\nbeta = false\n[params.alpha]\nk = "v"\n[params.gamma]\nn = 1\n', encoding="utf-8")
+    assert opt_in.enabled("alpha", path) is True
+    assert opt_in.enabled("beta", path) is False
+    assert opt_in.enabled("gamma", path) is False
+    assert opt_in.params("alpha", path) == {"k": "v"}
+    assert opt_in.params("gamma", path) == {"n": 1}
+    assert opt_in.params("beta", path) == {}
+
+
+def test_a_missing_or_malformed_opt_in_file_has_no_params(tmp_path, capsys):
+    from reaper import opt_in
+
+    assert opt_in.params("a", tmp_path / "absent.toml") == {}
+    assert capsys.readouterr().err == ""
+    bad = tmp_path / "bad.toml"
+    bad.write_text("a = [", encoding="utf-8")
+    assert opt_in.params("a", bad) == {}
+    assert "unreadable" in capsys.readouterr().err
+    assert opt_in.enabled("a", bad) is False
+
+
+def test_a_pressure_row_names_its_trigger(armed, monkeypatch):
+    monkeypatch.setattr(runner, "free_percent", lambda path: 4.0)
+    a = pressured("a", free_paths=[str(armed)])
+    runner.main(["--on-pressure"], discover=discover_of(a))
+    assert pressure_rows(armed)[0]["trigger"] == "pressure" and "invocation_id" not in pressure_rows(armed)[0]
+
+
+def test_a_pressure_row_under_a_reaper_unit_carries_the_trigger_unit_and_the_invocation_id(armed, monkeypatch):
+    monkeypatch.setattr(runner, "free_percent", lambda path: 4.0)
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pressure.service")
+    monkeypatch.setenv("INVOCATION_ID", "cafe0123")
+    a = pressured("a", free_paths=[str(armed)])
+    runner.main(["--on-pressure"], discover=discover_of(a))
+    row = pressure_rows(armed)[0]
+    assert (row["trigger"], row["invocation_id"]) == ("unit", "cafe0123")
+
+
+# The command lines the automatic triggers start: the timer's units, the branch-backup hook and the
+# SessionStart hook. None may carry an explicit-invocation control.
+HOOK_REAPER_FLAG_CALLS = r'_spawn_detached\("[^"]+"((?:,\s*"[^"]*")*)\)'
+
+
+def trigger_offences(flags):
+    offences = []
+    for banned in ("--pressure-threshold", "--param"):
+        if banned in flags:
+            offences.append(f"{banned} on a trigger line")
+    if "--force-run" in flags and flags != ["--force-run"]:
+        offences.append("--force-run beyond the pass unit's plain line")
+    if "--only" in flags and "--on-pressure" in flags:
+        offences.append("--only with --on-pressure")
+    return offences
+
+
+def unit_exec_lines():
+    import subprocess
+
+    stubs = Path(__file__).resolve().parent / "fixtures" / "reaper_timer_stubs"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for sub in ("home", "tmp", "agent"):
+            (root / sub).mkdir()
+        env = {
+            "PATH": os.environ["PATH"], "HOME": str(root / "home"), "SYSTEMD_USER_DIR": str(root / "units"),
+            "SYSTEMCTL_BIN": str(stubs / "systemctl"), "LOGINCTL_BIN": str(stubs / "loginctl"),
+            "JOURNALCTL_BIN": str(stubs / "journalctl"), "REAPER_TIMER_STUB_STATE": str(root / "stub"),
+            "REAPER_TIMER_STUB_MANAGER": "none", "CLAUDE_CONFIG_DIR": str(root / "agent"), "TMPDIR": str(root / "tmp"),
+        }
+        done = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "install-reaper-timer.sh"), "--dry-run", "--tmpdir", str(root / "tmp")],
+            env=env, capture_output=True, text=True, timeout=60, check=True,
+        )
+    return [line for line in done.stdout.splitlines() if line.startswith("ExecStart=")]
+
+
+def hook_flag_lists():
+    backup = (SCRIPTS_DIR / "hook-branch-backup.py").read_text(encoding="utf-8")
+    calls = [re.findall(r'"([^"]*)"', args) for args in re.findall(HOOK_REAPER_FLAG_CALLS, backup)]
+    installer = (SCRIPTS_DIR / "install-reminder-hooks.sh").read_text(encoding="utf-8")
+    session_start = [
+        line for line in installer.splitlines() if re.search(r'"hook-reaper\.py"\s*,', line) and not line.lstrip().startswith("#")
+    ]
+    return calls, session_start
+
+
+def test_no_trigger_command_line_carries_an_explicit_invocation_control():
+    lines = unit_exec_lines()
+    assert len(lines) == 3
+    seen = []
+    for line in lines:
+        flags = [token for token in line.split() if token.startswith("--")]
+        seen.append(flags)
+        assert trigger_offences(flags) == [], line
+    assert ["--on-pressure"] in seen and ["--force-run"] in seen and ["--only"] in seen
+    calls, session_start = hook_flag_lists()
+    assert ["--upkeep-only", "--no-wait"] in calls and ["--on-pressure"] in calls
+    for flags in calls:
+        assert trigger_offences(flags) == [], flags
+    assert len(session_start) == 1 and "--" not in session_start[0]
+
+
+def test_the_trigger_guard_flags_each_forbidden_shape():
+    assert trigger_offences(["--on-pressure", "--pressure-threshold"]) != []
+    assert trigger_offences(["--force-run", "--param"]) != []
+    assert trigger_offences(["--force-run", "--on-pressure"]) != []
+    assert trigger_offences(["--on-pressure", "--only"]) != []
+    assert trigger_offences(["--only"]) == [] and trigger_offences(["--force-run"]) == []
 
 
 # ── unit-pass observation (read by install-reaper-timer.sh --check) ──────────

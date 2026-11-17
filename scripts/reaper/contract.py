@@ -160,6 +160,10 @@ class ReapContext:
     other pass.
     ``session`` is ``(source, top_level, interactive)`` of the SessionStart hook payload the runner
     read, else None (no payload, a manual pass, or a pass that no reaper gates).
+    ``params[NAME][KEY]`` is a per-invocation parameter of reaper NAME: a ``--param NAME.KEY=VALUE``
+    string laid over the machine-local ``[params.NAME]`` table of the opt-in file;
+    ``param_sources[NAME][KEY]`` is ``cli`` or ``table``, so a reaper can refuse a key that must
+    come only from an explicit command line.
     """
 
     now: float
@@ -172,6 +176,8 @@ class ReapContext:
     scope_registry_error: "str | None" = None
     pressured: "frozenset[str]" = frozenset()
     session: "tuple[str, bool, bool] | None" = None
+    params: "dict[str, dict[str, object]]" = field(default_factory=dict)
+    param_sources: "dict[str, dict[str, str]]" = field(default_factory=dict)
 
     def owned_path(self, path: str) -> bool:
         return path_owned(path, self.scope_records, self.now, self.heartbeat_ttl_hours)
