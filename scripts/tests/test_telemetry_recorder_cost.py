@@ -548,13 +548,25 @@ def test_lock_held_past_one_deadline_then_released_still_commits_within_s(monkey
     assert deferred_rows() == []
 
 
+def fake_sync_clock(monkeypatch) -> "tuple[list, list]":
+    """A monotonic clock for the sync that only `_sleep` and the test move: ([now], sleeps)."""
+    clock, waits = [0.0], []
+
+    def sleep(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(sync, "_monotonic", lambda: clock[0])
+    monkeypatch.setattr(sync, "_sleep", sleep)
+    return clock, waits
+
+
 def test_lock_held_past_budget_writes_one_sync_deferred_row(monkeypatch):
     freeze(monkeypatch, at(500))
     emit_at(monkeypatch, "stuck", at(490), 2)
     monkeypatch.setattr(store, "DEADLINE_S", 0.2)
     monkeypatch.setattr(sync, "BUDGET_S", 2.5)
-    waits = []
-    monkeypatch.setattr(sync, "_sleep", waits.append)
+    _, waits = fake_sync_clock(monkeypatch)
     size = emit.spool_path("stuck").stat().st_size
 
     with held("stuck.lock"):
@@ -569,6 +581,59 @@ def test_lock_held_past_budget_writes_one_sync_deferred_row(monkeypatch):
     sync.run()
     assert marks("stuck")[0] == at(490) + timedelta(seconds=sync.LIVE_TTL_S)
     assert len(deferred_rows()) == 1
+
+
+def test_replayed_spool_commits_before_retries_of_a_deferred_one_end(monkeypatch):
+    freeze(monkeypatch, at(500))
+    for stem in ("ender", "late", "stuck"):
+        emit_at(monkeypatch, stem, at(490), 2)
+    clock, _ = fake_sync_clock(monkeypatch)
+    real_replay = store.replay
+
+    def contended(stem, *args, **kwargs):
+        if stem == "stuck" or (stem == "late" and clock[0] < 3.0):
+            return {"inserted": 0, "deferred": True, "drained": False, "failed": False}
+        return real_replay(stem, *args, **kwargs)
+    monkeypatch.setattr(store, "replay", contended)
+    written = []
+    real_write = sync._write_own
+
+    def spy(kind, fields, *args, **kwargs):
+        written.append((kind, fields.get("session"), clock[0]))
+        return real_write(kind, fields, *args, **kwargs)
+    monkeypatch.setattr(sync, "_write_own", spy)
+
+    outcome = sync.run("ender")
+
+    assert outcome["committed"] == ["ender", "late"] and outcome["deferred"] == ["stuck"]
+    assert (sync.SYNC_COMMIT, "ender", 0.0) in written
+    assert (sync.SYNC_COMMIT, "late", 3.0) in written
+    (deferred_at,) = [t for kind, stem, t in written if kind == sync.SYNC_DEFERRED]
+    assert deferred_at + sync.BACKOFF_MAX_S > sync.BUDGET_S
+
+
+def test_retry_attempts_count_against_the_wall_clock_deadline(monkeypatch):
+    freeze(monkeypatch, at(500))
+    emit_at(monkeypatch, "stuck", at(490), 2)
+    clock, waits = fake_sync_clock(monkeypatch)
+    attempt_s = 100.0
+    starts = []
+    real_replay = store.replay
+
+    def slow_deferred(stem, *args, **kwargs):
+        if stem == sync.SYNC_SESSION:
+            return real_replay(stem, *args, **kwargs)
+        starts.append(clock[0])
+        clock[0] += attempt_s
+        return {"inserted": 0, "deferred": True, "drained": False, "failed": False}
+    monkeypatch.setattr(store, "replay", slow_deferred)
+
+    outcome = sync.run()
+
+    assert outcome["deferred"] == ["stuck"]
+    assert sum(waits) + sync.BACKOFF_MAX_S <= sync.BUDGET_S, "the sleeps alone would still fit"
+    assert all(start < sync.BUDGET_S for start in starts)
+    assert clock[0] <= sync.BUDGET_S + attempt_s
 
 
 @pytest.mark.parametrize("bad", [

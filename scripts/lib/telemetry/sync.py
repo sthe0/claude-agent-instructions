@@ -52,6 +52,7 @@ GIT_TIMEOUT_S = 5.0
 TRANSCRIPT_VERSION_LINES = 50
 
 _sleep = time.sleep
+_monotonic = time.monotonic
 
 
 def _now() -> datetime:
@@ -638,22 +639,26 @@ def materialize(sessions: "list[str]") -> dict:
 
 # --- the sync -------------------------------------------------------------------------
 
-def _replay_all(stems: "list[str]", budget_s: float) -> dict:
+def _replay_all(stems: "list[str]", deadline: float, on_replayed) -> dict:
     """First pass one attempt per spool; then only the unsuccessful ones are retried with
-    backoff (1 s doubling to 30 s) until each succeeds or the total wait reaches the budget."""
+    backoff (1 s doubling to 30 s) until each succeeds or the next wait would end past the
+    deadline, a `_monotonic` time, so the attempts count against it as well as the sleeps.
+    `on_replayed(stem, result)` runs the moment a spool replays, so its commit never waits out
+    the retries of another spool."""
     results = {s: {"inserted": 0, "ok": False} for s in stems}
 
     def attempt(stem):
         outcome = store.replay(stem)
         results[stem]["inserted"] += outcome["inserted"]
         results[stem]["ok"] = (not outcome["deferred"]) and outcome["drained"] and not outcome["failed"]
+        if results[stem]["ok"]:
+            on_replayed(stem, results[stem])
 
     for stem in stems:
         attempt(stem)
-    waited, wait = 0.0, BACKOFF_FIRST_S
-    while waited + wait <= budget_s and not all(r["ok"] for r in results.values()):
+    wait = BACKOFF_FIRST_S
+    while _monotonic() + wait <= deadline and not all(r["ok"] for r in results.values()):
         _sleep(wait)
-        waited += wait
         wait = min(wait * 2, BACKOFF_MAX_S)
         for stem in [s for s in stems if not results[s]["ok"]]:
             attempt(stem)
@@ -663,7 +668,7 @@ def _replay_all(stems: "list[str]", budget_s: float) -> dict:
 def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
     """One sync. `session` names the session whose SessionEnd started it (kind session_end);
     otherwise it is a sweep. Returns {kind, visited, committed, deferred, unattached}."""
-    budget = BUDGET_S if budget_s is None else budget_s
+    deadline = _monotonic() + (BUDGET_S if budget_s is None else budget_s)
     kind = "session_end" if session else "sweep"
     store.replay(SYNC_SESSION)
     begun = _now()
@@ -689,28 +694,35 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
         stems.append(session)
     stems = sorted(stems, key=lambda s: s != session)
 
-    results = _replay_all(stems, budget)
     committed, deferred = [], []
-    conn = store.open_record()
-    try:
-        for stem in stems:
-            result = results[stem]
-            if not result["ok"]:
+
+    def commit_replayed(stem, result):
+        if result["inserted"] > 0 or stem == session:
+            write = True
+        else:
+            conn = store.open_record()
+            try:
+                end, _, commit = latency_marks(conn, stem, skipped) if conn is not None else (None, None, None)
+            finally:
+                if conn is not None:
+                    conn.close()
+            write = end is not None and end <= begun and commit is None and is_eligible(stem, begun)
+        if write:
+            _write_own(SYNC_COMMIT, {"session": stem, "rows_inserted": result["inserted"]})
+            committed.append(stem)
+
+    results = _replay_all(stems, deadline, commit_replayed)
+    unreplayed = [stem for stem in stems if not results[stem]["ok"]]
+    if unreplayed:
+        conn = store.open_record()
+        try:
+            for stem in unreplayed:
                 left = unreplayed_bytes(conn, stem) if conn is not None else 0
                 _write_own(SYNC_DEFERRED, {"session": stem, "unreplayed_bytes": left})
                 deferred.append(stem)
-                continue
-            if result["inserted"] > 0 or stem == session:
-                write = True
-            else:
-                end, _, commit = latency_marks(conn, stem, skipped) if conn is not None else (None, None, None)
-                write = end is not None and end <= begun and commit is None and is_eligible(stem, begun)
-            if write:
-                _write_own(SYNC_COMMIT, {"session": stem, "rows_inserted": result["inserted"]})
-                committed.append(stem)
-    finally:
-        if conn is not None:
-            conn.close()
+        finally:
+            if conn is not None:
+                conn.close()
     filed = materialize([s for s in stems if s not in deferred])
     if filed.get("failed_session"):
         _write_own(SYNC_DEFERRED, {"session": filed["failed_session"], "phase": "materialize"})

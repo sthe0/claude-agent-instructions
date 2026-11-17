@@ -1,7 +1,8 @@
 """Mutants of the shared live store's defence against rows a writer should not have put there:
 the traced not_requested judge writer and its fix bound, the test-run leak guards and their
 class, foreign-layer hook rows, the pinned scale measurement, the session a report run is
-charged to, and the writer marker stamped at production points only.
+charged to, the writer marker stamped at production points only, and the sync's commit of a
+replayed spool, which never waits out another spool's retries or a deadline counting only sleeps.
 
 Each mutant is `{name, file, anchor, replacement, tests}`: `anchor` occurs exactly once in
 `file` (a path under the repo root), `replacement` keeps the module importable, `tests` are
@@ -16,7 +17,9 @@ _REPORT = "scripts/lib/telemetry/report.py"
 _LIVE = "scripts/lib/telemetry/live.py"
 _EMIT = "scripts/lib/telemetry/emit.py"
 _STORE = "scripts/lib/telemetry/store.py"
+_SYNC = "scripts/lib/telemetry/sync.py"
 _T = "scripts/tests/test_telemetry_shared_store.py::"
+_SYNC_T = "scripts/tests/test_telemetry_recorder_cost.py::"
 
 _TEST_RUN_BRANCH = "        if test == 1:\n"
 _NAIVE_CHECK = ('    if claimed.tzinfo is None:\n'
@@ -138,4 +141,17 @@ MUTANTS = [
      "anchor": "    elif group[\"count\"] > SCALE_MEASUREMENT_ROWS:\n",
      "replacement": "    elif False:\n",
      "tests": [_T + "test_scale_measurement_count_above_pinned_fails"]},
+    {"name": "sync_commit_after_retries", "file": _SYNC,
+     "anchor": "    results = _replay_all(stems, deadline, commit_replayed)\n",
+     "replacement": ("    results = _replay_all(stems, deadline, lambda stem, result: None)\n"
+                     "    for stem in stems:\n"
+                     "        if results[stem][\"ok\"]:\n"
+                     "            commit_replayed(stem, results[stem])\n"),
+     "tests": [_SYNC_T + "test_replayed_spool_commits_before_retries_of_a_deferred_one_end"]},
+    {"name": "sync_budget_counts_only_sleeps", "file": _SYNC,
+     "anchor": "    while _monotonic() + wait <= deadline and not all(r[\"ok\"] for r in results.values()):\n",
+     "replacement": ("    waited = _monotonic()\n"
+                     "    while waited + wait <= deadline and not all(r[\"ok\"] for r in results.values()):\n"
+                     "        waited += wait\n"),
+     "tests": [_SYNC_T + "test_retry_attempts_count_against_the_wall_clock_deadline"]},
 ]
