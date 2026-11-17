@@ -643,6 +643,34 @@ def test_a_candidate_that_does_not_contain_the_tip_is_refused_before_any_run(wor
     assert err.value.refused and runner.calls == []
 
 
+@pytest.mark.parametrize("store", ["unset", "live"])
+def test_the_key_exclusion_refuses_the_run_unless_the_store_is_a_private_copy(world, monkeypatch, store):
+    from lib import catalogue_key
+    from lib import result_store
+
+    monkeypatch.setenv(catalogue_key.EXCLUDE_ENV, "scripts/lib/target.py")
+    if store == "unset":
+        monkeypatch.delenv(result_store.STORE_ENV, raising=False)
+    else:
+        live = result_store.results_dir(Path(world.common)) / result_store.STORE_ENTRY / result_store.DB_NAME
+        monkeypatch.setenv(result_store.STORE_ENV, str(live.parent / ".." / live.parent.name / live.name))
+    cand = world.code_commit()
+    runner = FakeRunner({cand: ()})
+    with pytest.raises(shared.GateError) as err:
+        world.run(runner)
+    assert err.value.refused and runner.calls == []
+
+
+def test_the_key_exclusion_does_not_refuse_a_private_store(world, monkeypatch, tmp_path):
+    from lib import catalogue_key
+    from lib import result_store
+
+    monkeypatch.setenv(catalogue_key.EXCLUDE_ENV, "scripts/lib/target.py")
+    monkeypatch.setenv(result_store.STORE_ENV, str(tmp_path / "private" / "results.sqlite"))
+    cand = world.code_commit()
+    world.run(FakeRunner({cand: (FAILED_A,), world.base: ()}))
+
+
 def test_the_sandbox_is_removed_after_a_run(world):
     cand = world.code_commit()
     world.run(FakeRunner({cand: (FAILED_A,), world.base: ()}))

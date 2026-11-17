@@ -2073,8 +2073,7 @@ def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool, warm_store:
         raise SystemExit("no registered catalogue could be resolved")
     modules = {e["name"]: e["module"]
                for e in tomllib.loads((repo / catalogue_key.REGISTRY_PATH).read_text())["catalogue"]}
-    declared = {s.name: catalogue_key._declared(repo, modules[s.name]) for s in head_registry.subjects}
-    rewritten_by_name = {name: reported[0] for name, reported in declared.items() if reported}
+    rewritten_by_name = {s.name: sorted(s.rewritten) for s in head_registry.subjects}
     if MUTATION_ONLY not in rewritten_by_name:
         raise SystemExit(f"catalogue {MUTATION_ONLY} is not registered or cannot be resolved")
     own_warm: Path | None = None
@@ -2131,7 +2130,7 @@ def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool, warm_store:
                 state = exp.prepare()
                 seen = observe(exp, state)
     finally:
-        if own_warm is not None and own_warm.name.startswith("cls-control-"):
+        if own_warm is not None:
             for sidecar in ("", "-wal", "-shm"):
                 Path(f"{own_warm}{sidecar}").unlink(missing_ok=True)
         if saved is None:

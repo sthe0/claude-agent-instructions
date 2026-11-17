@@ -910,6 +910,7 @@ class ReusePlan:
     hits: Mapping[str, result_store.Hit]
     registry: catalogue_key.Registry = catalogue_key.Registry()
     core: Path = Path()
+    digests: Mapping[tuple[str, str], str] = dataclasses.field(default_factory=dict)  # (kind, path) -> digest at the lookup
 
 
 def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tuple[ReusePlan | None, str]:
@@ -923,9 +924,18 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
         path = result_store.store_path(Path(_common_dir(repo)))
         environment = result_store.current_environment(env=env)
         registry = catalogue_key.load(root / "core")
+        resolver = result_store.tree_resolver(root / "core")
+        digests: dict[tuple[str, str], str] = {}
+
+        def recording(kind: str, file: str) -> str:
+            digests[(kind, file)] = resolver(kind, file)
+            return digests[(kind, file)]
+
+        for subject in registry.subjects:
+            for file in subject.paths:
+                recording(catalogue_key.FILE, file)
         with result_store.ResultStore(path) as store:
-            hits = store.lookup(store.test_ids(), environment, result_store.tree_resolver(root / "core"),
-                                registry, catalogue_key.max_age_s())
+            hits = store.lookup(store.test_ids(), environment, recording, registry, catalogue_key.max_age_s())
     except Exception as exc:  # a corrupt or dangling row (zlib.error, KeyError) must cost the reuse, never the verdict
         return None, f"result store unavailable, every test runs: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
     shutil.copyfile(scripts / "tests" / f"{REUSE_PLUGIN_MODULE}.py", root / "plugin" / f"{REUSE_PLUGIN_MODULE}.py")
@@ -934,7 +944,7 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
     (root / REUSE_IDS_NAME).write_text("".join(f"{i}\n" for i in sorted(hits)), encoding="utf-8")
     env.update({TRACER_ENV: "1", TRACER_DIR_ENV: str(tracer_dir),
                 "CORE_RESULT_REUSE_IDS": str(root / REUSE_IDS_NAME), "CORE_RESULT_REUSE_OUT": str(out_prefix)})
-    return ReusePlan(path, environment, tracer_dir, out_prefix, hits, registry, root / "core"), ""
+    return ReusePlan(path, environment, tracer_dir, out_prefix, hits, registry, root / "core", digests), ""
 
 
 def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
@@ -957,15 +967,25 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
             always = len(always_ids)
             for i in always_ids:
                 reasons.update(records[i]["always_rerun"])
+            after = result_store.tree_resolver(plan.core)
+            unchanged: dict[str, bool] = {}
+
+            def subject_held(test_id: str) -> bool:
+                subject = plan.registry.find(test_id)
+                if subject is None:
+                    return True
+                if subject.name not in unchanged:
+                    unchanged[subject.name] = all(
+                        plan.digests.get((catalogue_key.FILE, p)) == after(catalogue_key.FILE, p) for p in subject.paths)
+                return unchanged[subject.name]
+
             passing = {i: result_store.deps_of(records[i]) for i in ran
-                       if outcome.get(i) == "passed" and i not in run.failures and not records[i]["always_rerun"]}
-            failed_catalogues = [i for i in _test_report().collected_ids(lines) if plan.registry.find(i) is not None
-                                 and i not in left_out and (outcome.get(i) != "passed" or i in run.failures)]
+                       if outcome.get(i) == "passed" and i not in run.failures and not records[i]["always_rerun"]
+                       and subject_held(i)}
             with result_store.ResultStore(plan.store) as store:
-                store.forget(failed_catalogues)
                 stored = store.put(sha, plan.environment, passing, registry=plan.registry,
                                    durations=junit_durations(run.junit_path, passing),
-                                   clean_tree=result_store.tree_resolver(plan.core))
+                                   clean_tree=lambda kind, file: plan.digests[(kind, file)])
                 store.set_meta(result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)))
                 store.set_meta(result_store.FAILED_META, json.dumps(
                     sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)))
@@ -974,6 +994,17 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
             note = f"results of the run were not stored: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
     elif not run.hermetic and not run.timed_out:
         note = "results of the run were not stored: the run was not hermetic"
+    if run.report_path:
+        try:
+            lines = _test_report().read_lines(run.report_path)
+            outcome = _test_report().outcomes(lines)
+            failed_catalogues = [i for i in _test_report().collected_ids(lines) if plan.registry.find(i) is not None
+                                 and i not in left_out and (outcome.get(i) != "passed" or i in run.failures)]
+            if failed_catalogues:
+                with result_store.ResultStore(plan.store) as store:
+                    store.forget(failed_catalogues)
+        except Exception as exc:  # deleting is only a safety net; the verdict does not depend on it
+            note = note or f"failed catalogue passes were not deleted: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
     ran_tests = ran_ids(run)
     exit_code = run.pytest_exit
     if exit_code == NO_TESTS_COLLECTED_EXIT and reused and not ran_tests and not run.timed_out:
@@ -1421,8 +1452,7 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
     re-reads the remote tip after the reruns; a tip that moved makes the verdict UNAVAILABLE. Unconfirmed
     ids are appended to the flaky journal (``flake_list.journal_path``); the tree is never written.
     """
-    refusal = catalogue_key.control_refusal(
-        os.environ, bool(os.environ.get(catalogue_key.EXCLUDE_ENV)) and _store_is_private(Path(repo)))
+    refusal = catalogue_key.control_refusal(os.environ, _store_is_private(Path(repo)))
     if refusal:
         raise GateError(refusal, refused=True)
     repo = Path(repo)

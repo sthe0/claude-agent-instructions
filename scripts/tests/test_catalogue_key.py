@@ -132,6 +132,67 @@ def test_forget_deletes_every_stored_row_of_the_given_ids_only(store, tree, regi
     assert store.rows_of(CAT) == [] and store.rows_of(OTHER)
 
 
+def test_a_narrowed_row_is_not_reused_when_the_registry_no_longer_names_its_test(store, tree, registry):
+    stored(store, tree, registry)
+    lost = ck.load(tree, {}, declared=lambda core, module: None)
+    assert lost.find(CAT) is None
+    assert CAT not in lookup(store, tree, lost)
+    assert CAT in lookup(store, tree, registry)
+
+
+def test_a_literal_python_file_brings_its_import_closure(tmp_path):
+    (tmp_path / "scripts/tests").mkdir(parents=True)
+    (tmp_path / "scripts/tests/t.py").write_text('RUN = "scripts/tests/tool.py"\n')
+    (tmp_path / "scripts/tests/tool.py").write_text("import deep\n")
+    (tmp_path / "scripts/tests/deep.py").write_text("D = 1\n")
+    assert ck.literal_files(tmp_path, ["scripts/tests/t.py"]) == {"scripts/tests/tool.py", "scripts/tests/deep.py"}
+
+
+def _settle_catalogue(tmp_path, tree, registry, digests, edit_during_run):
+    from test_result_store import finished_run, plan_in, traced as write_trace
+
+    write_trace(tmp_path / "trace", [CAT])
+    plan = plan_in(tmp_path)
+    plan = type(plan)(plan.store, plan.environment, plan.tracer_dir, plan.out_prefix, plan.hits, registry, tree, digests)
+    if edit_during_run:
+        (tree / REWRITTEN).write_text("T = 99\n")
+    from lib import suite_gate
+
+    return plan, suite_gate.settle_reuse(plan, CAND, finished_run(tmp_path, [CAT], exit_code=0))
+
+
+def test_a_catalogue_whose_set_changed_during_the_run_is_not_stored(tmp_path, tree, registry):
+    resolve = rs.tree_resolver(tree)
+    digests = {(ck.FILE, p): resolve(ck.FILE, p) for p in registry.find(CAT).paths}
+    plan, settled = _settle_catalogue(tmp_path, tree, registry, digests, edit_during_run=True)
+    assert settled.stored_results == 0
+    with rs.ResultStore(plan.store) as opened:
+        assert opened.rows_of(CAT) == []
+
+
+def test_a_catalogue_whose_set_held_is_stored_at_the_digests_taken_before_the_run(tmp_path, tree, registry):
+    resolve = rs.tree_resolver(tree)
+    digests = {(ck.FILE, p): resolve(ck.FILE, p) for p in registry.find(CAT).paths}
+    plan, settled = _settle_catalogue(tmp_path, tree, registry, digests, edit_during_run=False)
+    assert settled.stored_results == 1
+    with rs.ResultStore(plan.store) as opened:
+        assert {(k, p): d for k, p, d in opened.rows_of(CAT)[0]["deps"]} == digests
+
+
+def test_a_failing_catalogue_run_deletes_its_stored_pass_even_when_the_run_was_not_hermetic(tmp_path, tree, registry):
+    from test_result_store import finished_run, plan_in
+
+    from lib import suite_gate
+
+    plan = plan_in(tmp_path)
+    plan = type(plan)(plan.store, plan.environment, plan.tracer_dir, plan.out_prefix, plan.hits, registry, tree, {})
+    with rs.ResultStore(plan.store) as opened:
+        stored(opened, tree, registry)
+    suite_gate.settle_reuse(plan, CAND, finished_run(tmp_path, [CAT], failed={CAT}, exit_code=1, hermetic=False))
+    with rs.ResultStore(plan.store) as opened:
+        assert opened.rows_of(CAT) == []
+
+
 def test_the_excluded_path_is_dropped_from_every_set(tree):
     registry = ck.load(tree, {ck.EXCLUDE_ENV: REWRITTEN}, declared=lambda core, module: DECLARED)
     subject = registry.find(CAT)

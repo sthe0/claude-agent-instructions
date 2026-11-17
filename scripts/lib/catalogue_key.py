@@ -199,7 +199,8 @@ def _defines(tree: ast.AST, name: str) -> bool:
 
 def literal_files(core: Path, sources: Iterable[str]) -> frozenset[str]:
     """Repository files that string constants in ``sources`` name: relative to the repository root or to the
-    source's own directory; regular files only (a directory is not a dependency), inside the repository."""
+    source's own directory; regular files only (a directory is not a dependency), inside the repository.
+    A named ``.py`` file brings its import closure."""
     found: set[str] = set()
     for rel in sources:
         tree = _tree_of(core, rel)
@@ -220,6 +221,8 @@ def literal_files(core: Path, sources: Iterable[str]) -> frozenset[str]:
                         found.add(Path(candidate).as_posix())
                 except (OSError, ValueError):
                     continue
+    for rel in [f for f in found if f.endswith(".py")]:
+        found |= import_closure(core, rel)
     return frozenset(found)
 
 

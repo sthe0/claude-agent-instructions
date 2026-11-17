@@ -252,8 +252,9 @@ class ResultStore:
         """Store the passes of one run; returns how many rows were written. The caller filters (PASS only).
 
         A test of a registered catalogue is keyed and stored on its declared set (``catalogue_key.narrow``)
-        at the digests ``clean_tree`` gives, the resolver of the committed tree ``candidate_sha`` names; without
-        ``clean_tree`` no catalogue row is written."""
+        at the digests ``clean_tree`` gives: the caller passes the digests it took before the run (the writable tree
+        may have changed during it) and leaves out a catalogue whose set changed; without ``clean_tree`` no
+        catalogue row is written."""
         stamp = time.time() if now is None else now
         written = 0
         subjects = {i: registry.find(i) for i in results} if registry is not None else {}
@@ -309,13 +310,19 @@ class ResultStore:
         """The tests whose stored row still has its key: the stored dependencies at their current digests.
 
         A registered catalogue is looked up by its narrowed key, and only from a row stored at most
-        ``max_catalogue_age_s`` ago; a hit changes ``last_used`` and never the pass time."""
+        ``max_catalogue_age_s`` ago; a hit changes ``last_used`` and never the pass time.
+        A narrowed row is never matched without its subject (the registry lost it since the put): the catalogue runs."""
         hits: dict[str, Hit] = {}
         current: dict[tuple[str, str], str] = {}
         asked = time.time() if now is None else now
+        def cached(kind: str, path: str) -> str:
+            if (kind, path) not in current:
+                current[(kind, path)] = resolve(kind, path)
+            return current[(kind, path)]
+
         for test_id in test_ids:
             subject = registry.find(test_id) if registry is not None else None
-            declared = catalogue_key.narrow(subject, resolve) if subject is not None else None
+            declared = catalogue_key.narrow(subject, cached) if subject is not None else None
             for key, candidate, blob, stored_at, duration, catalogue in self._rows(test_id):
                 if catalogue and max_catalogue_age_s is not None and asked - stored_at > max_catalogue_age_s:
                     continue
@@ -324,11 +331,9 @@ class ResultStore:
                         hits[test_id] = Hit(candidate, key, duration)
                         break
                     continue
-                nowdeps = []
-                for kind, path, _old in self.stored_deps(blob):
-                    if (kind, path) not in current:
-                        current[(kind, path)] = resolve(kind, path)
-                    nowdeps.append((kind, path, current[(kind, path)]))
+                if catalogue:
+                    continue
+                nowdeps = [(kind, path, cached(kind, path)) for kind, path, _old in self.stored_deps(blob)]
                 if compute_key(test_id, nowdeps, environment) == key:
                     hits[test_id] = Hit(candidate, key, duration)
                     break
