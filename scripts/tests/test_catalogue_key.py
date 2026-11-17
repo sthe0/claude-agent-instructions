@@ -158,6 +158,14 @@ def test_a_literal_path_into_git_metadata_stays_out_of_the_set(tmp_path):
     assert ck.literal_files(tmp_path, ["scripts/tests/t.py"]) == {"config.md"}
 
 
+def test_a_worktree_git_file_stays_out_of_the_set(tmp_path):
+    # In a linked worktree .git is a regular file; it is git's, not repository content.
+    (tmp_path / "scripts/tests").mkdir(parents=True)
+    (tmp_path / ".git").write_text("gitdir: /elsewhere\n")
+    (tmp_path / "scripts/tests/t.py").write_text('B = ".git"\n')
+    assert ck.literal_files(tmp_path, ["scripts/tests/t.py"]) == frozenset()
+
+
 def _settle_catalogue(tmp_path, tree, registry, digests, edit_during_run):
     from test_result_store import finished_run, plan_in, traced as write_trace
 
