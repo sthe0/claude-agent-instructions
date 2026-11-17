@@ -952,7 +952,9 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
 
     Only a hermetic run that finished (pytest exit 0 or 1) in the sandbox of ``sha`` stores anything (a
     run that could see the live repository, home or network may pass for reasons a hermetic one lacks), and only
-    tests its report shows passing that the tracer recorded with no always-rerun reason."""
+    tests its report shows passing that the tracer recorded with no always-rerun reason. A registered catalogue
+    test is the exception: it is keyed on its declared set, not on its trace, so its always-rerun reasons
+    (subprocesses, environment reads) do not keep it from being stored."""
     left_out = {i for part in plan.out_prefix.parent.glob(f"{plan.out_prefix.name}.*")
                 for i in part.read_text(encoding="utf-8").splitlines() if i}
     reused = {i: plan.hits[i].candidate_sha for i in sorted(left_out) if i in plan.hits}
@@ -963,7 +965,7 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
             lines = _test_report().read_lines(run.report_path)
             outcome = _test_report().outcomes(lines)
             ran = [i for i in _test_report().collected_ids(lines) if i in records]
-            always_ids = [i for i in ran if records[i]["always_rerun"]]
+            always_ids = {i for i in ran if records[i]["always_rerun"] and plan.registry.find(i) is None}
             always = len(always_ids)
             for i in always_ids:
                 reasons.update(records[i]["always_rerun"])
@@ -980,7 +982,7 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
                 return unchanged[subject.name]
 
             passing = {i: result_store.deps_of(records[i]) for i in ran
-                       if outcome.get(i) == "passed" and i not in run.failures and not records[i]["always_rerun"]
+                       if outcome.get(i) == "passed" and i not in run.failures and i not in always_ids
                        and subject_held(i)}
             with result_store.ResultStore(plan.store) as store:
                 stored = store.put(sha, plan.environment, passing, registry=plan.registry,

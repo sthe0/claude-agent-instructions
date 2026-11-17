@@ -1033,3 +1033,33 @@ def test_a_timed_out_run_keeps_the_stored_pass_of_a_catalogue_it_never_finished(
     with result_store.ResultStore(store_path) as opened:
         assert opened.rows_of(failing) == []
         assert opened.rows_of(unfinished)
+
+
+def test_a_catalogue_pass_is_stored_despite_always_rerun_reasons_an_ordinary_test_is_not(tmp_path):
+    from lib import catalogue_key, result_store
+    catalogue, ordinary = "t::cat_spawns", "t::plain_spawns"
+    registry = catalogue_key.Registry((catalogue_key.Subject("spawns", (catalogue,), frozenset({"lib/a.py"}), ("t::n",)),))
+    core = tmp_path / "core"
+    (core / "lib").mkdir(parents=True)
+    (core / "lib/a.py").write_text("A = 1\n")
+    environment = result_store.current_environment({"dists": [], "git": "g"})
+    store_path = tmp_path / "db" / "r.sqlite"
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    lines = [{"kind": "file", "id": 0, "path": "lib/a.py", "digest": "sha256:aa"}]
+    lines += [{"kind": "test", "id": i, "files": [0], "listings": {}, "probes": {}, "always_rerun": ["subprocess"]}
+              for i in (catalogue, ordinary)]
+    (trace / "main.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+    report = tmp_path / "tests.jsonl"
+    records = [{"kind": "collected", "nodeid": i} for i in (catalogue, ordinary)]
+    records += [{"kind": "report", "nodeid": i, "when": "call", "outcome": "passed"} for i in (catalogue, ordinary)]
+    report.write_text("".join(json.dumps(line) + "\n" for line in records))
+    sha = "c" * 40
+    digests = {(catalogue_key.FILE, "lib/a.py"): result_store.tree_resolver(core)(catalogue_key.FILE, "lib/a.py")}
+    plan = gate.ReusePlan(store_path, environment, trace, tmp_path / "out", {}, registry, core, digests)
+    settled = gate.settle_reuse(plan, sha, gate.SuiteRun(0, (), sha, report_path=str(report), hermetic=True))
+    with result_store.ResultStore(store_path) as opened:
+        assert opened.rows_of(catalogue)
+        assert opened.rows_of(ordinary) == []
+        assert json.loads(opened.get_meta(result_store.ALWAYS_RERUN_META)) == [ordinary]
+    assert settled.always_rerun_tests == 1
