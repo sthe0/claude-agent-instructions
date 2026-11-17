@@ -1433,6 +1433,9 @@ def timed_share(taker_kwargs, cycle_ends=20, step=2.0, duration=0.1, sweep_s=2.6
         if jobs:
             pending = (jobs.pop(), end + sweep_s)
         cycles.append(cyc(n, start, duration))
+    if pending:
+        now[0] = ns(pending[1])
+        pending[0]()
     after = cycles[1:]
     return sum(1 for c in after if not h.cycle_untimed(c, taker.sweeps)) / len(after), taker
 
@@ -1448,8 +1451,8 @@ def sweeps_taken(cycle_ends, **taker_kwargs):
 def test_a_stat_path_run_s_sweeps_leave_sweep_free_cycles():
     stat_share, stat_taker = timed_share({"stat_path": True})
     event_share, event_taker = timed_share({})
-    assert (stat_share, event_share) == (15 / 19, 10 / 19)
-    assert (len(stat_taker.sweeps), len(event_taker.sweeps)) == (4, 9)
+    assert (stat_share, event_share) == (15 / 19, 9 / 19)
+    assert (len(stat_taker.sweeps), len(event_taker.sweeps)) == (4, 10)
     assert sweeps_taken(9, stat_path=True) == 3, "the first cycle_end, then one per STAT_SWEEP_EVERY"
     assert sweeps_taken(9) == 9 and sweeps_taken(9, stat_path=False) == 9
 
@@ -1581,12 +1584,19 @@ def stub_k1_pty(monkeypatch):
     monkeypatch.setattr(h, "run_pty", run_pty)
 
 
+@pytest.fixture
+def smoke_runner(monkeypatch):
+    for name, value in (("void", None), ("calls", []), ("raises", None), ("k1_cycles", h.K1_MIN_CYCLES),
+                        ("state_dir", None)):
+        monkeypatch.setattr(SmokeRunner, name, value, raising=False)
+    monkeypatch.setattr(h, "RealRunner", SmokeRunner)
+    stub_k1_pty(monkeypatch)
+
+
 SMOKE_JOBS = [("r3", "new", "event"), ("r3", "new", "stat"), ("r3", "old", "stat"), ("k1", "old", None), ("k1", "new", None)]
 
 
-def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(h, "RealRunner", SmokeRunner)
-    stub_k1_pty(monkeypatch)
+def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, smoke_runner, capsys):
     for void in (None, *SMOKE_JOBS):
         SmokeRunner.void, SmokeRunner.calls, SmokeRunner.raises = void, [], None
         state = tmp_path / "state"
@@ -1606,10 +1616,8 @@ def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, mon
     assert h.main(missing) == 2 and SmokeRunner.calls == []
 
 
-def test_a_k1_run_with_no_cycle_is_void_and_the_smoke_exits_1(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(h, "RealRunner", SmokeRunner)
-    stub_k1_pty(monkeypatch)
-    SmokeRunner.void, SmokeRunner.calls, SmokeRunner.raises = ("k1", "new", None), [], None
+def test_a_k1_run_with_no_cycle_is_void_and_the_smoke_exits_1(tmp_path, smoke_runner, capsys):
+    SmokeRunner.void = ("k1", "new", None)
     assert h.main(smoke_args(tmp_path)) == 1
     assert "measured k1 new void 0 of 4 cycles observed" in capsys.readouterr().out
     SmokeRunner.k1_cycles = 4
@@ -1620,16 +1628,14 @@ def test_a_k1_run_with_no_cycle_is_void_and_the_smoke_exits_1(tmp_path, monkeypa
     assert h.judge_k1({"k1": {"old": ok, "new": voids}}) == [f"K1: fewer than {h.K1_MIN_RUNS} strace runs of the old or the new code"]
 
 
-def test_the_smoke_exits_2_when_it_could_not_run(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(h, "RealRunner", SmokeRunner)
-    SmokeRunner.void, SmokeRunner.calls = None, []
+def test_the_smoke_exits_2_when_it_could_not_run(tmp_path, smoke_runner, monkeypatch, capsys):
     SmokeRunner.raises = FileNotFoundError("no strace output")
     assert h.main(smoke_args(tmp_path)) == 2
     assert "could not run" in capsys.readouterr().err
     SmokeRunner.raises, SmokeRunner.calls = None, []
-    monkeypatch.setattr(h, "CONTRACT_PATH", tmp_path / "no-such-contract.json")
-    assert h.main(smoke_args(tmp_path)) == 2 and SmokeRunner.calls == []
-    monkeypatch.undo()
+    with monkeypatch.context() as ctx:
+        ctx.setattr(h, "CONTRACT_PATH", tmp_path / "no-such-contract.json")
+        assert h.main(smoke_args(tmp_path)) == 2 and SmokeRunner.calls == []
     monkeypatch.setattr(h, "run_pty", lambda argv, **kwargs: FakeTrace())
     with pytest.raises(FileNotFoundError):
         h.strace_run(Path("tree"), tmp_path, {"XDG_CACHE_HOME": str(tmp_path)}, new=True, label="y")
@@ -1672,19 +1678,82 @@ def test_the_floor_against_limit_check_leaves_r1_out(capsys):
     assert h.verify_floors_report(floors, h.limits_with({}), SOURCES)[0] == 1
 
 
-def test_the_cpu_walk_reads_only_the_launched_tree(tmp_path):
-    def proc(pid, ppid, utime, kids=()):
-        fields = [pid, "(x)", "S", ppid, 0, 0, 0, -1, 0, 0, 0, 0, 0, utime, 0, 0, 0, 20, 0, 1, 0, 5]
-        (tmp_path / str(pid) / "task" / str(pid)).mkdir(parents=True)
-        (tmp_path / str(pid) / "stat").write_text(" ".join(str(f) for f in fields) + "\n")
-        (tmp_path / str(pid) / "task" / str(pid) / "children").write_text(" ".join(str(k) for k in kids))
+def fake_proc(root, pid, ppid, utime, kids=None, threads=("main",)):
+    """A /proc entry; ``kids`` is written to the children file of the first thread, ``None`` writes no children
+    file at all, as a kernel without CONFIG_PROC_CHILDREN."""
+    fields = [pid, "(x)", "S", ppid, 0, 0, 0, -1, 0, 0, 0, 0, 0, utime, 0, 0, 0, 20, 0, 1, 0, 5]
+    (root / str(pid)).mkdir(parents=True, exist_ok=True)
+    (root / str(pid) / "stat").write_text(" ".join(str(f) for f in fields) + "\n")
+    for thread in threads:
+        (root / str(pid) / "task" / thread).mkdir(parents=True)
+    if kids is not None:
+        (root / str(pid) / "task" / threads[0] / "children").write_text(" ".join(str(k) for k in kids))
 
-    proc(100, 1, 10, kids=(101,))
-    proc(101, 100, 20, kids=(102, 999))
-    proc(102, 101, 30)
-    proc(200, 1, 777)
+
+def test_the_cpu_walk_reads_only_the_launched_tree_when_children_files_exist(tmp_path):
+    fake_proc(tmp_path, 100, 1, 10, kids=(101,))
+    fake_proc(tmp_path, 101, 100, 20, kids=(102, 999))
+    fake_proc(tmp_path, 102, 101, 30, kids=())
+    fake_proc(tmp_path, 200, 1, 777, kids=())
+    fake_proc(tmp_path, 300, 100, 5000, kids=())          # names ppid 100 but no children file lists it
     assert h.proc_tree_cpu_s(100, str(tmp_path)) == pytest.approx(60 / os.sysconf("SC_CLK_TCK"))
+    assert sorted(h.proc_tree_ticks(100, str(tmp_path))) == [100, 101, 102]
     assert h.proc_tree_cpu_s(999, str(tmp_path)) == 0.0
+
+
+def test_the_cpu_walk_falls_back_to_the_ppid_map_when_there_are_no_children_files(tmp_path):
+    fake_proc(tmp_path, 100, 1, 10)
+    fake_proc(tmp_path, 101, 100, 20)
+    fake_proc(tmp_path, 102, 101, 30)
+    fake_proc(tmp_path, 103, 100, 40)
+    fake_proc(tmp_path, 200, 1, 777)
+    (tmp_path / "self").mkdir()
+    assert sorted(h.proc_tree_ticks(100, str(tmp_path))) == [100, 101, 102, 103]
+    assert h.proc_tree_cpu_s(100, str(tmp_path)) == pytest.approx(100 / os.sysconf("SC_CLK_TCK"))
+    assert h.proc_tree_ticks(999, str(tmp_path)) == {}
+
+
+def test_a_thread_gone_mid_listing_does_not_hide_its_siblings_children(tmp_path):
+    fake_proc(tmp_path, 100, 1, 10, threads=("a", "b"))                   # thread a: no children file (vanished)
+    (tmp_path / "100" / "task" / "b" / "children").write_text("101")
+    fake_proc(tmp_path, 101, 100, 20, kids=())
+    fake_proc(tmp_path, 300, 100, 5000, kids=())                          # the ppid map would add this one
+    assert sorted(h.proc_tree_ticks(100, str(tmp_path))) == [100, 101]
+
+
+@pytest.mark.parametrize("children_files", [True, False])
+def test_the_cpu_walk_visits_a_grandchild_on_the_real_proc(children_files):
+    import select
+    import signal
+    grandchild = "import time; time.sleep(600)"
+    child = ("import subprocess, sys, time; g = subprocess.Popen([sys.executable, '-c', %r]); "
+             "print(g.pid, flush=True); time.sleep(600)" % grandchild)
+    root = ("import subprocess, sys, time; c = subprocess.Popen([sys.executable, '-c', %r], stdout=subprocess.PIPE, "
+            "text=True); print(c.pid, c.stdout.readline().strip(), flush=True); time.sleep(600)" % child)
+    proc = subprocess.Popen([sys.executable, "-c", root], stdout=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        assert select.select([proc.stdout], [], [], 60)[0], "hang guard: no pids reported"
+        child_pid, grandchild_pid = (int(x) for x in proc.stdout.readline().split())
+        assert {proc.pid, child_pid, grandchild_pid} <= set(h.proc_tree_ticks(proc.pid, children_files=children_files))
+        assert h.proc_tree_cpu_s(proc.pid) >= 0.0
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        proc.stdout.close()
+
+
+def test_the_measured_r1_lines_carry_the_cpu_lag_median():
+    cell = cell_with([run_record("new", first_rows_cpu_lag_s=lag) for lag in (0.1, 0.3, 0.2)])
+    lines = h.measured_lines({"cells": {h.R1_CELLS[0]: cell}}, frozenset())
+    assert f"measured R1 {h.R1_CELLS[0]} first_rows_cpu_lag_s 0.2" in lines
+
+
+def test_a_void_k1_run_leaves_its_code_owing_a_run():
+    r3 = [r3_rec(arm, path) for arm, path in h.R3_CELLS for _ in range(h.R3_MIN_RUNS)]
+    k1 = [{"arm": "old", "counted": True}, {"arm": "old", "counted": False}, {"arm": "old", "counted": True},
+          *({"arm": "new", "counted": True} for _ in range(h.K1_MIN_RUNS))]
+    assert h.next_measurement(r3, k1)["arm"] == "old"
+    assert h.next_measurement(r3, [*k1, {"arm": "old", "counted": True}]) is None
 
 
 def test_a_bad_report_only_value_is_refused_by_the_parser_before_any_input_is_read(tmp_path, capsys):

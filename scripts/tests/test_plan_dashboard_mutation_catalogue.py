@@ -106,6 +106,8 @@ HARNESS_MUTATIONS = (
     "smoke-void-counted",
     "report-only-ignored",
     "r1-from-wall",
+    "cpu-walk-no-ppid-fallback",
+    "next-measurement-counts-void-k1",
 )
 SCRIPT_MODULE_TESTS = {**dict.fromkeys(HARNESS_MUTATIONS, HARNESS_TESTS),
                        "launcher-imports-every-subcommand": TUI_TESTS}

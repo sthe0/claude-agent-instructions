@@ -492,27 +492,59 @@ def descendants(root_pid: int) -> int:
     return count
 
 
-def proc_tree_cpu_s(root_pid: int, proc_root: str = "/proc") -> float:
-    """CPU seconds (utime, stime, cutime, cstime) of ``root_pid`` and every process below it, read from
-    ``proc_root``/<pid>/stat; the time a launched process tree has spent, whatever the machine's load. Only the
-    launched tree is read (``task/*/children``), so the cost does not grow with the number of processes."""
-    total, seen, frontier = 0, set(), [root_pid]
-    while frontier:
-        pid = frontier.pop()
-        if pid in seen:
+def proc_children_by_ppid(proc_root: str = "/proc") -> dict[int, list[int]]:
+    """``pid -> children`` from one scan of every ``proc_root``/<pid>/stat, for a kernel that has no
+    ``task/*/children`` files (built without CONFIG_PROC_CHILDREN)."""
+    by_parent: dict[int, list[int]] = {}
+    for entry in os.listdir(proc_root):
+        if not entry.isdigit():
             continue
-        seen.add(pid)
         try:
-            fields = Path(proc_root, str(pid), "stat").read_text().rsplit(")", 1)[1].split()
-            total += sum(int(f) for f in fields[11:15])
+            ppid = int(Path(proc_root, entry, "stat").read_text().rsplit(")", 1)[1].split()[1])
         except (OSError, ValueError, IndexError):
             continue
-        try:
-            for task in os.listdir(Path(proc_root, str(pid), "task")):
-                frontier += [int(c) for c in Path(proc_root, str(pid), "task", task, "children").read_text().split()]
-        except (OSError, ValueError):
+        by_parent.setdefault(ppid, []).append(int(entry))
+    return by_parent
+
+
+def proc_tree_ticks(root_pid: int, proc_root: str = "/proc", children_files: bool = True) -> dict[int, int]:
+    """``pid -> utime + stime + cutime + cstime`` clock ticks of ``root_pid`` and every live process below it. A
+    process's children come from its ``task/*/children`` files; when none of its threads has one (or
+    ``children_files`` is false), from the ppid map of a single scan of ``proc_root`` (taken once per call, on
+    first need)."""
+    ticks, frontier, by_parent = {}, [root_pid], None
+    while frontier:
+        pid = frontier.pop()
+        if pid in ticks:
             continue
-    return total / os.sysconf("SC_CLK_TCK")
+        try:
+            fields = Path(proc_root, str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+            ticks[pid] = sum(int(f) for f in fields[11:15])
+        except (OSError, ValueError, IndexError):
+            continue
+        kids, listed = [], False
+        try:
+            threads = os.listdir(Path(proc_root, str(pid), "task")) if children_files else []
+        except OSError:
+            threads = []
+        for thread in threads:
+            try:
+                kids += [int(c) for c in Path(proc_root, str(pid), "task", thread, "children").read_text().split()]
+                listed = True
+            except (OSError, ValueError):
+                continue
+        if not listed:
+            if by_parent is None:
+                by_parent = proc_children_by_ppid(proc_root)
+            kids = by_parent.get(pid, [])
+        frontier += kids
+    return ticks
+
+
+def proc_tree_cpu_s(root_pid: int, proc_root: str = "/proc") -> float:
+    """CPU seconds of ``root_pid`` and every process below it; the time a launched process tree has spent,
+    whatever the machine's load."""
+    return sum(proc_tree_ticks(root_pid, proc_root).values()) / os.sysconf("SC_CLK_TCK")
 
 
 EVENTS_SLOT = "<events-pipe>"
@@ -1933,7 +1965,7 @@ def next_measurement(r3: list[dict], k1: list[dict]) -> dict | None:
         if len(counted_runs([r for r in r3 if r["arm"] == arm], path)) < R3_MIN_RUNS:
             return {"what": "r3", "arm": arm, "path": path}
     for arm in ("old", "new"):
-        if len([r for r in k1 if r["arm"] == arm]) < K1_MIN_RUNS:
+        if len([r for r in k1 if r["arm"] == arm and record_counted(r)]) < K1_MIN_RUNS:
             return {"what": "k1", "arm": arm, "path": None, "index": len(k1)}
     return None
 

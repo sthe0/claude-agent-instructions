@@ -1550,6 +1550,10 @@ def _r1_from_wall(original):
     return mutated
 
 
+def _void_k1_runs_counted(original):
+    return lambda r3, k1: original(r3, [dict(r, counted=True) for r in k1])
+
+
 LAUNCHER = "plan_dashboard_cli"
 HARNESS = "plan_dashboard_harness"
 FILE_MODULES = {LAUNCHER: Path(__file__).resolve().parents[1] / "plan-dashboard.py",
@@ -1593,6 +1597,8 @@ SCRIPT_MODULE_MUTATIONS = {
     "smoke-void-counted": (HARNESS, "record_counted", lambda _original: (lambda record: True)),
     "report-only-ignored": (HARNESS, "parse_report_only", _report_only_unapplied),
     "r1-from-wall": (HARNESS, "judge_cell_r1", _r1_from_wall),
+    "cpu-walk-no-ppid-fallback": (HARNESS, "proc_children_by_ppid", lambda _original: (lambda proc_root="/proc": {})),
+    "next-measurement-counts-void-k1": (HARNESS, "next_measurement", _void_k1_runs_counted),
 }
 
 
