@@ -102,6 +102,7 @@ HARNESS_MUTATIONS = (
     "stat-sweep-every-cycle-end",
     "stat-due-by-sweep-start",
     "stat-no-closing-sweep",
+    "stat-closing-sweep-beside-running",
     "smoke-void-counted",
     "report-only-ignored",
     "r1-from-wall",

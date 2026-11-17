@@ -55,6 +55,7 @@ DEFAULT_LIMITS = {"R1": 1.5, "R2": 0.95, "R3": 0.25, "R6": 1.1, "R3_latency": 2.
 STREAM_SCREEN_MAX_MS = 20.0
 MIN_RUNS, MAX_RUNS, SPREAD_TARGET = 5, 30, 0.05
 R3_CYCLES, R3_MIN_RUNS, K1_MIN_RUNS = 20, 5, 3
+K1_MIN_CYCLES = 4
 R3_RUN_CAP_S = 660
 STAT_SWEEP_EVERY = 4
 WATCH_ENV = "PLAN_DASHBOARD_WATCH"
@@ -449,6 +450,7 @@ class Trace:
         self.display: list[str] = []
         self.child_samples: list[tuple[float, int]] = []
         self.first_rows_cpu_s: float | None = None
+        self.first_rows_cpu_lag_s: float | None = None
         self.wall_minus_mono_ns = time.time_ns() - time.monotonic_ns()
 
     def seconds(self, t_ns: int) -> float:
@@ -492,21 +494,25 @@ def descendants(root_pid: int) -> int:
 
 def proc_tree_cpu_s(root_pid: int, proc_root: str = "/proc") -> float:
     """CPU seconds (utime, stime, cutime, cstime) of ``root_pid`` and every process below it, read from
-    ``proc_root``/<pid>/stat; the time a launched process tree has spent, whatever the machine's load."""
-    stats = {}
-    for entry in os.listdir(proc_root):
-        if not entry.isdigit():
+    ``proc_root``/<pid>/stat; the time a launched process tree has spent, whatever the machine's load. Only the
+    launched tree is read (``task/*/children``), so the cost does not grow with the number of processes."""
+    total, seen, frontier = 0, set(), [root_pid]
+    while frontier:
+        pid = frontier.pop()
+        if pid in seen:
             continue
+        seen.add(pid)
         try:
-            fields = Path(proc_root, entry, "stat").read_text().rsplit(")", 1)[1].split()
-            stats[int(entry)] = (int(fields[1]), sum(int(f) for f in fields[11:15]))
+            fields = Path(proc_root, str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+            total += sum(int(f) for f in fields[11:15])
         except (OSError, ValueError, IndexError):
             continue
-    tree, frontier = {root_pid} & set(stats), {root_pid}
-    while frontier:
-        frontier = {pid for pid, (ppid, _) in stats.items() if ppid in frontier and pid not in tree}
-        tree |= frontier
-    return sum(stats[pid][1] for pid in tree) / os.sysconf("SC_CLK_TCK")
+        try:
+            for task in os.listdir(Path(proc_root, str(pid), "task")):
+                frontier += [int(c) for c in Path(proc_root, str(pid), "task", task, "children").read_text().split()]
+        except (OSError, ValueError):
+            continue
+    return total / os.sysconf("SC_CLK_TCK")
 
 
 EVENTS_SLOT = "<events-pipe>"
@@ -601,6 +607,7 @@ def run_pty(argv: list[str], *, cwd: Path, env: dict, events: bool, max_s: float
                         trace.frames.append((trace.seconds(stamp), parsed))
                         if trace.first_rows_cpu_s is None and parsed and parsed["rows"]:
                             trace.first_rows_cpu_s = proc_tree_cpu_s(pid)
+                            trace.first_rows_cpu_lag_s = (time.monotonic_ns() - stamp) / 1e9
                 else:
                     partial += data
                     *lines, partial = partial.split(b"\n")
@@ -833,7 +840,9 @@ def summarize_run(trace_like: dict, *, arm: str, changed_count: int | None, chan
     screen = screen_summary(frames)
     first_ids = set(next((f["rows"] for _, f in frames if f and f["rows"]), {}))
     record = {"arm": arm, "changed_count": changed_count, "load1": load1, **screen,
-              "first_rows_cpu_s": trace_like.get("first_rows_cpu_s") if screen["first_rows_s"] is not None else None}
+              "first_rows_cpu_s": trace_like.get("first_rows_cpu_s") if screen["first_rows_s"] is not None else None,
+              "first_rows_cpu_lag_s": trace_like.get("first_rows_cpu_lag_s")
+              if screen["first_rows_s"] is not None else None}
     record.update(event_summary(trace_like["events"], trace_like["t0_ns"], arm=arm, first_screen_ids=first_ids,
                                 changes=changes, first_row_marks=screen["first_rows_marks"]))
     record.update(redraw_summary(trace_like["events"]))
@@ -844,7 +853,7 @@ def summarize_run(trace_like: dict, *, arm: str, changed_count: int | None, chan
 def run_view(trace) -> dict:
     """What ``summarize_run`` reads of a finished run."""
     return {"frames": trace.frames, "events": trace.events, "t0_ns": trace.t0_ns,
-            "first_rows_cpu_s": trace.first_rows_cpu_s}
+            "first_rows_cpu_s": trace.first_rows_cpu_s, "first_rows_cpu_lag_s": trace.first_rows_cpu_lag_s}
 
 
 def marks_screen_s(run: dict) -> float | None:
@@ -947,16 +956,20 @@ class SweepTaker:
         finally:
             self.busy, self.arrived = False, 0
 
-
-def closing_sweep(taker: SweepTaker, screen_ids: set[str], *, sleep=time.sleep, wait_s: float = 60.0) -> None:
-    """One more sweep, after the run's last cycle and the end of any sweep still running: it finds the changes
-    written after the last sweep. It starts after the last cycle, so no cycle shares the machine with it, and it
-    judges coverage only."""
-    deadline = time.monotonic() + wait_s
-    while taker.busy and time.monotonic() < deadline:
-        sleep(0.05)
-    taker.busy = True
-    taker.sweep(screen_ids, taker.now())
+    def close(self, screen_ids: set[str], *, sleep=time.sleep, wait_s: float = 60.0) -> bool:
+        """One more sweep, after the run's last cycle and the end of any sweep still running: it finds the changes
+        written after the last sweep. It starts after the last cycle, so no cycle shares the machine with it, and
+        it judges coverage only. A sweep still running when ``wait_s`` has passed is logged and no second sweep
+        starts beside it; ``False`` then, the run cannot count."""
+        deadline = time.monotonic() + wait_s
+        while self.busy and time.monotonic() < deadline:
+            sleep(0.05)
+        if self.busy:
+            print(f"{iso_now()} closing sweep skipped: a sweep was still running after {wait_s} s", flush=True)
+            return False
+        self.busy = True
+        self.sweep(screen_ids, self.now())
+        return True
 
 
 IN_MODIFY, IN_MOVED_TO, IN_CREATE, IN_DELETE, IN_Q_OVERFLOW = 0x2, 0x80, 0x100, 0x200, 0x4000
@@ -1315,7 +1328,8 @@ def judge_r3(report: dict, limits: dict, report_only=frozenset()) -> list[str]:
 
 def judge_k1(report: dict) -> list[str]:
     k1 = report.get("k1") or {}
-    old, new = k1.get("old", []), k1.get("new", [])
+    old = [r for r in k1.get("old", []) if r.get("counted", True)]
+    new = [r for r in k1.get("new", []) if r.get("counted", True)]
     if len(old) < K1_MIN_RUNS or len(new) < K1_MIN_RUNS:
         return [f"K1: fewer than {K1_MIN_RUNS} strace runs of the old or the new code"]
     misses = []
@@ -1657,7 +1671,7 @@ def strace_run(tree: Path, state_dir: Path, env: dict, *, new: bool, label: str,
             str(out_file), *dashboard_argv(tree, events=True, interval=2.0)]
     snapshot_dir = Path(env["XDG_CACHE_HOME"]) / "plan-dashboard"
     trace = run_pty(argv, cwd=tree, env=env, events=True, max_s=max_s, sample_children=True,
-                    stop=lambda t: len(cycle_records(t.events, t.t0_ns)) >= 4)
+                    stop=lambda t: len(cycle_records(t.events, t.t0_ns)) >= K1_MIN_CYCLES)
     calls = parse_strace(out_file.read_text(errors="replace"))
     out_file.unlink(missing_ok=True)
     execs = sorted({exec_kind(c["argv"]) for c in calls if c["call"] == "execve" and c["ok"]})
@@ -1670,8 +1684,10 @@ def strace_run(tree: Path, state_dir: Path, env: dict, *, new: bool, label: str,
         gap = [n for t, n in trace.child_samples if a["start_s"] + a["duration_s"] < t < b["start_s"]]
         if gap:
             between.append(max(gap))
+    void = None if len(cycles) >= K1_MIN_CYCLES else f"{len(cycles)} of {K1_MIN_CYCLES} cycles observed"
     return {"exec_kinds": execs, "created_files": [placeholder(p) for p in created],
-            "children_between_cycles": between, "arm": "new" if new else "old"}
+            "children_between_cycles": between, "arm": "new" if new else "old",
+            "counted": void is None, "void_reason": void}
 
 
 def cmd_floors(args) -> int:
@@ -1756,6 +1772,12 @@ def cmd_floors(args) -> int:
     return EXIT_OK
 
 
+def r1_floor_note(report) -> str:
+    """The line saying the R1 floor is wall-clock and R1 is judged on CPU time, so the floor is not set against the limit."""
+    floor = ((report.get("floors") or {}).get("R1") or {}).get("median_s")
+    return f"R1 is judged on CPU time; its wall-clock floor {floor} s is reported, not compared with the limit"
+
+
 def verify_floors_report(report, limits: dict, sources) -> tuple[int, list[str]]:
     """(exit code, reasons) for a floors report."""
     bad = []
@@ -1781,7 +1803,7 @@ def verify_floors_report(report, limits: dict, sources) -> tuple[int, list[str]]
     if bad:
         return EXIT_BAD, bad
     misses = []
-    for name in ("R1", "R2", "R3"):
+    for name in ("R2", "R3"):
         if floors[name]["median_s"] >= limits[name]:
             misses.append(f"{name} floor {floors[name]['median_s']:.4f} s leaves no room under the limit {limits[name]} s")
     stream = report.get("stream_screen_max_ms")
@@ -1813,6 +1835,8 @@ def cmd_verify_floors(args) -> int:
     code, reasons = verify_floors_report(report, limits_with(parse_limits(args.limit)), sources)
     for reason in reasons:
         print(f"verify-floors: {reason}", file=sys.stderr)
+    if code in (EXIT_OK, EXIT_MISS):
+        print(f"verify-floors: {r1_floor_note(report)}")
     if code == EXIT_OK:
         print("verify-floors: ok")
     return code
@@ -1820,21 +1844,23 @@ def cmd_verify_floors(args) -> int:
 
 # --- subcommands: verify-acceptance -------------------------------------------------------------------
 
+def report_only_item(text: str) -> tuple[str, str]:
+    """One ``--report-only`` value as a (limit, path) pair; only an R3 path may be one."""
+    limit, _, path = text.partition(":")
+    if limit != "R3" or path not in ("event", "stat"):
+        raise argparse.ArgumentTypeError(f"bad value {text!r}; use R3:event or R3:stat")
+    return limit, path
+
+
 def parse_report_only(items) -> frozenset:
-    """The (limit, path) pairs reported and judged against nothing; only an R3 path may be one."""
-    out = set()
-    for item in items or []:
-        limit, _, path = item.partition(":")
-        if limit != "R3" or path not in ("event", "stat"):
-            print(f"verify-acceptance: bad --report-only {item!r}; use R3:event or R3:stat", file=sys.stderr)
-            raise SystemExit(EXIT_BAD)
-        out.add((limit, path))
-    return frozenset(out)
+    """The (limit, path) pairs reported and judged against nothing."""
+    return frozenset(items or [])
 
 
 def add_report_only_option(parser) -> None:
-    parser.add_argument("--report-only", action="append", default=[], metavar="LIMIT:PATH",
-                        help="report this limit's timing medians as `measured` lines and judge them against nothing")
+    parser.add_argument("--report-only", action="append", default=[], metavar="LIMIT:PATH", type=report_only_item,
+                        help="report the R3 cycle median of this path as a `measured` line and do not judge it "
+                             "(cycle median only; latency and coverage stay judged)")
 
 
 def measured_lines(report: dict, report_only: frozenset) -> list[str]:
@@ -1847,6 +1873,8 @@ def measured_lines(report: dict, report_only: frozenset) -> list[str]:
         if name in R1_CELLS:
             lines.append(f"measured R1 {name} wall-clock first_rows_s "
                          f"{median([r.get('first_rows_s') for r in runs_of(cell, 'new')])}")
+            lines.append(f"measured R1 {name} first_rows_cpu_lag_s "
+                         f"{median([r.get('first_rows_cpu_lag_s') for r in runs_of(cell, 'new')])}")
     return lines
 
 
@@ -1929,7 +1957,7 @@ class Campaign:
         self.band_since = 0
 
     def metrics(self, cell: str) -> tuple[str, ...]:
-        base = ("first_rows_s",) if cell in R1_CELLS else ()
+        base = ("first_rows_cpu_s",) if cell in R1_CELLS else ()
         if cell in R2_CELLS:
             base += ("marks_confirmed_s",)
         if cell in R6_CELLS:
@@ -2122,16 +2150,18 @@ class RealRunner:
                             stop=lambda t: timed_cycle_count(t.events, t.t0_ns, list(sweeper.sweeps)) > R3_CYCLES)
         finally:
             observer.stop()
-        if stat_path:
-            closing_sweep(sweeper, ContractWatcher.screen_ids(trace.frames))
+        closed = not stat_path or sweeper.close(ContractWatcher.screen_ids(trace.frames))
         events, sweeps = trace.events, list(sweeper.sweeps)
         cycles = cycle_records(events, trace.t0_ns)
         resolution = mtime_resolution(self.state_dir)["value_ns"]
         offset = trace.wall_minus_mono_ns
         due = (due_by_change_time if stat_path else due_sets)(cycles, sweeps, offset, resolution)
         covered = check_cycle_coverage(cycles, due, offset)
-        return r3_run_record(arm, path, covered, events, sweeps, stamps=observer.stamps, observer_ok=observer.ok,
-                             loads=(load_start, os.getloadavg()[0]))
+        record = r3_run_record(arm, path, covered, events, sweeps, stamps=observer.stamps, observer_ok=observer.ok,
+                               loads=(load_start, os.getloadavg()[0]))
+        if not closed:
+            record.update(counted=False, void_reason="closing sweep")
+        return record
 
     def do_k1(self, job):
         arm = job["arm"]
@@ -2207,16 +2237,21 @@ def cmd_smoke(args) -> int:
         for reason in reasons:
             print(f"smoke: {reason}", file=sys.stderr)
         return EXIT_BAD
-    runner = RealRunner(state_dir, Path(args.old), Path(args.new), load_json(CONTRACT_PATH),
-                        enumerated_watch_paths(state_dir))
+    print(f"smoke: {r1_floor_note(floors)}", file=sys.stderr)
     counted = True
-    with open(state_dir / "smoke.log", "w", buffering=1) as log:
-        for job in smoke_jobs():
-            record = runner(job["what"], job)
-            line = measured_line(job, record)
-            log.write(line + "\n")
-            print(line, flush=True)
-            counted = counted and record_counted(record)
+    try:
+        runner = RealRunner(state_dir, Path(args.old), Path(args.new), load_json(CONTRACT_PATH),
+                            enumerated_watch_paths(state_dir))
+        with open(state_dir / "smoke.log", "w", buffering=1) as log:
+            for job in smoke_jobs():
+                record = runner(job["what"], job)
+                line = measured_line(job, record)
+                log.write(line + "\n")
+                print(line, flush=True)
+                counted = counted and record_counted(record)
+    except Exception as err:  # noqa: BLE001 - a run that failed to happen is a usage error, not a void (exit 1)
+        print(f"smoke: the rehearsal could not run: {type(err).__name__}: {err}", file=sys.stderr)
+        return EXIT_BAD
     return EXIT_OK if counted else EXIT_MISS
 
 

@@ -335,6 +335,8 @@ class FakeTrace:
     def __init__(self, frames=()):
         self.frames, self.events, self.t0_ns, self.wall_minus_mono_ns = list(frames), [], 0, 0
         self.first_rows_cpu_s = None
+        self.first_rows_cpu_lag_s = None
+        self.child_samples = []
 
 
 def test_the_changed_count_follows_the_contract_not_the_trace(tmp_path, monkeypatch):
@@ -492,15 +494,20 @@ def test_verify_floors_passes_a_good_report(tmp_path):
     assert verify_floors(tmp_path, good_floors()) == 0
 
 
-@pytest.mark.parametrize("limit", ["R1=0.001", "R2=0.001", "R3=0.001"])
+@pytest.mark.parametrize("limit", ["R2=0.001", "R3=0.001"])
 def test_a_limit_below_a_floor_is_a_miss_with_exit_1(tmp_path, limit):
     assert verify_floors(tmp_path, good_floors(), "--limit", limit) == 1
 
 
+def test_a_limit_below_the_r1_wall_floor_is_not_a_miss_because_r1_is_judged_on_cpu_time(tmp_path, capsys):
+    assert verify_floors(tmp_path, good_floors(), "--limit", "R1=0.001") == 0
+    assert "R1 is judged on CPU time" in capsys.readouterr().out
+
+
 def test_a_limit_can_only_be_tightened_never_loosened(tmp_path):
     report = good_floors()
-    report["floors"]["R1"]["median_s"] = 1.6
-    assert verify_floors(tmp_path, report, "--limit", "R1=100") == 1
+    report["floors"]["R2"]["median_s"] = 6.0
+    assert verify_floors(tmp_path, report, "--limit", "R2=100") == 1
 
 
 def test_a_floor_at_the_limit_is_a_miss(tmp_path):
@@ -925,6 +932,11 @@ def test_a_fake_dashboard_over_the_terminal_gives_rows_marks_and_events(tmp_path
     assert list((tmp_path / "events").iterdir()) == []
     stamped = [trace.seconds(e["t_ns"]) for e in trace.events]
     assert stamped == sorted(stamped) and stamped[0] >= 0
+    assert trace.first_rows_cpu_s is not None and trace.first_rows_cpu_s >= 0
+    assert trace.first_rows_cpu_lag_s is not None and trace.first_rows_cpu_lag_s >= 0
+    record = h.summarize_run(h.run_view(trace), arm="old", changed_count=None, changes={})
+    assert record["first_rows_cpu_s"] == trace.first_rows_cpu_s
+    assert record["first_rows_cpu_lag_s"] == trace.first_rows_cpu_lag_s
 
 
 def test_the_deep_copy_of_a_report_is_not_what_the_judge_mutates(tmp_path, trees):
@@ -1436,9 +1448,8 @@ def sweeps_taken(cycle_ends, **taker_kwargs):
 def test_a_stat_path_run_s_sweeps_leave_sweep_free_cycles():
     stat_share, stat_taker = timed_share({"stat_path": True})
     event_share, event_taker = timed_share({})
-    assert h.STAT_SWEEP_EVERY == 4
-    assert stat_share > 0.5 and stat_share > event_share
-    assert len(stat_taker.sweeps) < len(event_taker.sweeps)
+    assert (stat_share, event_share) == (15 / 19, 10 / 19)
+    assert (len(stat_taker.sweeps), len(event_taker.sweeps)) == (4, 9)
     assert sweeps_taken(9, stat_path=True) == 3, "the first cycle_end, then one per STAT_SWEEP_EVERY"
     assert sweeps_taken(9) == 9 and sweeps_taken(9, stat_path=False) == 9
 
@@ -1515,7 +1526,7 @@ def test_a_change_after_the_last_sweep_is_found_by_the_closing_sweep(tmp_path, m
     late = [{"path": "/a", "kind": "state", "change_ns": ns(8.0)}]
     taker = h.SweepTaker(lambda ids: late, now=lambda: now[0])
     taker.busy = True
-    h.closing_sweep(taker, {"id"}, sleep=lambda s: setattr(taker, "busy", False))
+    assert taker.close({"id"}, sleep=lambda s: setattr(taker, "busy", False)) is True
     assert taker.sweeps == [{"start_ns": ns(30.0), "end_ns": ns(30.0), "changes": late}] and not taker.busy
     cycles = stat_cycles(6)
     assert not any(c["covered"] is False for c in h.check_cycle_coverage(cycles, h.due_by_change_time(cycles, [], 0, 1000), 0))
@@ -1539,17 +1550,35 @@ def smoke_args(tmp_path, floors=None):
 
 
 class SmokeRunner:
-    void, calls = None, []
+    """Stands in for ``RealRunner``: an R3 record is built by ``r3_rec``, a K1 record by the real ``strace_run`` over a
+    stubbed ``run_pty`` (see ``stub_k1_pty``) that observes no cycle for the void job, so no record here holds a
+    field the real code does not produce."""
+    void, calls, raises = None, [], None
+    k1_cycles = 4
 
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self, state_dir, *args, **kwargs):
+        SmokeRunner.state_dir = state_dir
 
     def __call__(self, what, job):
         SmokeRunner.calls.append((what, job["arm"], job.get("path")))
+        if SmokeRunner.raises is not None:
+            raise SmokeRunner.raises
         bad = SmokeRunner.calls[-1] == SmokeRunner.void
         if what == "r3":
             return r3_rec(job["arm"], job["path"], counted=not bad, void_reason="short" if bad else None)
-        return {"arm": job["arm"], "counted": not bad, "void_reason": "strace" if bad else None}
+        SmokeRunner.k1_cycles = 0 if bad else h.K1_MIN_CYCLES
+        return h.strace_run(Path("tree"), SmokeRunner.state_dir, {"XDG_CACHE_HOME": str(SmokeRunner.state_dir / "cache")},
+                            new=job["arm"] == "new", label=f"{job['arm']}-0")
+
+
+def stub_k1_pty(monkeypatch):
+    def run_pty(argv, **kwargs):
+        Path(argv[argv.index("-o") + 1]).write_text("")
+        trace = FakeTrace()
+        for n in range(1, SmokeRunner.k1_cycles + 1):
+            trace.events += [ev("cycle_start", n * 2.0, cycle=n), ev("cycle_end", n * 2.0 + 0.1, cycle=n)]
+        return trace
+    monkeypatch.setattr(h, "run_pty", run_pty)
 
 
 SMOKE_JOBS = [("r3", "new", "event"), ("r3", "new", "stat"), ("r3", "old", "stat"), ("k1", "old", None), ("k1", "new", None)]
@@ -1557,8 +1586,9 @@ SMOKE_JOBS = [("r3", "new", "event"), ("r3", "new", "stat"), ("r3", "old", "stat
 
 def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(h, "RealRunner", SmokeRunner)
+    stub_k1_pty(monkeypatch)
     for void in (None, *SMOKE_JOBS):
-        SmokeRunner.void, SmokeRunner.calls = void, []
+        SmokeRunner.void, SmokeRunner.calls, SmokeRunner.raises = void, [], None
         state = tmp_path / "state"
         assert h.main(smoke_args(tmp_path)) == (0 if void is None else 1), void
         assert SmokeRunner.calls == SMOKE_JOBS, "one run per cell and per K1 code, no retry of a void"
@@ -1574,6 +1604,96 @@ def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, mon
     missing = smoke_args(tmp_path)
     missing[missing.index("--floors") + 1] = str(tmp_path / "no-such-floors.json")
     assert h.main(missing) == 2 and SmokeRunner.calls == []
+
+
+def test_a_k1_run_with_no_cycle_is_void_and_the_smoke_exits_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(h, "RealRunner", SmokeRunner)
+    stub_k1_pty(monkeypatch)
+    SmokeRunner.void, SmokeRunner.calls, SmokeRunner.raises = ("k1", "new", None), [], None
+    assert h.main(smoke_args(tmp_path)) == 1
+    assert "measured k1 new void 0 of 4 cycles observed" in capsys.readouterr().out
+    SmokeRunner.k1_cycles = 4
+    good = h.strace_run(Path("tree"), tmp_path, {"XDG_CACHE_HOME": str(tmp_path)}, new=True, label="x")
+    assert good["counted"] is True and good["void_reason"] is None
+    voids = [{"arm": "new", "counted": False, "void_reason": "0 of 4 cycles observed", "exec_kinds": ["git"]}] * 3
+    ok = [{"arm": "old", "exec_kinds": [], "created_files": [], "children_between_cycles": []}] * 3
+    assert h.judge_k1({"k1": {"old": ok, "new": voids}}) == [f"K1: fewer than {h.K1_MIN_RUNS} strace runs of the old or the new code"]
+
+
+def test_the_smoke_exits_2_when_it_could_not_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(h, "RealRunner", SmokeRunner)
+    SmokeRunner.void, SmokeRunner.calls = None, []
+    SmokeRunner.raises = FileNotFoundError("no strace output")
+    assert h.main(smoke_args(tmp_path)) == 2
+    assert "could not run" in capsys.readouterr().err
+    SmokeRunner.raises, SmokeRunner.calls = None, []
+    monkeypatch.setattr(h, "CONTRACT_PATH", tmp_path / "no-such-contract.json")
+    assert h.main(smoke_args(tmp_path)) == 2 and SmokeRunner.calls == []
+    monkeypatch.undo()
+    monkeypatch.setattr(h, "run_pty", lambda argv, **kwargs: FakeTrace())
+    with pytest.raises(FileNotFoundError):
+        h.strace_run(Path("tree"), tmp_path, {"XDG_CACHE_HOME": str(tmp_path)}, new=True, label="y")
+
+
+def test_a_closing_sweep_does_not_start_beside_a_running_one(capsys):
+    taker = h.SweepTaker(lambda ids: [], now=lambda: 0)
+    taker.busy = True
+    assert taker.close({"id"}, sleep=lambda s: None, wait_s=0.0) is False
+    assert taker.sweeps == [] and taker.busy and "closing sweep skipped" in capsys.readouterr().out
+
+
+def test_a_run_whose_closing_sweep_is_skipped_does_not_count(monkeypatch, tmp_path):
+    monkeypatch.setattr(h.SweepTaker, "close", lambda self, ids, **kw: False)
+    stat, _ = do_r3(monkeypatch, tmp_path, "stat")
+    assert stat["counted"] is False and stat["void_reason"] == "closing sweep"
+
+
+def test_a_change_before_the_first_cycle_is_not_judged_in_the_first_cycle():
+    cycles = stat_cycles(4)
+    early = {"start_ns": ns(0.0), "end_ns": ns(0.5), "changes": [{"path": "/a", "kind": "state", "change_ns": ns(-1.0)}]}
+    due = h.due_by_change_time(cycles, [early], 0, 1000)
+    assert [len(due[n]) for n in sorted(due)] == [1, 1, 1, 1], "due from the first cycle, as due_sets makes it due from the second"
+    covered = h.check_cycle_coverage(cycles, due, 0)
+    record = h.r3_run_record("new", "stat", covered, [], [], stamps={})
+    assert record["uncovered"] == 3 and record["untimed_cycles"] == 0, "cycle 1 is never judged"
+
+
+def test_r1_cells_settle_on_the_cpu_time_that_is_judged():
+    campaign = h.Campaign.__new__(h.Campaign)
+    assert campaign.metrics(h.R1_CELLS[0])[0] == "first_rows_cpu_s" and "first_rows_s" not in campaign.metrics(h.R1_CELLS[0])
+
+
+def test_the_floor_against_limit_check_leaves_r1_out(capsys):
+    floors = good_floors()
+    floors["floors"]["R1"]["median_s"] = 99.0
+    assert h.verify_floors_report(floors, h.limits_with({}), SOURCES)[0] == 0
+    assert "R1 is judged on CPU time" in h.r1_floor_note(floors) and "99.0" in h.r1_floor_note(floors)
+    floors["floors"]["R2"]["median_s"] = 99.0
+    assert h.verify_floors_report(floors, h.limits_with({}), SOURCES)[0] == 1
+
+
+def test_the_cpu_walk_reads_only_the_launched_tree(tmp_path):
+    def proc(pid, ppid, utime, kids=()):
+        fields = [pid, "(x)", "S", ppid, 0, 0, 0, -1, 0, 0, 0, 0, 0, utime, 0, 0, 0, 20, 0, 1, 0, 5]
+        (tmp_path / str(pid) / "task" / str(pid)).mkdir(parents=True)
+        (tmp_path / str(pid) / "stat").write_text(" ".join(str(f) for f in fields) + "\n")
+        (tmp_path / str(pid) / "task" / str(pid) / "children").write_text(" ".join(str(k) for k in kids))
+
+    proc(100, 1, 10, kids=(101,))
+    proc(101, 100, 20, kids=(102, 999))
+    proc(102, 101, 30)
+    proc(200, 1, 777)
+    assert h.proc_tree_cpu_s(100, str(tmp_path)) == pytest.approx(60 / os.sysconf("SC_CLK_TCK"))
+    assert h.proc_tree_cpu_s(999, str(tmp_path)) == 0.0
+
+
+def test_a_bad_report_only_value_is_refused_by_the_parser_before_any_input_is_read(tmp_path, capsys):
+    with pytest.raises(SystemExit) as bad:
+        h.main(["verify-acceptance", "--report", str(tmp_path / "missing.json"), "--report-only", "R1:stat"])
+    assert bad.value.code == 2 and "use R3:event or R3:stat" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        h.main(["verify-acceptance", "--help"])
+    assert "cycle median only; latency and coverage stay judged" in " ".join(capsys.readouterr().out.split())
 
 
 def report_only_report(tmp_path, trees):
@@ -1616,13 +1736,14 @@ def test_r1_judged_on_cpu_time(capsys):
 
 
 def test_first_rows_cpu_read_from_proc(tmp_path):
-    def stat(pid, ppid, comm, utime, stime, cutime, cstime):
+    def stat(pid, ppid, comm, utime, stime, cutime, cstime, kids=()):
         fields = [pid, f"({comm})", "S", ppid, 0, 0, 0, -1, 0, 0, 0, 0, 0, utime, stime, cutime, cstime, 20, 0, 1, 0, 5]
-        (tmp_path / str(pid)).mkdir()
+        (tmp_path / str(pid) / "task" / str(pid)).mkdir(parents=True)
         (tmp_path / str(pid) / "stat").write_text(" ".join(str(f) for f in fields) + "\n")
+        (tmp_path / str(pid) / "task" / str(pid) / "children").write_text(" ".join(str(k) for k in kids) + " ")
 
-    stat(100, 1, "py thon) x", 10, 20, 30, 40)
-    stat(101, 100, "git", 1, 2, 3, 4)
+    stat(100, 1, "py thon) x", 10, 20, 30, 40, kids=(101,))
+    stat(101, 100, "git", 1, 2, 3, 4, kids=(102,))
     stat(102, 101, "sh", 100, 0, 0, 0)
     stat(200, 1, "other", 999, 999, 999, 999)
     (tmp_path / "self").mkdir()

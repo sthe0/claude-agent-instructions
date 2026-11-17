@@ -1524,7 +1524,18 @@ def _stat_due_as_sweep_start(original):
 
 
 def _closing_sweep_skipped(original):
-    return lambda taker, screen_ids, **kwargs: None
+    class Mutated(original):
+        def close(self, screen_ids, **kwargs):
+            return True
+    return Mutated
+
+
+def _closing_sweep_beside_a_running_one(original):
+    class Mutated(original):
+        def close(self, screen_ids, **kwargs):
+            self.busy = False
+            return super().close(screen_ids, **kwargs)
+    return Mutated
 
 
 def _report_only_unapplied(original):
@@ -1577,7 +1588,8 @@ SCRIPT_MODULE_MUTATIONS = {
     "save-exit-wait-short": (HARNESS, "SAVE_EXIT_WAIT_S", lambda _original: 6.0),
     "stat-sweep-every-cycle-end": (HARNESS, "STAT_SWEEP_EVERY", lambda _original: 1),
     "stat-due-by-sweep-start": (HARNESS, "due_by_change_time", _stat_due_as_sweep_start),
-    "stat-no-closing-sweep": (HARNESS, "closing_sweep", _closing_sweep_skipped),
+    "stat-no-closing-sweep": (HARNESS, "SweepTaker", _closing_sweep_skipped),
+    "stat-closing-sweep-beside-running": (HARNESS, "SweepTaker", _closing_sweep_beside_a_running_one),
     "smoke-void-counted": (HARNESS, "record_counted", lambda _original: (lambda record: True)),
     "report-only-ignored": (HARNESS, "parse_report_only", _report_only_unapplied),
     "r1-from-wall": (HARNESS, "judge_cell_r1", _r1_from_wall),
