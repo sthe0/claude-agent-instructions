@@ -19,7 +19,7 @@ from lib import config_root, host_llm, judge_ledger
 from lib.telemetry import emit, live, report, store, sync, tokens
 from telemetry_import_support import BASE, at, world  # noqa: F401  (world is a fixture)
 from telemetry_live_support import query, spool_events
-from test_core_version_report import S, appeared, event, task, trigger, view
+from test_core_version_report import S, appeared, event, put, task, trigger, view
 from test_telemetry_live_shape import ENVELOPE, judge_line, last_call
 from test_telemetry_tokens import check as check_tokens
 
@@ -301,6 +301,19 @@ def test_report_usage_under_task_goes_to_task_opener_with_session_env_set(monkey
     view("--task", "t1")
     assert [r["kind"] for r in spool_events("s-t1")].count("report") == 1
     assert [r for r in spool_events("S-env") if r["kind"] == "report"] == []
+
+
+def test_report_usage_under_task_without_epoch_event_goes_to_latest_task_session(monkeypatch):
+    origin, epoch = store.origin_id(), "epoch-without-event"
+    put("tasks", {"origin": origin, "task_id": "t-lost", "epoch": epoch, "opened_at": at(0), "status": "open"})
+    for session, seconds in (("s-early", 5), ("s-latest", 50), ("s-middle", 20)):
+        put("sessions", {"session_id": session, "task_origin": origin, "task_id": "t-lost", "task_epoch": epoch,
+                         "started_at": at(seconds)})
+        event(session, "command", seconds, {"command": "status"}, "cli:status")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S-env")
+    view("--task", "t-lost")
+    assert [r["kind"] for r in spool_events("s-latest")].count("report") == 1
+    assert [r for s in ("S-env", "s-early", "s-middle") for r in spool_events(s) if r["kind"] == "report"] == []
 
 
 # --- the JSON contract and the writer marker ----------------------------------------------------

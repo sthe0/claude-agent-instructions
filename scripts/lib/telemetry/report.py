@@ -862,8 +862,9 @@ def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple 
     status its pre-fix-late entry names (pre_fix_late:<cause>, or import_only:<cause> for an
     import-only session), or import_only:pre_emitter for an import-only session whose earliest
     timed row precedes `landed_at`. A pre-fix-late entry's T1 lies in [landed_at, outage start), or
-    in `pre_fix_second_window` ((from, until or None)) for the one cause that window serves. The check fails on a late session and when no session of the
-    population has appeared; it raises LatencyInputError on an entry it refuses."""
+    in `pre_fix_second_window` ((from, until or None)) for the one cause that window serves. The
+    check fails on a late session and when no session of the population has appeared; it raises
+    LatencyInputError on an entry it refuses."""
     landed = sync.parse_time(landed_at)
     pending, spooled = _reserved_spool_sessions(conn)
     deferred_rows = {r[0] for r in conn.execute(
@@ -915,11 +916,21 @@ def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple 
 # --- the report's own usage event and the CLI -----------------------------------------------
 
 def task_opener_session(conn, task_id: str) -> "str | None":
-    """The session that opened the latest epoch of `task_id`: the task's engine root."""
+    """The session that opened the latest epoch of `task_id`: the task's engine root; when that
+    epoch's opening event is not in the record, the task session with the latest event."""
     row = conn.execute(
         "SELECT e.session_id FROM tasks t JOIN events e ON e.event_id = t.epoch WHERE t.task_id = ? "
         "ORDER BY t.opened_at DESC LIMIT 1", (task_id,)).fetchone()
-    return row[0] if row else None
+    if row:
+        return row[0]
+    keys = [_task_key(r) for r in conn.execute(
+        "SELECT origin, task_id, epoch FROM tasks WHERE task_id = ? ORDER BY opened_at DESC LIMIT 1", (task_id,))]
+    latest = None
+    for session in (task_session_ids(conn, keys[0]) if keys else ()):
+        last = conn.execute("SELECT MAX(time) FROM events WHERE session_id = ?", (session,)).fetchone()[0] or ""
+        if latest is None or last > latest[0]:
+            latest = (last, session)
+    return latest[1] if latest else None
 
 
 def usage_session(conn=None, task_id: "str | None" = None) -> str:
@@ -964,7 +975,7 @@ def _print(payload: dict, fmt: str) -> None:
                   f"spend=${row['spend_usd']:.2f}")
     for name in ("losses", "unattributed_contours", "unresolved_source_keys",
                  "imported_unresolved_source_keys", "synthetic_tasks_counted", sync.NO_TIME_ROWS, "self_cost",
-                 "failures", "excused", FOREIGN_HOOK):
+                 "failures", "excused", FOREIGN_HOOK, "self_cost_failures"):
         if name in payload:
             print(f"{name}: {json.dumps(payload[name], sort_keys=True, default=str)}")
 
