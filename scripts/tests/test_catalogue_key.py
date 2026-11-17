@@ -148,6 +148,16 @@ def test_a_literal_python_file_brings_its_import_closure(tmp_path):
     assert ck.literal_files(tmp_path, ["scripts/tests/t.py"]) == {"scripts/tests/tool.py", "scripts/tests/deep.py"}
 
 
+def test_a_literal_path_into_git_metadata_stays_out_of_the_set(tmp_path):
+    # Any git command of the run rewrites .git/index; a set holding it is never held, so never stored.
+    (tmp_path / "scripts/tests").mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git/index").write_bytes(b"DIRC")
+    (tmp_path / "config.md").write_text("x\n")
+    (tmp_path / "scripts/tests/t.py").write_text('A = ".git/index"\nB = ".git"\nC = "../../.git/index"\nD = "config.md"\n')
+    assert ck.literal_files(tmp_path, ["scripts/tests/t.py"]) == {"config.md"}
+
+
 def _settle_catalogue(tmp_path, tree, registry, digests, edit_during_run):
     from test_result_store import finished_run, plan_in, traced as write_trace
 

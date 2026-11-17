@@ -44,6 +44,7 @@ MAX_AGE_KEY = "suite-gate-catalogue-max-age-h"
 DEFAULT_MAX_AGE_H = 24
 RESOLVE_TIMEOUT_S = 120
 MAX_LITERAL_CHARS = 300
+VCS_DIR = ".git"
 SEARCH_DIRS = ("scripts/tests", "scripts/lib", "scripts")
 
 FILE = "file"
@@ -200,7 +201,8 @@ def _defines(tree: ast.AST, name: str) -> bool:
 def literal_files(core: Path, sources: Iterable[str]) -> frozenset[str]:
     """Repository files that string constants in ``sources`` name: relative to the repository root or to the
     source's own directory; regular files only (a directory is not a dependency), inside the repository.
-    A named ``.py`` file brings its import closure."""
+    A named ``.py`` file brings its import closure. Git's own files are not repository content: any git
+    command the run makes rewrites ``.git/index``, and a set holding it would never be stored."""
     found: set[str] = set()
     for rel in sources:
         tree = _tree_of(core, rel)
@@ -214,7 +216,7 @@ def literal_files(core: Path, sources: Iterable[str]) -> frozenset[str]:
                 continue
             for base in ("", Path(rel).parent.as_posix()):
                 candidate = os.path.normpath(os.path.join(base, text))
-                if candidate.startswith(".."):
+                if candidate.startswith("..") or Path(candidate).parts[:1] == (VCS_DIR,):
                     continue
                 try:
                     if (core / candidate).is_file():
