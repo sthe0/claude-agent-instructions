@@ -1649,7 +1649,7 @@ def test_a_closing_sweep_does_not_start_beside_a_running_one(capsys):
 
 
 def test_a_run_whose_closing_sweep_is_skipped_does_not_count(monkeypatch, tmp_path):
-    monkeypatch.setattr(h.SweepTaker, "close", lambda self, ids, **kw: False)
+    monkeypatch.setattr(h.SweepTaker, "closing_sweep", lambda self, ids, **kw: False)
     stat, _ = do_r3(monkeypatch, tmp_path, "stat")
     assert stat["counted"] is False and stat["void_reason"] == "closing sweep"
 
