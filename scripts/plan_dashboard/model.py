@@ -750,6 +750,7 @@ def _state_listing(root: Path) -> dict:
         kept = _STATE_KEPT.get(str(root))
     if state_reusable(kept, key):
         snapshot.replay_observation("state", kept.observed)
+        snapshot.REUSED.note("state", kept)
         return kept.value
     mtimes = _list_states(root)
     if ok and not snapshot.OBSERVED.unsettled("state"):
@@ -841,6 +842,7 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
     with CACHE_LOCK:
         kept = _CHILD_KEPT.get(str(state_root))
     if child_reusable(kept, key, floor):
+        snapshot.REUSED.note("children", kept)
         return _copy_index(kept.value)
     index = _child_pass(state_root, floor)
     if ok:

@@ -360,15 +360,43 @@ class KeptResult:
     """A reader's whole result for one directory, kept under the ``key`` read before the read and the
     ``held`` condition it was made under; ``observed`` is what it fed ``OBSERVED``."""
 
-    __slots__ = ("key", "held", "value", "observed")
+    __slots__ = ("key", "held", "value", "observed", "generation")
 
     def __init__(self, key: tuple, held, value, observed=None):
         self.key, self.held, self.value, self.observed = key, held, value, observed
+        self.generation = stat_cycle_generation()
 
 
 def replay_observation(kind: str, observed) -> None:
     """Feed ``OBSERVED`` what the pass that made a kept result fed it."""
     OBSERVED.replay(kind, observed)
+
+
+class ReuseCensus:
+    """Which readers served, in each stat-path cycle (by ``KEPT.generation``), a result kept from an earlier
+    cycle. Only the last ``KEEP`` cycles are held; it is read for reporting and decides nothing."""
+
+    KEEP = 64
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._by_generation: dict[int, set[str]] = {}
+
+    def note(self, kind: str, kept: KeptResult) -> None:
+        generation = stat_cycle_generation()
+        if generation is None or kept.generation == generation:
+            return
+        with self._lock:
+            self._by_generation.setdefault(generation, set()).add(kind)
+            for old in sorted(self._by_generation)[:-self.KEEP]:
+                del self._by_generation[old]
+
+    def names(self, generation: int, kinds) -> list[str]:
+        with self._lock:
+            return sorted(self._by_generation.get(generation, set()) & set(kinds))
+
+
+REUSED = ReuseCensus()
 
 
 def read_directory(root) -> list[tuple[str, bool]]:
@@ -719,6 +747,7 @@ class BindingScan:
             kept = self.kept
             if binding_reusable(kept, key, presumption):
                 replay_observation("binding", kept.observed)
+                REUSED.note("binding", kept)
                 result = kept.value
             else:
                 result = self._pass(presumption)

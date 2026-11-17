@@ -950,6 +950,15 @@ TUI_MUTATIONS.update({
     "tui-app-mark-unread-blank": (TUI_APP, "shown_marks", _unread_rows_blank),
 })
 
+def _cpu_from_wall(original):
+    return lambda: time.monotonic_ns()
+
+
+TUI_MUTATIONS.update({
+    "cycle-cpu-from-wall": (TUI_APP, "cycle_cpu_ns", _cpu_from_wall),
+    "reuse-census-off": (TUI_APP, "reused_readers", _always([])),
+})
+
 ATTENTION_MUTATIONS["attention-cache-ignores-locator"] = ("plan_dashboard.locate", "inputs_stamp", _always((1,)))
 
 WEB_PAGE_MUTATIONS.update({

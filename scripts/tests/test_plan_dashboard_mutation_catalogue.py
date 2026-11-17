@@ -35,6 +35,7 @@ HUNG = -9
 PILOT_MUTATIONS = sorted(name for name, (module, _, _) in mutations.TUI_MUTATIONS.items()
                          if module == mutations.TUI_APP)
 STDLIB_TUI_MUTATIONS = sorted(set(mutations.TUI_MUTATIONS) - set(PILOT_MUTATIONS))
+CYCLE_REPORT_NAMES = ("cycle-cpu-from-wall", "reuse-census-off")
 SNAPSHOT_TESTS = TESTS / "test_plan_dashboard_snapshot.py"
 SNAPSHOT_NAMES = (
     "snapshot-checksum-ignored", "cache-same-size-rewrite-missed", "unread-cost-zero", "old-marking-dropped",
@@ -238,6 +239,12 @@ def test_the_pilot_tests_are_green_with_no_mutation(pilot_results):
 @pytest.mark.parametrize("name", PILOT_MUTATIONS)
 def test_a_console_mutation_turns_a_pilot_test_red(name, pilot_results):
     assert_red(name, pilot_results[name], "pilot tests")
+
+
+def test_the_cycle_report_mutations_are_registered_console_mutations():
+    registered = {name for name, (module, _, _) in mutations.TUI_MUTATIONS.items()
+                  if module == mutations.TUI_APP and name in CYCLE_REPORT_NAMES}
+    assert registered == set(CYCLE_REPORT_NAMES) and set(CYCLE_REPORT_NAMES) <= set(PILOT_MUTATIONS)
 
 
 def test_the_snapshot_family_is_the_registered_one():

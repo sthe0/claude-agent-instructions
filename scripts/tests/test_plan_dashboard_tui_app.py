@@ -2567,6 +2567,47 @@ def test_begin_stat_cycle_is_called_only_on_the_stat_path(tmp_path, monkeypatch,
     run_fleet(scenario, root, timers, stream, path=path, **({"interval": 2.0} if path == "stat" else {}))
 
 
+def test_cycle_events_carry_process_cpu_time(tmp_path, monkeypatch, timers, stream):
+    root = attention_root(tmp_path)
+    process_clock = iter(range(10**18, 10**19, 1000))
+    monkeypatch.setattr(time, "process_time_ns", lambda: next(process_clock))
+
+    async def scenario(fleet):
+        change_source(root, "state")
+        await fleet.tick(2.5)
+        got = fleet.events()
+        start = next(e for e in got if e["ev"] == "cycle_start")
+        end = next(e for e in got if e["ev"] == "cycle_end" and e["cycle"] == start["cycle"])
+        assert 10**18 <= start["cpu_ns"] < end["cpu_ns"] < 10**19
+        assert time.monotonic_ns() < 10**18
+
+    run_fleet(scenario, root, timers, stream, path="stat", interval=2.0)
+
+
+def test_a_reused_stat_cycle_reports_its_reused_readers(tmp_path, monkeypatch, timers, stream):
+    root = attention_root(tmp_path)
+    monkeypatch.setattr(snapshot_store, "now_ns", lambda: time.time_ns() + 10**13)
+
+    async def scenario(fleet):
+        change_source(root, "state")
+        change_source(root, "binding")
+        got = []
+
+        def children_done():
+            got.extend(fleet.events())
+            return len([e for e in got if e["ev"] == "children_done"])
+
+        for cycles in (1, 2):
+            await fleet.tick(2.5)
+            assert await until(fleet.pilot, lambda: children_done() >= cycles)
+        ended = [e for e in got if e["ev"] == "cycle_end"]
+        children = {e["cycle"]: e["reused"] for e in got if e["ev"] == "children_done"}
+        assert len(ended) >= 2, got
+        assert ended[-1]["reused"] == ["binding", "state"] and children[ended[-1]["cycle"]] is True
+
+    run_fleet(scenario, root, timers, stream, path="stat", interval=2.0)
+
+
 def test_the_light_tick_reads_no_source_file(tmp_path, monkeypatch, timers, stream):
     root = attention_root(tmp_path)
     calls, reads = [], []

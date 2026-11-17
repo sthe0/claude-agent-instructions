@@ -312,11 +312,13 @@ def begin_cycle(app: "DashboardApp", cycle: int, mode: str, refresh: bool) -> No
     app.owed_poll = app.tmux_pending = app.named = False
 
     def stamp() -> None:
-        events.emit("cycle_start", cycle=cycle, mode=mode)
+        events.emit("cycle_start", cycle=cycle, mode=mode, cpu_ns=cycle_cpu_ns())
 
     if app.path != "event":
         stamp()
         snapshot_store.KEPT.begin_stat_cycle()
+        app.generations[cycle] = snapshot_store.KEPT.generation
+        app.generations.pop(cycle - snapshot_store.ReuseCensus.KEEP, None)
         return
     found = watch.begin_cycle(app.watcher, snapshot_store.KEPT, stamp)
     if watch.needs_sweep(found):
@@ -421,6 +423,17 @@ async def watched(app: "DashboardApp", sources) -> None:
     app.last_redraw = app.last_reconcile = app.mono()
     app.sweep.begin_one_off()
     every(app, LIGHT_TICK_S, lambda: light_tick(app))
+
+
+def cycle_cpu_ns() -> int:
+    """CPU time of the whole process, every thread, for the cycle events."""
+    return time.process_time_ns()
+
+
+def reused_readers(app: "DashboardApp", cycle: int, kinds) -> list[str]:
+    """The readers among ``kinds`` that served a kept result while the stat-path ``cycle`` was open."""
+    generation = app.generations.get(cycle)
+    return [] if generation is None else snapshot_store.REUSED.names(generation, kinds)
 
 
 def cycle_of(app: "DashboardApp", snapshot: dict) -> int | None:
@@ -706,7 +719,8 @@ async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool
     parked, app.parking = app.parking, None
     app.parked.extend(parked or ())
     if (cycle := cycle_of(app, snapshot)) is not None:
-        note(app, "cycle_end", cycle=cycle, applied=seen[0], found_by=found_by(app, seen[0]))
+        note(app, "cycle_end", cycle=cycle, applied=seen[0], found_by=found_by(app, seen[0]),
+             cpu_ns=cycle_cpu_ns(), reused=reused_readers(app, cycle, ("binding", "state")))
         finish_cycle(app, cycle)
 
 
@@ -792,6 +806,8 @@ def warm_child_index(app: "DashboardApp", snapshot: dict) -> None:
 
 async def warm_child_index_for(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
     await in_daemon_thread(lambda: warm_child_index(app, snapshot))
+    if (cycle := cycle_of(app, snapshot)) is not None:
+        note(app, "children_done", cycle=cycle, reused=bool(reused_readers(app, cycle, ("children",))))
     make_up_read(app, "children", warm_child_index_for, snapshot, issued_all)
 
 
@@ -1094,6 +1110,7 @@ class DashboardApp(App):
         self.hold_due: float | None = None
         self.held_cycles: list[int] = []
         self.open_cycles: set[int] = set()
+        self.generations: dict[int, int] = {}
         self.landed: set[int] = set()
         self.parking: list | None = None
         self.parked: list = []
