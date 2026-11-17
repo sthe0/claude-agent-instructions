@@ -2,7 +2,8 @@
 the traced not_requested judge writer and its fix bound, the test-run leak guards and their
 class, foreign-layer hook rows, the pinned scale measurement, the session a report run is
 charged to, the writer marker stamped at production points only, and the sync's commit of a
-replayed spool, which never waits out another spool's retries or a deadline counting only sleeps.
+replayed spool, which never waits out another spool's retries or a deadline counting only sleeps,
+and check-latency's second pre-fix window, bounded and serving only the sync-commit cause.
 
 Each mutant is `{name, file, anchor, replacement, tests}`: `anchor` occurs exactly once in
 `file` (a path under the repo root), `replacement` keeps the module importable, `tests` are
@@ -154,4 +155,17 @@ MUTANTS = [
                      "    while waited + wait <= deadline and not all(r[\"ok\"] for r in results.values()):\n"
                      "        waited += wait\n"),
      "tests": [_SYNC_T + "test_retry_attempts_count_against_the_wall_clock_deadline"]},
+    {"name": "pre_fix_late_second_window_unbounded", "file": _REPORT,
+     "anchor": "    start, until = window\n",
+     "replacement": "    start, until = window[0], None\n",
+     "tests": [_T + "test_pre_fix_late_second_window_open_end_only_without_until",
+               _T + "test_pre_fix_late_second_window_edges_exit_2"]},
+    {"name": "pre_fix_late_second_window_ignored", "file": _REPORT,
+     "anchor": "            refusal = _second_window_refusal(cause, row, second_window, now)\n",
+     "replacement": '            refusal = "the second window never accepts"\n',
+     "tests": [_T + "test_pre_fix_late_second_window_accepts_entry"]},
+    {"name": "pre_fix_late_second_window_any_cause", "file": _REPORT,
+     "anchor": "    if cause != PRE_FIX_CAUSE_SYNC_COMMIT_WAITS:\n",
+     "replacement": "    if False:\n",
+     "tests": [_T + "test_pre_fix_late_second_window_wrong_cause_exit_2"]},
 ]

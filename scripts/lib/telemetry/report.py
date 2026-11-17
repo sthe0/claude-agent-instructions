@@ -700,6 +700,7 @@ SYNC_OUTAGE = "sync_outage"
 PRE_FIX_LATE = "pre_fix_late"
 IMPORT_ONLY = "import_only"
 PRE_FIX_CAUSE_PREFIX = "pre_fix_cause_"
+PRE_FIX_CAUSE_SYNC_COMMIT_WAITS = "pre_fix_cause_sync_commit_waits_foreign_retries"
 PRE_EMITTER = "pre_emitter"
 IMPORT_SESSION_PREFIX = "import:"
 LANDED_SOURCE_KEY = "land:landed"
@@ -805,8 +806,27 @@ def _earliest_time(conn, session: str):
     return min(sync.known_times(texts), default=None)
 
 
-def _pre_fix_causes(conn, entries, rows: dict, landed, span_end) -> dict:
-    """{session: status} of the pre-fix-late entries, each checked against the record."""
+def _second_window_refusal(cause: str, row: dict, window: tuple, now) -> "str | None":
+    """Why an entry whose T1 lies in the second pre-fix window ([from, until), open to `now` without
+    an until) is refused, or None: that window serves only the cause the PR 7 sync fix removes, and
+    the session's first commit must have come, before PR 7 landed when its landing is given."""
+    start, until = window
+    if not start <= row["T1"] < (until or now):
+        return f"T1 {row['T1'].isoformat()} is outside the second window"
+    if cause != PRE_FIX_CAUSE_SYNC_COMMIT_WAITS:
+        return f"cause {cause} is not {PRE_FIX_CAUSE_SYNC_COMMIT_WAITS}, the only one the second window serves"
+    commit = row["A"]
+    if commit is None or commit < row["T1"]:
+        return "no sync.commit at or after its T1"
+    if until is not None and commit >= until:
+        return f"first sync.commit {commit.isoformat()} is not before {until.isoformat()}"
+    return None
+
+
+def _pre_fix_causes(conn, entries, rows: dict, landed, span_end, second_window: "tuple | None" = None,
+                    now=None) -> dict:
+    """{session: status} of the pre-fix-late entries, each checked against the record. An entry is
+    valid when its T1 lies in [landed, span_end), or in `second_window` under that window's rules."""
     statuses = {}
     for entry in entries:
         entry = entry if isinstance(entry, dict) else {}
@@ -822,21 +842,27 @@ def _pre_fix_causes(conn, entries, rows: dict, landed, span_end) -> dict:
         if row is None or row["status"] != "late":
             raise LatencyInputError(f"{session}: not late by the rule")
         if not landed <= row["T1"] < span_end:
-            raise LatencyInputError(f"{session}: T1 {row['T1'].isoformat()} is outside [{landed.isoformat()}, "
-                                    f"{span_end.isoformat()})")
+            if second_window is None:
+                raise LatencyInputError(f"{session}: T1 {row['T1'].isoformat()} is outside [{landed.isoformat()}, "
+                                        f"{span_end.isoformat()})")
+            refusal = _second_window_refusal(cause, row, second_window, now)
+            if refusal:
+                raise LatencyInputError(f"{session}: {refusal} (first window [{landed.isoformat()}, "
+                                        f"{span_end.isoformat()}))")
         statuses[session] = f"{IMPORT_ONLY if import_only else PRE_FIX_LATE}:{cause}"
     return statuses
 
 
 def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple | None" = None,
-                  pre_fix_entries: "list | None" = None) -> dict:
+                  pre_fix_entries: "list | None" = None, pre_fix_second_window: "tuple | None" = None) -> dict:
     """Each session of the population that ended after `landed_at`, by the latency rule over
     sync.latency_marks: on_time, late, waiting (no trigger yet), in_flight (a trigger younger than
     the bound, no commit) or sync_deferred (its rows wait in the reserved spool). A late session is
     instead a counted named loss: sync_outage when its T1 is in `outage` ([from, until)), the
     status its pre-fix-late entry names (pre_fix_late:<cause>, or import_only:<cause> for an
     import-only session), or import_only:pre_emitter for an import-only session whose earliest
-    timed row precedes `landed_at`. The check fails on a late session and when no session of the
+    timed row precedes `landed_at`. A pre-fix-late entry's T1 lies in [landed_at, outage start), or
+    in `pre_fix_second_window` ((from, until or None)) for the one cause that window serves. The check fails on a late session and when no session of the
     population has appeared; it raises LatencyInputError on an entry it refuses."""
     landed = sync.parse_time(landed_at)
     pending, spooled = _reserved_spool_sessions(conn)
@@ -866,7 +892,8 @@ def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple 
             status = SYNC_OUTAGE
         rows.append({"session": session, "E": end, "T1": first, "A": commit, "latency_s": seconds, "status": status})
     by_session = {r["session"]: r for r in rows}
-    named = _pre_fix_causes(conn, pre_fix_entries or (), by_session, landed, outage[0] if outage else now)
+    named = _pre_fix_causes(conn, pre_fix_entries or (), by_session, landed, outage[0] if outage else now,
+                            pre_fix_second_window, now)
     for row in rows:
         if row["session"] in named:
             row["status"] = named[row["session"]]

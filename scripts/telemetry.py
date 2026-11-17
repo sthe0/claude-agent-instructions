@@ -16,6 +16,7 @@
         [--known-losses K (--known-losses-until TS | --known-losses-until-landing F2)]
     telemetry.py check-latency --max-seconds S --since-landing F
         [--sync-outage-from TS (--sync-outage-until-landing F2 | --sync-outage-until TS2)] [--pre-fix-late P]
+        [--pre-fix-late-from-landing G [--pre-fix-late-until-landing H]]
     telemetry.py export --out F [--with-text]
     telemetry.py merge F
     telemetry.py check-roundtrip --workdir D
@@ -86,7 +87,12 @@ event of F2's head, or TS2), when P names it with a pre_fix_cause_* cause (pre_f
 import_only:<cause> for a session no live row or spool ever carried), or when it is such an
 import-only session whose earliest timed row precedes F's landed_at (import_only:pre_emitter). An
 unreadable F2 or P, a landed_at off its landing event, or an entry naming a session that is not
-late, not real and not import-only, or late outside [landed_at, TS), exits 2. Both are
+late, not real and not import-only, or late outside [landed_at, TS), exits 2.
+`--pre-fix-late-from-landing G [--pre-fix-late-until-landing H]` opens a second window for P,
+[G's landed_at, H's landed_at) (to the run time without H), each bound to its land:landed event:
+an entry whose T1 lies there is valid only with the cause
+pre_fix_cause_sync_commit_waits_foreign_retries and a first sync.commit at or after T1 (before H's
+landed_at when H is given); otherwise it exits 2. Both are
 lib/telemetry/report.py, as is `agent-report.py core-version`.
 
 `sync` runs one sync (lib/telemetry/sync.py): it replays the named session's spool and every
@@ -264,6 +270,10 @@ def _known_losses(args) -> "list | None":
     return report.read_known_losses(_read_json_file(args.known_losses, "entries"), phases._ms(bound))
 
 
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def _check_record(args) -> int:
     """check-events / check-latency over the record (lib/telemetry/report.py)."""
     from datetime import datetime, timezone
@@ -277,6 +287,10 @@ def _check_record(args) -> int:
         landing = _read_json_file(args.sync_outage_until_landing, None) \
             if latency and args.sync_outage_until_landing else None
         entries = _read_json_file(args.pre_fix_late, "entries") if latency and args.pre_fix_late else None
+        second_from = _read_json_file(args.pre_fix_late_from_landing, None) \
+            if latency and args.pre_fix_late_from_landing else None
+        second_until = _read_json_file(args.pre_fix_late_until_landing, None) \
+            if latency and args.pre_fix_late_until_landing else None
         outage_from = telemetry_sync.parse_time(args.sync_outage_from) if latency else None
         outage_until = telemetry_sync.parse_time(args.sync_outage_until) if latency else None
         known_losses = None if latency else _known_losses(args)
@@ -295,10 +309,15 @@ def _check_record(args) -> int:
             result = report.check_events(conn, args.task, window, known_losses=known_losses)
         else:
             if outage_from is not None and landing is not None:
-                outage_until = report.outage_end_from_landing(conn, landing if isinstance(landing, dict) else {})
+                outage_until = report.outage_end_from_landing(conn, _as_dict(landing))
             outage = (outage_from, outage_until) if outage_from is not None else None
+            second_window = None
+            if second_from is not None:
+                second_window = (report.outage_end_from_landing(conn, _as_dict(second_from)),
+                                 report.outage_end_from_landing(conn, _as_dict(second_until))
+                                 if second_until is not None else None)
             result = report.check_latency(conn, args.max_seconds, landed_at, datetime.now(timezone.utc),
-                                          outage, entries if isinstance(entries, list) else None)
+                                          outage, entries if isinstance(entries, list) else None, second_window)
     except (report.KnownLossError, ValueError, TypeError, KeyError) as err:
         print(f"{args.command}: {err}", file=sys.stderr)
         return 2
@@ -397,6 +416,10 @@ def main(argv=None) -> int:
     until.add_argument("--sync-outage-until", default=None, help="end (ISO time) of the outage window")
     lat.add_argument("--pre-fix-late", default=None,
                      help='JSON {"entries": [{"session", "cause"}]} of sessions late for a cause this change fixes')
+    lat.add_argument("--pre-fix-late-from-landing", default=None,
+                     help="landing record opening a second pre-fix window, for the sync-commit cause only")
+    lat.add_argument("--pre-fix-late-until-landing", default=None,
+                     help="landing record closing that window (open to the run time without it)")
     exp = sub.add_parser("export", help="export the record's rows for a merge on another machine")
     exp.add_argument("--out", required=True, help="the export file to create (must not exist)")
     exp.add_argument("--with-text", action="store_true", help="also export the text artifacts")
@@ -410,6 +433,8 @@ def main(argv=None) -> int:
     if args.command == "check-latency" and (args.sync_outage_from is None) != (
             args.sync_outage_until_landing is None and args.sync_outage_until is None):
         lat.error("--sync-outage-from needs one of --sync-outage-until-landing / --sync-outage-until, and they need it")
+    if args.command == "check-latency" and args.pre_fix_late_until_landing and not args.pre_fix_late_from_landing:
+        lat.error("--pre-fix-late-until-landing needs --pre-fix-late-from-landing")
     if args.command in ("export", "merge", "check-roundtrip"):
         return _portability(args)
     if args.command == "import":

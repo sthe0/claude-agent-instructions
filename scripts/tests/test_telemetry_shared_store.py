@@ -19,7 +19,7 @@ from lib import config_root, host_llm, judge_ledger
 from lib.telemetry import emit, live, report, store, sync, tokens
 from telemetry_import_support import BASE, at, world  # noqa: F401  (world is a fixture)
 from telemetry_live_support import query, spool_events
-from test_core_version_report import event, task, view
+from test_core_version_report import S, appeared, event, task, trigger, view
 from test_telemetry_live_shape import ENVELOPE, judge_line, last_call
 from test_telemetry_tokens import check as check_tokens
 
@@ -369,3 +369,82 @@ def test_replayed_unmarked_spool_line_stays_unmarked(world):
     world.replay("S-replay")
     [(fields,)] = query("SELECT fields FROM events WHERE event_id = ?", spooled["event_id"])
     assert judge_ledger.WRITER_MARKER not in json.loads(fields)
+
+
+# --- check-latency's second pre-fix window: sessions the landed sync made wait on foreign retries ----
+
+WAITS = report.PRE_FIX_CAUSE_SYNC_COMMIT_WAITS
+OTHER_CAUSE = "pre_fix_cause_other"
+OUTAGE = (5_000, 8_000)
+PR6, PR7 = 10_000, 20_000
+
+
+def landed_record(tmp_path, head, seconds) -> str:
+    event("s-land", "landing", seconds, {"tip": head}, "land:landed")
+    path = tmp_path / f"landed-{head}.json"
+    path.write_text(json.dumps({"head": head, "landed_at": at(seconds)}), encoding="utf-8")
+    return str(path)
+
+
+def late_at(session, t1, commit=None) -> None:
+    """A session whose session_end trigger (its E and T1) is at `t1`, its first commit at `commit`."""
+    event(session, "command", t1 - 10, {"command": "status"}, "cli:status")
+    trigger(t1, "session_end", session)
+    if commit is not None:
+        appeared(commit, session)
+
+
+def latency_exit(tmp_path, entries, until=True) -> int:
+    import telemetry as telemetry_cli
+    late_at("s-anchor", -100, commit=-90)
+    pre_fix = tmp_path / "pre-fix-late.json"
+    pre_fix.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    argv = ["check-latency", "--max-seconds", str(S), "--since-landing", landed_record(tmp_path, "h1", -1_000),
+            "--sync-outage-from", at(OUTAGE[0]), "--sync-outage-until", at(OUTAGE[1]),
+            "--pre-fix-late", str(pre_fix), "--pre-fix-late-from-landing", landed_record(tmp_path, "h6", PR6)]
+    if until:
+        argv += ["--pre-fix-late-until-landing", landed_record(tmp_path, "h7", PR7)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        return telemetry_cli.main(argv)
+
+
+def test_pre_fix_late_second_window_accepts_entry(world, tmp_path):
+    late_at("s-at-open", PR6, commit=PR6 + 700)
+    late_at("s-inside", 15_000, commit=15_700)
+    entries = [{"session": s, "cause": WAITS} for s in ("s-at-open", "s-inside")]
+    assert latency_exit(tmp_path, entries) == 0
+    conn = store.open_readonly()
+    try:
+        result = report.check_latency(conn, S, at(-1_000), sync.parse_time(at(30_000)),
+                                      (sync.parse_time(at(OUTAGE[0])), sync.parse_time(at(OUTAGE[1]))), entries,
+                                      (sync.parse_time(at(PR6)), sync.parse_time(at(PR7))))
+    finally:
+        conn.close()
+    assert result["ok"] and result["losses"] == {f"{report.PRE_FIX_LATE}:{WAITS}": 2}
+
+
+@pytest.mark.parametrize("t1, commit", [
+    (PR6 - 10, PR6 + 690),       # T1 just before the window opens (between the outage and PR 6)
+    (PR7, PR7 + 700),            # T1 at the window's exclusive end
+    (PR7 - 700, PR7),            # A at PR 7's landed_at
+    (PR7 - 650, PR7 + 50),       # A after PR 7's landed_at
+    (15_000, None),              # no A at all
+])
+def test_pre_fix_late_second_window_edges_exit_2(world, tmp_path, t1, commit):
+    late_at("s-edge", t1, commit=commit)
+    assert latency_exit(tmp_path, [{"session": "s-edge", "cause": WAITS}]) == 2
+
+
+def test_pre_fix_late_second_window_open_end_only_without_until(world, tmp_path):
+    late_at("s-after-pr7", PR7 + 5_000, commit=PR7 + 5_700)
+    entries = [{"session": "s-after-pr7", "cause": WAITS}]
+    assert latency_exit(tmp_path, entries, until=False) == 0
+    assert latency_exit(tmp_path, entries, until=True) == 2
+
+
+def test_pre_fix_late_second_window_wrong_cause_exit_2(world, tmp_path):
+    late_at("s-second", 15_000, commit=15_700)
+    late_at("s-first", 2_000, commit=2_700)
+    assert latency_exit(tmp_path, [{"session": "s-second", "cause": OTHER_CAUSE}]) == 2
+    assert latency_exit(tmp_path, [{"session": "s-first", "cause": OTHER_CAUSE},
+                                   {"session": "s-second", "cause": WAITS}]) == 0
