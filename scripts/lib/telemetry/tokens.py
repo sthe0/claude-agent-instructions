@@ -564,7 +564,8 @@ def check_task(conn, task_id: str, require_spawn: bool = False, require_compacti
 def _attempt_problem(path: Path, offset) -> "str | None":
     if offset is None:
         return "never_read"
-    if offset["read_outcome"] != "committed":
+    attempt_beyond_offset = offset["read_size"] > offset["byte_offset"]
+    if offset["read_outcome"] != "committed" and attempt_beyond_offset:
         return f"last_read_{offset['read_outcome']}"
     if offset["byte_offset"] != _last_line_end(path, offset["read_size"]):
         return "offset_short_of_last_line"
@@ -573,7 +574,8 @@ def _attempt_problem(path: Path, offset) -> "str | None":
 
 def check_imported_coverage(conn, bound=None, known=frozenset()) -> dict:
     """Every transcript with usage fields has token rows and a last collector read that committed
-    up to the last complete line it attempted; bytes appended since are listed, not counted."""
+    up to the last complete line it attempted (an attempt left open within the committed range
+    attempted nothing new); bytes appended since are listed, not counted."""
     uncovered, grown, covered, no_open_epoch = [], [], 0, 0
     for path, session, _ in transcripts():
         offset = _offset_row(conn, path)

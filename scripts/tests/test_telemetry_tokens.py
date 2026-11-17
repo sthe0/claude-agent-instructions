@@ -8,6 +8,8 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import telemetry as telemetry_cli
 from lib import config_root
 from lib.telemetry import importer, store, sync, tables, tokens
@@ -492,6 +494,20 @@ def test_outcome_write_deferred_after_deferred_batch_fails_coverage(world, monke
     assert tokens.collect()["deferred"] == 1
     rc, out = check(capsys, "--imported-coverage")
     assert rc == 1 and out["uncovered"] == [{"transcript": str(path), "reason": "last_read_pending"}]
+
+
+@pytest.mark.parametrize("outcome", ["pending", "deferred"])
+def test_overlapping_read_left_open_inside_committed_range_stays_covered(world, capsys, outcome):
+    path = world.transcript("s", [usage(1, "a", "s"), usage(2, "b", "s")])
+    tokens.collect()
+    conn = sqlite3.connect(config_root.telemetry_db())
+    generation, size = conn.execute("SELECT generation, read_size FROM import_offsets "
+                                    "WHERE source = ? AND consumer = 'tokens'", (str(path),)).fetchone()
+    conn.close()
+    assert store.record_read_attempt(str(path), generation, "tokens", size, outcome)
+    tokens.collect()
+    rc, out = check(capsys, "--imported-coverage")
+    assert rc == 0 and out["uncovered"] == []
 
 
 def test_imported_coverage_green_with_epochless_transcript(world, capsys):

@@ -17,7 +17,8 @@ _K = "scripts/tests/test_telemetry_tokens.py::"
 _COLLECTOR_ANCHOR = "    collected = tokens.collect([s for s in stems if s != SYNC_SESSION])"
 _TOKEN_ROW_ANCHOR = '"message_id": message_id, "session_id": session, "role"'
 _ATTEMPT_CHECK = (
-    '    if offset["read_outcome"] != "committed":\n'
+    '    attempt_beyond_offset = offset["read_size"] > offset["byte_offset"]\n'
+    '    if offset["read_outcome"] != "committed" and attempt_beyond_offset:\n'
     "        return f\"last_read_{offset['read_outcome']}\"\n"
     '    if offset["byte_offset"] != _last_line_end(path, offset["read_size"]):\n')
 _PENDING_WRITE = (
@@ -97,6 +98,10 @@ MUTANTS = [
          "        return f\"last_read_{offset['read_outcome']}\"\n"
          '    if offset["byte_offset"] != _last_line_end(path, offset["byte_offset"]):\n'),
      "tests": [_K + "test_grown_transcript_whose_tail_batch_deferred_fails_coverage"]},
+    {"name": "open_read_inside_committed_range_fails_coverage", "file": _TOKENS,
+     "anchor": '    attempt_beyond_offset = offset["read_size"] > offset["byte_offset"]',
+     "replacement": "    attempt_beyond_offset = True",
+     "tests": [_K + "test_overlapping_read_left_open_inside_committed_range_stays_covered"]},
     {"name": "task_measured_against_current_file_size", "file": _TOKENS,
      "anchor": 'limit = offset["byte_offset"] if offset else 0',
      "replacement": "limit = path.stat().st_size",
