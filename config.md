@@ -63,6 +63,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `memory-leaf-max-contexts-multiple` | `27` | Multiple of `principle-promotion-threshold` in `### ` contexts above which the same flag fires. |
 | `plan-stage-max-chars` | `70000` | Largest rendered size of one plan node; over it blocks `submit-plan` and topological review. |
 | `plan-field-inline-max-chars` | `3000` | Longest prose field a plan prints inline; longer ones are externalized (advisory). |
+| `review-history-inline-max-chars` | `20000` | Longest re-review history a review prompt prints inline; longer, it prints an index and the history sits in view files. |
 | `reaper-pressure-free-percent` | `10` | Free-space percent below which `hook-reaper.py --on-pressure` runs a reaper before its 24-hour throttle. |
 | `given-regularity-max-age-days` | `180` | Age in days of a given regularity's `last_verified` beyond which the grounding judge reports `unverified_given`. |
 | `resource-grant-hook` | `on` | Kill switch for the resource-grant PreToolUse hook in a linked child; `AGENTCTL_RESOURCE_HOOK` overrides. |
