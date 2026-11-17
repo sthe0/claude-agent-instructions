@@ -1623,6 +1623,8 @@ SCRIPT_MODULE_MUTATIONS = {
     "cpu-walk-no-ppid-fallback": (HARNESS, "proc_children_by_ppid", lambda _original: (lambda proc_root="/proc": ({}, {}))),
     "children-read-aborts-on-first-missing-thread": (HARNESS, "proc_tree_ticks", _children_read_aborts_on_a_missing_thread),
     "next-measurement-counts-void-k1": (HARNESS, "next_measurement", _void_k1_runs_counted),
+    "cpu-walk-rereads-scanned-stat": (HARNESS, "proc_children_by_ppid",
+                                      lambda original: (lambda proc_root="/proc": (original(proc_root)[0], {}))),
 }
 
 

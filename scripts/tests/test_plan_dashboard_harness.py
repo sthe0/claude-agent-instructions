@@ -1721,6 +1721,20 @@ def test_the_ppid_scan_returns_each_process_ticks_from_the_same_stat_read(tmp_pa
     assert by_parent == {1: [100], 100: [101]} and ticks == {100: 10, 101: 20}
 
 
+def test_the_cpu_walk_counts_a_child_reaped_after_the_ppid_scan_from_the_scan(tmp_path, monkeypatch):
+    fake_proc(tmp_path, 100, 1, 10)
+    fake_proc(tmp_path, 101, 100, 20)
+    scan = h.proc_children_by_ppid
+
+    def scan_then_reap(proc_root="/proc"):
+        result = scan(proc_root)
+        (tmp_path / "101" / "stat").unlink()                              # the child exits right after the scan
+        return result
+
+    monkeypatch.setattr(h, "proc_children_by_ppid", scan_then_reap)
+    assert h.proc_tree_ticks(100, str(tmp_path)) == {100: 10, 101: 20}
+
+
 def test_a_thread_gone_mid_listing_does_not_hide_its_siblings_children(tmp_path, monkeypatch):
     real_listdir = os.listdir
     monkeypatch.setattr(h.os, "listdir", lambda path: sorted(real_listdir(path)))    # the vanished thread is listed first
