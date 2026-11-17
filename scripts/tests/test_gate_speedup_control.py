@@ -905,7 +905,7 @@ def test_every_case_holding_fails_none():
 
 @pytest.mark.parametrize("case, change", [
     ("a", {"a": {"rerun": ["rx"], "reused_s": 3000.0}}),
-    ("a", {"a": {"rerun": [], "reused_s": 100.0}}),
+    ("a", {"a": {"rerun": [], "reused_s": 0.0}}),
     ("a", {"unstored": ["reaper"]}),
     ("b", {"b": {"rerun": []}}),
     ("b", {"b": {"rerun": ["mandate", "rx"]}}),

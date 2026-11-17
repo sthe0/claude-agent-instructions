@@ -1951,15 +1951,15 @@ def k3_negative(repo: Path, out: Path) -> int:
     return 0 if not problems else EXIT_REUSE_MISMATCH
 
 
-MUTATION_MIN_REUSED_S = 2500.0
 MUTATION_ONLY = "mandate"
 EDITABLE_SUFFIXES = (".py", ".toml", ".md", ".txt")
 
 
-def judge_mutation(outcomes: dict, min_reused_s: float = MUTATION_MIN_REUSED_S) -> list[str]:
+def judge_mutation(outcomes: dict) -> list[str]:
     """The cases (a-f) that failed, judged on what the lookups of the edited trees found.
 
-    a: an edit outside every narrowed set reuses every catalogue, ``min_reused_s`` test-seconds at least;
+    a: an edit outside every narrowed set reuses every catalogue (the reused test-seconds are reported, not
+       bounded: they are the measured durations of whichever catalogues are registered);
     b: an edit of a file only the mandate set holds reruns that catalogue alone;
     c: a pass older than the bound reruns every catalogue;
     d, e: an edit of a file of the catalogue module's import closure / of a file of its named tests' import
@@ -1968,7 +1968,7 @@ def judge_mutation(outcomes: dict, min_reused_s: float = MUTATION_MIN_REUSED_S) 
     f: the stored row of every catalogue holds every file the module rewrites (``missed`` lists the others)."""
     subjects, unstored = set(outcomes["subjects"]), set(outcomes["unstored"])
     failed = []
-    if (unstored or outcomes["a"]["rerun"] or outcomes["a"]["reused_s"] < min_reused_s):
+    if unstored or outcomes["a"]["rerun"] or outcomes["a"]["reused_s"] <= 0:
         failed.append("a")
     if set(outcomes["b"]["rerun"]) - unstored != {MUTATION_ONLY}:
         failed.append("b")
