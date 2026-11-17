@@ -1054,7 +1054,7 @@ class HistorySection:
     """The re-review history section of a review prompt and the view files it names
     (view-relative path -> text); no files when the history is printed inline."""
     lines: list[str]
-    files: dict
+    files: dict[str, str]
 
     @property
     def indexed(self) -> bool:
@@ -1150,10 +1150,8 @@ def _indexed_diff(diff_text: str, doc: PlanDoc, review_id: str,
         "|---|---|---|---|---|",
     ]
     files: dict[str, str] = {}
-    first = True
     for number, ((part, section), run) in enumerate(segments, start=1):
-        body = run[2:] if first else run
-        first = False
+        body = run[2:] if number == 1 else run
         added = sum(1 for line in body if line.startswith("+"))
         removed = sum(1 for line in body if line.startswith("-"))
         name = f"{HISTORY_VIEW_DIR}/diff-{number:03d}-{_slug(part)}-{_slug(section)}.diff"
@@ -1269,8 +1267,8 @@ def _protocol_lines(history: "dict | None", noun: str, history_indexed: bool = F
     if history_indexed:
         lines.append(
             f"  - The history of this {noun} is an index: the live plan parts this prompt shows "
-            "or names are complete and are what you judge. The history files it lists only help you locate what "
-            "changed and what was raised before; open the ones your question needs."
+            "or names are complete and are what you judge. The history files it lists only help "
+            "you locate what changed and what was raised before; open the ones your question needs."
         )
     lines.append(
         f"- after the concerns, a line `{CUSTOMER_QUESTIONS_MARKER}` followed by one "
