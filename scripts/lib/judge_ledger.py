@@ -68,8 +68,14 @@ JUDGE_NAMES = frozenset({
     "published_attachment", "published_text_rules", "feedback_signal", "user_question",
     "resolution_confirmation", "outage_escalation", "silent_closure", "deferring_disposition",
     "landing_discipline", "question_materiality", "approval_ask", "code_effects",
-    "grounding_link", "order_quote", "mandate_cycle_judge", "unattributed",
+    "grounding_link", "order_quote", "mandate_cycle_judge", "procedure_collapse",
+    "result_image_echo", "conditions_restatement", "unattributed",
 })
+
+# Stamped on every line this module writes, so a reader can tell a line written by
+# code that requests structured usage and names its judge from one written before
+# that code landed: an old writer cannot have produced the field.
+WRITER_MARKER = "writer_marker"
 
 # Ceiling on one ledger line. NOT an atomicity mechanism — O_APPEND is what
 # keeps concurrent writers from interleaving, and PIPE_BUF (4096) governs pipes,
@@ -206,6 +212,13 @@ def _source_from_payload(payload) -> str:
     return "manual"
 
 
+def _test_run_without_isolated_ledger() -> bool:
+    """A test run that has not pointed AGENTCTL_JUDGE_LEDGER elsewhere would write into the live
+    ledger, where its lines read as real judge calls."""
+    test_run = bool(os.environ.get("PYTEST_CURRENT_TEST")) or os.environ.get("AGENT_TELEMETRY_TEST") == "1"
+    return test_run and not os.environ.get("AGENTCTL_JUDGE_LEDGER")
+
+
 def _write(kind: str, **fields) -> "tuple[str, int, str] | None":
     """Append one ledger line; returns its back-reference (path, offset, sha256), None when
     the write failed."""
@@ -225,6 +238,9 @@ def _write(kind: str, **fields) -> "tuple[str, int, str] | None":
             "source": current_source(),
         }
         record.update(fields)
+        record[WRITER_MARKER] = 1
+        if _test_run_without_isolated_ledger():
+            return None
         encoded = _encode(record)
         path = ledger_path()
         path.parent.mkdir(parents=True, exist_ok=True)

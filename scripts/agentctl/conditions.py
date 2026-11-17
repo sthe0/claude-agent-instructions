@@ -50,9 +50,13 @@ from __future__ import annotations
 
 import re
 
+from lib import judge_ledger
+from lib.runtime_models import HOST_CLAUDE
+
+from . import advisor
+
 # Same tier and budget as result_image's judge and advisor.judge_binary_ask: a
 # one-bit classification over a sentence or two.
-_JUDGE_MODEL = "haiku"
 _JUDGE_TIMEOUT_S = 8
 
 # A stage named by its index -- "stage 2", "stages 1 and 3". The index is captured
@@ -158,7 +162,12 @@ def judge_restatement(
     try:
         deps = ", ".join(str(int(d)) for d in depends_on) or "(none)"
         prompt = _RESTATEMENT_JUDGE_PROMPT.format(depends_on=deps, conditions=conditions)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        argv = advisor._prompt_argv(HOST_CLAUDE, advisor._JUDGE_COMPLEXITY)
+        judge_ledger.begin_attributed_call("conditions_restatement")
+        try:
+            result = runner(argv, timeout=timeout, stdin=prompt)
+        finally:
+            judge_ledger.set_current_judge(None)
         if result.returncode != 0:
             return False
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]

@@ -100,7 +100,8 @@ def _own_event(kind: str, fields: dict, moment: datetime) -> dict:
 def _keep_in_reserved_spool(row: dict) -> None:
     """Append `row` to the reserved spool with its own id and original time, as emit frames a line."""
     event = {"event_id": row["event_id"], "session_id": SYNC_SESSION, "kind": row["kind"],
-             "time": row["time"], "provenance": "live", "backref": None, "fields": row["fields"]}
+             "time": row["time"], "provenance": "live", "backref": None,
+             "fields": emit.stamp_writer_marker(row["fields"])}
     line = b"\n" + json.dumps(event, separators=(",", ":")).encode("utf-8") + b"\n"
     try:
         emit.ensure_private_dir(live.spool_dir())

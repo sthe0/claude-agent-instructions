@@ -89,7 +89,7 @@ def _write_plan(path: Path, c1: str, c2: str) -> str:
     return str(path)
 
 
-def _no_judge(argv, timeout=None):
+def _no_judge(argv, timeout=None, stdin=""):
     """Every model judge unreachable: the restatement check fails open, so only the structural
     securing check can refuse."""
     return RunResult(1, "", "no such model")

@@ -386,6 +386,20 @@ def _fake_runs(monkeypatch, hook_ms, excess):
                         lambda verb, env, root: 0.0 if env.get(bench.OFF_ENV) == "off" else next(values))
 
 
+def test_both_sides_in_one_call_report_each_and_exit_with_the_worse(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(compare, "_historical_side", lambda args: (compare.EXIT_OK, {"ok": True, "tasks": 5}))
+    monkeypatch.setattr(compare, "live", lambda *a: (compare.EXIT_DIFFER, {"ok": False, "tasks": 3}))
+    argv = ["--historical", "--live", "--premises", str(tmp_path / "p.json"),
+            "--transcripts-snapshot", str(tmp_path / "s.tar")]
+    assert compare.main(argv) == compare.EXIT_DIFFER
+    assert json.loads(capsys.readouterr().out) == {"historical": {"ok": True, "tasks": 5},
+                                                   "live": {"ok": False, "tasks": 3}}
+    assert compare.main(["--live"]) == compare.EXIT_DIFFER
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "tasks": 3}
+    with pytest.raises(SystemExit):
+        compare.main([])
+
+
 def test_bench_fails_when_a_bound_is_exceeded(monkeypatch):
     _fake_runs(monkeypatch, 5.0, [300.0] * 40)
     result = bench.bench(3, 20, 10.0, 250.0)

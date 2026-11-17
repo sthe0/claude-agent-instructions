@@ -37,6 +37,8 @@ from agentctl.result_image import echo_prefilter, judge_echo
 from agentctl.state import Node
 from agentctl.submission import submission_advice, validate_submission
 
+from lib import judge_ledger
+
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
 from plan_site_fixture import GROUNDED_SOURCE
 
@@ -121,17 +123,17 @@ def _write_plan(path: Path, image: str) -> str:
 
 def _judge(verdict: str):
     """A judge runner that always answers `verdict`."""
-    def run(argv, timeout=None):
+    def run(argv, timeout=None, stdin=""):
         return RunResult(0, verdict + "\n", "")
     return run
 
 
-def _judge_unavailable(argv, timeout=None):
+def _judge_unavailable(argv, timeout=None, stdin=""):
     """The judge cannot be reached — the shape a missing/failing `claude -p` takes."""
     return RunResult(1, "", "no such model")
 
 
-def _judge_raises(argv, timeout=None):
+def _judge_raises(argv, timeout=None, stdin=""):
     raise OSError("judge process could not be started")
 
 
@@ -243,7 +245,7 @@ def test_no_runner_reaches_the_judge_via_the_production_fallback(store, tmp_path
     prefilter_hits above)."""
     calls: list[list[str]] = []
 
-    def fake_subprocess_runner(argv, *, timeout=None):
+    def fake_subprocess_runner(argv, *, timeout=None, stdin=""):
         calls.append(argv)
         return RunResult(0, "ECHO\n", "")
 
@@ -264,7 +266,7 @@ def test_advisor_off_reaches_no_runner_and_spawns_nothing(store, tmp_path, monke
     poisons the runner rather than asserting the name goes untouched.)"""
     monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
 
-    def forbidden(argv, *, timeout=None):
+    def forbidden(argv, *, timeout=None, stdin=""):
         raise AssertionError("advisor.subprocess_runner was called with the advisor off")
 
     monkeypatch.setattr(advisor, "subprocess_runner", forbidden)
@@ -321,8 +323,9 @@ def test_replan_carries_the_warning_and_pays_for_it_only_past_the_refusals(
 
     calls: list[list[str]] = []
 
-    def counting_judge(argv, *, timeout=None):
-        calls.append(argv)
+    def counting_judge(argv, *, timeout=None, stdin=""):
+        if judge_ledger.current_judge() == "result_image_echo":
+            calls.append(argv)
         return RunResult(0, "ECHO\n", "")
 
     monkeypatch.setattr(advisor, "subprocess_runner", counting_judge)

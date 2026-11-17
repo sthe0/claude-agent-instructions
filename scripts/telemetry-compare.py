@@ -4,6 +4,9 @@
   telemetry-compare.py --historical --premises P --transcripts-snapshot T [--min-historical-tasks N]
   telemetry-compare.py --live [--min-tasks N] [--synthesize] [--max-synthetic N]
 
+Given both flags, it runs both sides and prints {"historical": …, "live": …}; the exit is the worse
+of the two.
+
 Both sides cover one task set and are cut at the same boundaries: each task contributes, per
 session, only the span of its own event rows there, so a session that served two tasks gives each
 its own part. The record side reads the session's points through phases.py (live command events,
@@ -371,9 +374,8 @@ def live(min_tasks: int, synthesize: bool, max_synthetic: int) -> "tuple[int, di
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    side = parser.add_mutually_exclusive_group(required=True)
-    side.add_argument("--historical", action="store_true")
-    side.add_argument("--live", action="store_true")
+    parser.add_argument("--historical", action="store_true")
+    parser.add_argument("--live", action="store_true")
     parser.add_argument("--premises", type=Path)
     parser.add_argument("--transcripts-snapshot", type=Path)
     parser.add_argument("--min-historical-tasks", type=int, default=1)
@@ -381,23 +383,34 @@ def main(argv=None) -> int:
     parser.add_argument("--synthesize", action="store_true")
     parser.add_argument("--max-synthetic", type=int, default=10)
     args = parser.parse_args(argv)
+    if not (args.historical or args.live):
+        parser.error("one of --historical and --live is required")
+    if args.historical and (args.premises is None or args.transcripts_snapshot is None):
+        parser.error("--historical needs --premises and --transcripts-snapshot")
     report.emit_usage("compare")
+    sides = {}
     if args.historical:
-        if args.premises is None or args.transcripts_snapshot is None:
-            parser.error("--historical needs --premises and --transcripts-snapshot")
-        conn = store.open_readonly()
-        if conn is None:
-            status, payload = EXIT_PREMISE, {"error": "no telemetry record"}
-        else:
-            try:
-                premises = json.loads(args.premises.read_text(encoding="utf-8"))
-                status, payload = historical(conn, premises, args.transcripts_snapshot, args.min_historical_tasks)
-            finally:
-                conn.close()
+        sides["historical"] = _historical_side(args)
+    if args.live:
+        sides["live"] = live(args.min_tasks, args.synthesize, args.max_synthetic)
+    if len(sides) == 1:
+        [(status, payload)] = sides.values()
     else:
-        status, payload = live(args.min_tasks, args.synthesize, args.max_synthetic)
+        status = max(side_status for side_status, _ in sides.values())
+        payload = {name: side_payload for name, (_, side_payload) in sides.items()}
     print(json.dumps(payload, indent=2, sort_keys=True))
     return status
+
+
+def _historical_side(args) -> "tuple[int, dict]":
+    conn = store.open_readonly()
+    if conn is None:
+        return EXIT_PREMISE, {"error": "no telemetry record"}
+    try:
+        premises = json.loads(args.premises.read_text(encoding="utf-8"))
+        return historical(conn, premises, args.transcripts_snapshot, args.min_historical_tasks)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

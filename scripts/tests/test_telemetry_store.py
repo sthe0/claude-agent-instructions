@@ -627,7 +627,7 @@ def test_emitted_fields_survive_replay_in_the_fields_column():
     event_id = emit.emit("fields", "tick", fields)
     store.replay("fields")
     row = _query("SELECT fields, source_key, provenance, session_id FROM events WHERE event_id = ?", event_id)[0]
-    assert json.loads(row["fields"]) == fields
+    assert json.loads(row["fields"]) == {**fields, emit.WRITER_MARKER: 1}
     assert (row["source_key"], row["provenance"], row["session_id"]) == ("k-9", "live", "fields")
 
 

@@ -120,7 +120,23 @@ writes nothing outside D. On a multi-GB record it takes about as much disk and t
 
 **Run it.** `python3 scripts/telemetry.py sync --session <id> [--budget S]`,
 `python3 scripts/telemetry.py path`,
-`python3 scripts/telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)`.
+`python3 scripts/telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage [--not-requested-until-landing F] [--not-requested-known K] [--json])`,
+`python3 scripts/agent-report.py core-version --check [--test-leak-until-landing F] [--json]`.
+
+**Rows a writer should not have written.** Every production writer (`emit.emit`, the sync's
+reserved-spool line, `judge_ledger._write`) stamps `writer_marker: 1`; replay never stamps. A
+test run with no isolation override writes no live event and no live judge line. Against the fix
+bound F (a landing record's `landed_at`, held to 0-600 s after its `land:landed` event), a marked
+row fails whatever its time. An unmarked row before the bound is a named loss
+(`usage_not_requested_before_fix`, `test_leak:<key>`). An unmarked row at or after the bound is
+listed under `pre_fix_writer:<class>`. `core-version --check` classifies its unresolved live keys
+in this order:
+- test-run rows, by the `test` field `hook_telemetry.decision_row` writes, never by key name;
+- `foreign_hook` rows, which carry an explicit non-core layer and the key `hook:<layer>:<name>`
+  and are counted per layer;
+- the pinned scale measurement under key `test`, which must stay in its window and keep its
+  count;
+- every other key fails.
 
 **Tests.** `scripts/tests/test_telemetry_{tables,store,hook_isolation,mutation_catalogue,importer,transition,registry,cause,tokens,portability}.py`
 (run with `--telemetry-no-skip` to fail on any skip) and the mutation control

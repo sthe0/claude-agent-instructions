@@ -126,7 +126,7 @@ def report_rows(session) -> list:
 def test_report_usage_follows_session_env(monkeypatch):
     task("t1")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S-env")
-    view("--task", "t1")
+    view()
     assert [r["fields"]["session"] for r in report_rows("S-env")] == ["S-env"]
     assert report_rows("s-t1") == [] and report_rows(report.REPORT_SOURCE) == []
 

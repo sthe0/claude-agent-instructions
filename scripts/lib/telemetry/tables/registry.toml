@@ -1,4 +1,4 @@
-version = 3
+version = 6
 
 [[members]]
 name = "cli:accept"
@@ -1543,3 +1543,30 @@ part_of = []
 place = "mandate_cycle"
 source_keys = ["judge:mandate_cycle_judge"]
 calling_modules = ["scripts/mandate_cycle/driver.py"]
+
+[[members]]
+name = "judge:procedure_collapse"
+since = 4
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["judge:procedure_collapse"]
+calling_modules = ["scripts/agentctl/procedure.py"]
+
+[[members]]
+name = "judge:result_image_echo"
+since = 5
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["judge:result_image_echo"]
+calling_modules = ["scripts/agentctl/result_image.py"]
+
+[[members]]
+name = "judge:conditions_restatement"
+since = 6
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["judge:conditions_restatement"]
+calling_modules = ["scripts/agentctl/conditions.py"]

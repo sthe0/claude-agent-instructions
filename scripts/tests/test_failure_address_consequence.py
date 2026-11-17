@@ -992,7 +992,7 @@ def test_verify_final_refusal_is_logged_as_a_gate(store, plans, norms, tmp_path,
 
 # --- --renormalize and re-attest keep the obligation --------------------------
 
-def _no_judge(argv, timeout=None):
+def _no_judge(argv, timeout=None, stdin=""):
     return RunResult(1, "", "no such model")
 
 

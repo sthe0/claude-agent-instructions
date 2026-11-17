@@ -16,10 +16,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+from datetime import datetime
 
 from lib import config_root, transcript_cost
-from lib.telemetry import importer, live, phases, store, sync, tables
+from lib.telemetry import emit, importer, live, phases, store, sync, tables
 
 DIAGNOSING = "DIAGNOSING"
 DIFFICULTY_EXITS = ("replan", "unblock", "reset")
@@ -271,6 +273,117 @@ def unresolved_source_keys(conn, registry=None) -> "tuple[dict, dict]":
         target = live_keys if provenance == "live" else imported_keys
         target[source_key] = target.get(source_key, 0) + count
     return live_keys, imported_keys
+
+
+CORE_LAYER = "core"
+FOREIGN_HOOK = "foreign_hook"
+TEST_RUN = "test_run"
+TEST_LEAK_PREFIX = "test_leak:"
+PRE_FIX_WRITER_TEST_RUN = "pre_fix_writer:test_run"
+# The manual scale measurement of 2026-11-08 wrote these rows into the live record under source
+# key "test", without the structural `test` field; they are a counted loss pinned to exactly
+# those rows (read from the live record), never a rule for the key.
+SCALE_MEASUREMENT_KEY = "test"
+SCALE_MEASUREMENT_LOSS = "scale_measurement:test"
+SCALE_MEASUREMENT_WINDOW = ("2026-11-01T00:00:00.000000+00:00", "2026-11-01T01:23:20.000000+00:00")
+SCALE_MEASUREMENT_ROWS = 5481
+
+
+def _foreign_hook_name(source_key: str, layer, mechanism) -> "str | None":
+    """The hook name of a row a non-Core layer's dispatcher wrote: its explicit layer is not
+    Core and its key is hook:<layer>:<name>."""
+    if not isinstance(layer, str) or not layer or layer == CORE_LAYER or not isinstance(mechanism, str):
+        return None
+    prefix = f"{layer}:"
+    if not mechanism.startswith(prefix) or source_key != f"hook:{mechanism}":
+        return None
+    return mechanism[len(prefix):]
+
+
+def _failure(cls: str, source_key: str, test_run: bool, epoch, marked: bool) -> dict:
+    return {"class": cls, "source_key": source_key, "test_run": test_run, "epoch": epoch,
+            "writer_attribute": marked}
+
+
+def _later(a, b):
+    return b if a is None or (b is not None and b > a) else a
+
+
+def _test_run_rows(conn, keys: set, bound, out: dict) -> None:
+    """A test run's rows of the unresolved `keys`: a row its fixed writer marked fails whatever its
+    time; an unmarked row before the bound is the named loss test_leak:<key>; one at or after it
+    was written by a process still running the pre-fix code."""
+    failing: dict = {}
+    for source_key, moment, marked in conn.execute(
+            "SELECT source_key, time, json_extract(fields, '$.writer_marker') IS NOT NULL FROM events "
+            "WHERE provenance = 'live' AND json_extract(fields, '$.test') = 1"):
+        if source_key not in keys:
+            continue
+        when = sync.parse_time(moment)
+        if marked or bound is None or when is None:
+            latest, marked_any = failing.get(source_key, (None, False))
+            failing[source_key] = (_later(latest, moment), marked_any or bool(marked))
+            continue
+        name = f"{TEST_LEAK_PREFIX}{source_key}" if when < bound else PRE_FIX_WRITER_TEST_RUN
+        slot = out["excused"].setdefault(name, {})
+        slot[source_key] = slot.get(source_key, 0) + 1
+    for source_key, (latest, marked_any) in sorted(failing.items()):
+        cls = "test_run_marked" if marked_any else "test_run_unbounded"
+        out["failures"].append(_failure(cls, source_key, True, latest, marked_any))
+
+
+def _scale_measurement_rows(group: dict, out: dict) -> None:
+    """The pinned loss holds only while every row lies in the measured window and no row is added."""
+    first, last = (sync.parse_time(t) for t in SCALE_MEASUREMENT_WINDOW)
+    earliest, latest = sync.parse_time(group["earliest"]), sync.parse_time(group["latest"])
+    if earliest is None or latest is None or earliest < first or latest > last:
+        out["failures"].append(_failure("outside_pinned_window", SCALE_MEASUREMENT_KEY, False, group["latest"], False))
+    elif group["count"] > SCALE_MEASUREMENT_ROWS:
+        out["failures"].append(_failure("above_pinned_count", SCALE_MEASUREMENT_KEY, False, group["latest"], False))
+    else:
+        out["excused"][SCALE_MEASUREMENT_LOSS] = group["count"]
+
+
+def classify_unresolved(conn, unresolved: dict, bound=None) -> dict:
+    """The live rows of `unresolved` source keys, by class, in this order: a row its writer
+    flagged as a test run (the structural `test` field, never the key) is read by _test_run_rows;
+    a row of another layer's hook resolves as foreign_hook, named per layer; the pinned scale
+    measurement is its counted loss; every other row fails as unresolved. One scan of the record
+    groups the rows; the test-run rows take a second."""
+    out = {"failures": [], "excused": {}, FOREIGN_HOOK: {}}
+    if not unresolved:
+        return out
+    keys = set(unresolved)
+    test_run_keys, plain, scale = set(), {}, None
+    for source_key, test, layer, mechanism, marked, count, earliest, latest in conn.execute(
+            "SELECT source_key, json_extract(fields, '$.test'), json_extract(fields, '$.layer'), "
+            "json_extract(fields, '$.mechanism'), json_extract(fields, '$.writer_marker') IS NOT NULL, "
+            "COUNT(*), MIN(time), MAX(time) FROM events WHERE provenance = 'live' GROUP BY 1, 2, 3, 4, 5"):
+        if source_key not in keys:
+            continue
+        if test == 1:
+            test_run_keys.add(source_key)
+            continue
+        name = _foreign_hook_name(source_key, layer, mechanism)
+        if name is not None:
+            names = out[FOREIGN_HOOK].setdefault(layer, {})
+            names[name] = names.get(name, 0) + count
+            continue
+        if source_key == SCALE_MEASUREMENT_KEY and test is None and layer is None:
+            scale = scale or {"count": 0, "earliest": None, "latest": None}
+            scale["count"] += count
+            scale["earliest"] = earliest if scale["earliest"] is None else min(scale["earliest"], earliest)
+            scale["latest"] = _later(scale["latest"], latest)
+            continue
+        latest_so_far, marked_any = plain.get(source_key, (None, False))
+        plain[source_key] = (_later(latest_so_far, latest), marked_any or bool(marked))
+    if test_run_keys:
+        _test_run_rows(conn, test_run_keys, bound, out)
+    for source_key, (latest, marked_any) in sorted(plain.items()):
+        out["failures"].append(_failure("unresolved", source_key, False, latest, marked_any))
+    if scale is not None:
+        _scale_measurement_rows(scale, out)
+    return out
 
 
 def _row(group: list, all_tasks: int) -> dict:
@@ -591,6 +704,7 @@ PRE_EMITTER = "pre_emitter"
 IMPORT_SESSION_PREFIX = "import:"
 LANDED_SOURCE_KEY = "land:landed"
 LANDED_AT_MAX_LAG_S = 600.0
+_FRACTIONAL_SECOND = re.compile(r":\d\d[.,]\d")
 # The rows the record writes about itself (the sync, the report, the importer, a pre-commit run, a
 # landing); a session holding nothing else did no work of its own.
 RECORD_OWN_SOURCE_KEYS = (*SELF_COST_ENTRIES, importer.SELF_SOURCE_KEY, "precommit")
@@ -605,10 +719,19 @@ class LatencyInputError(ValueError):
 def outage_end_from_landing(conn, landing: dict):
     """The `landed_at` of a landing record, bound to the record's land:landed event whose tip or
     pushed head is the record's head (the earliest when several are): it may not precede that event
-    nor follow it by more than LANDED_AT_MAX_LAG_S. Only landing rows are read."""
-    head, claimed = landing.get("head"), sync.parse_time(landing.get("landed_at"))
-    if not head or claimed is None:
+    nor follow it by more than LANDED_AT_MAX_LAG_S. A landed_at written without a fractional second
+    is compared with the event's time truncated to the second, one with a fraction exactly; a naive
+    or malformed landed_at is refused. Only landing rows are read."""
+    head, text = landing.get("head"), landing.get("landed_at")
+    if not head or not isinstance(text, str) or not text:
         raise LatencyInputError("the landing record needs head and landed_at")
+    try:
+        claimed = datetime.fromisoformat(text)
+    except ValueError as err:
+        raise LatencyInputError(f"landed_at {text!r} is not an ISO time") from err
+    if claimed.tzinfo is None:
+        raise LatencyInputError(f"landed_at {text!r} carries no UTC offset")
+    whole_seconds = not _FRACTIONAL_SECOND.search(text)
     events = []
     for moment, raw in conn.execute("SELECT time, fields FROM events WHERE kind = 'landing' AND source_key = ?",
                                     (LANDED_SOURCE_KEY,)):
@@ -618,6 +741,8 @@ def outage_end_from_landing(conn, landing: dict):
     if not events:
         raise LatencyInputError(f"no {LANDED_SOURCE_KEY} event of head {head} in the record")
     landed_event = min(events)
+    if whole_seconds:
+        landed_event = landed_event.replace(microsecond=0)
     if claimed < landed_event or (claimed - landed_event).total_seconds() > LANDED_AT_MAX_LAG_S:
         raise LatencyInputError(f"landed_at {claimed.isoformat()} is not within {LANDED_AT_MAX_LAG_S:.0f} s "
                                 f"after the {LANDED_SOURCE_KEY} event at {landed_event.isoformat()}")
@@ -771,17 +896,17 @@ def task_opener_session(conn, task_id: str) -> "str | None":
 
 
 def usage_session(conn=None, task_id: "str | None" = None) -> str:
-    """The session a report run is charged to: the harness session, else the engine root of the
-    task the run reports on, else the report's own pseudo-session."""
+    """The session a report run is charged to: the engine root of the task the run reports on,
+    else the harness session, else the report's own pseudo-session."""
     env_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if env_session:
-        return env_session
     if conn is not None and task_id:
         try:
-            return task_opener_session(conn, task_id) or REPORT_SOURCE
+            opener = task_opener_session(conn, task_id)
         except Exception:
-            return REPORT_SOURCE
-    return REPORT_SOURCE
+            opener = None
+        if opener:
+            return opener
+    return env_session or REPORT_SOURCE
 
 
 def emit_usage(view: str, conn=None, task_id: "str | None" = None) -> None:
@@ -811,7 +936,8 @@ def _print(payload: dict, fmt: str) -> None:
                   f"red_rate={row['verify_red_rate']} flakes={row['flakes']} minutes={row['minutes']:.1f} "
                   f"spend=${row['spend_usd']:.2f}")
     for name in ("losses", "unattributed_contours", "unresolved_source_keys",
-                 "imported_unresolved_source_keys", "synthetic_tasks_counted", sync.NO_TIME_ROWS, "self_cost"):
+                 "imported_unresolved_source_keys", "synthetic_tasks_counted", sync.NO_TIME_ROWS, "self_cost",
+                 "failures", "excused", FOREIGN_HOOK):
         if name in payload:
             print(f"{name}: {json.dumps(payload[name], sort_keys=True, default=str)}")
 
@@ -825,9 +951,20 @@ def main(argv=None) -> int:
     parser.add_argument("--check-self-cost", action="store_true", help="with --task: exit 1 on a missing self cost")
     parser.add_argument("--min-land-attempts", type=int, default=1)
     parser.add_argument("--min-landing-intervals", type=int, default=1)
+    parser.add_argument("--test-leak-until-landing", metavar="F",
+                        help="with --check: landing record bounding the fix of the test-run leak")
+    parser.add_argument("--json", action="store_true", help="same as --format json")
     args = parser.parse_args(argv)
     if args.check_self_cost and not args.task:
         parser.error("--check-self-cost needs --task")
+    try:
+        landing = None
+        if args.test_leak_until_landing:
+            with open(args.test_leak_until_landing, encoding="utf-8") as handle:
+                landing = json.load(handle)
+    except (OSError, ValueError) as err:
+        print(f"core-version: {err}", file=sys.stderr)
+        return 2
     conn = store.open_readonly()
     if conn is None:
         emit_usage("core-version")
@@ -835,18 +972,24 @@ def main(argv=None) -> int:
         return 2
     try:
         emit_usage("core-version", conn, args.task)
+        bound = outage_end_from_landing(conn, landing) if landing is not None else None
         payload = core_version(conn, args.include_synthetic)
         payload[sync.NO_TIME_ROWS] = unstamped_row_count(conn)
+        if args.check:
+            payload.update(classify_unresolved(conn, payload["unresolved_source_keys"], bound))
         if args.task:
             payload["self_cost"] = self_cost(conn, args.task)
+    except (ValueError, TypeError, KeyError, AttributeError) as err:
+        print(f"core-version: {err}", file=sys.stderr)
+        return 2
     finally:
         conn.close()
     status = 0
-    if args.check and payload["unresolved_source_keys"]:
+    if args.check and payload["failures"]:
         status = 1
     if args.check_self_cost:
         payload["self_cost_failures"] = self_cost_failures(
             payload["self_cost"], args.min_land_attempts, args.min_landing_intervals)
         status = 1 if payload["self_cost_failures"] else status
-    _print(payload, args.format)
+    _print(payload, "json" if args.json else args.format)
     return status

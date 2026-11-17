@@ -16,7 +16,9 @@ the skill files, and a test that fails on the copy for want of them would read a
     1  the harness itself crashed
 
 `--control` runs the same tests on the unmutated copy: 0 when all pass, 7 otherwise; a
-control that fails would make every kill meaningless. `--list` prints the mutant names.
+control that fails would make every kill meaningless. It runs every catalogued test, so it
+fans out under pytest-xdist within the per-run share of the machine's test slots; a mutant
+runs its few tests serially. `--list` prints the mutant names.
 `--root` names the tree holding `scripts/` (tests build a synthetic one). Stdlib only.
 """
 from __future__ import annotations
@@ -64,12 +66,29 @@ def apply_mutant(scratch: Path, mutant: dict) -> bool:
     return True
 
 
-def _run_tests(scratch: Path, test_ids: list) -> str:
-    """'green', 'red' or 'no-verdict' for the given tests run in the scratch tree."""
+def _control_workers() -> int:
+    """The per-run share of the machine's test slots, or 0 (serial) when xdist is not importable."""
+    if importlib.util.find_spec("xdist") is None:
+        return 0
+    spec = importlib.util.spec_from_file_location("test_slots", Path(__file__).resolve().parent.parent
+                                                  / "lib" / "test_slots.py")
+    test_slots = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = test_slots  # its dataclasses resolve their module through sys.modules
+    spec.loader.exec_module(test_slots)
+    return test_slots.configured().per_run
+
+
+def _run_tests(scratch: Path, test_ids: list, workers: int = 0) -> str:
+    """'green', 'red' or 'no-verdict' for the given tests run in the scratch tree.
+
+    With ``workers`` the child runs under pytest-xdist; the scratch conftest takes that many
+    slots from the machine-wide limiter (scripts/lib/test_slots.py) before fanning out.
+    """
     report = scratch / "junit.xml"
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTEST_ADDOPTS")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    command = [sys.executable, "-m", "pytest", "-p", "no:xdist", "-p", "no:cacheprovider", "-q", "--tb=no",
+    parallel = ["-n", str(workers)] if workers else ["-p", "no:xdist"]
+    command = [sys.executable, "-m", "pytest", *parallel, "-p", "no:cacheprovider", "-q", "--tb=no",
                f"--junitxml={report}", *test_ids]
     try:
         subprocess.run(command, cwd=scratch, env=env, capture_output=True, timeout=CHILD_TIMEOUT_S, check=False)
@@ -102,7 +121,7 @@ def _scratch_copy(root: Path, parent: Path) -> Path:
 def run_control(root: Path) -> int:
     tests = sorted({t for m in discover(root) for t in m["tests"]})
     with tempfile.TemporaryDirectory(prefix="telemetry-mutation-") as parent:
-        verdict = _run_tests(_scratch_copy(root, Path(parent)), tests)
+        verdict = _run_tests(_scratch_copy(root, Path(parent)), tests, workers=_control_workers())
     return EXIT_SURVIVED if verdict == "green" else EXIT_CONTROL_RED
 
 

@@ -37,6 +37,17 @@ DROPS_SUFFIX = ".drops"
 PRIVATE_DIR_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
 
+# Stamped into the fields of every event written at a production point (here and the sync's
+# own spool line), never at replay: a reader tells a row of the current writers from one an
+# older writer left, because only the current writers can have produced the field.
+WRITER_MARKER = "writer_marker"
+
+
+def stamp_writer_marker(fields: "dict | None") -> dict:
+    stamped = dict(fields) if fields is not None else {}
+    stamped[WRITER_MARKER] = 1
+    return stamped
+
 
 def fault_active(token: str) -> bool:
     tokens = os.environ.get(FAULT_ENV, "").split(",")
@@ -148,7 +159,7 @@ def emit(session_id, kind, fields, backref=None):
             "time": now_iso(),
             "provenance": "live",
             "backref": _backref(backref),
-            "fields": fields if fields is not None else {},
+            "fields": stamp_writer_marker(fields),
         }
         line = b"\n" + json.dumps(event, separators=(",", ":")).encode("utf-8") + b"\n"
         ensure_private_dir(config_root.telemetry_spool_dir())

@@ -113,11 +113,26 @@ def recorder_total() -> float:
     return _recorder_seconds
 
 
+ISOLATION_ENV = ("AGENTCTL_TELEMETRY_SPOOL", "AGENTCTL_TELEMETRY_DB")
+
+
+def leaks_test_run(fields: "dict | None") -> bool:
+    """A test run's event bound for the real spool: the run is marked (by the environment a
+    test harness sets, or by the `test` attribute a hook decision row carries) and no
+    isolation override points the spool or the record elsewhere."""
+    marked = (bool(os.environ.get("PYTEST_CURRENT_TEST"))
+              or os.environ.get("AGENT_TELEMETRY_TEST") == "1"
+              or (isinstance(fields, dict) and fields.get("test") is True))
+    isolated = any(os.environ.get(name) for name in ISOLATION_ENV)
+    return marked and not isolated
+
+
 def emit_event(session_id, kind: str, source_key: str, fields: "dict | None" = None, backref=None) -> "str | None":
     """Append one live event naming its emitter by `source_key`; the event carries the task
-    epoch open in its session at emit time. Never raises; None when off or not appended."""
+    epoch open in its session at emit time. Never raises; None when off, when a test run
+    would write the real spool, or when not appended."""
     global _recorder_seconds
-    if not enabled():
+    if not enabled() or leaks_test_run(fields):
         return None
     started = time.perf_counter()
     try:

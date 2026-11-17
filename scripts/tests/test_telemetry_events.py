@@ -150,7 +150,7 @@ def test_decision_row_holds_back_reference_and_no_payload_column(tmp_path):
     row = json.loads(line)
     assert event["fields"] == {
         "mechanism": "hook-x", "event": "PreToolUse", "decision": "deny", "layer": "core",
-        "test": row["test"], "source_key": "hook:hook-x"}
+        "test": row["test"], "source_key": "hook:hook-x", "writer_marker": 1}
     assert "ts" not in event["fields"] and "session" not in event["fields"]
     conn = db()
     try:
@@ -174,7 +174,8 @@ def test_gate_event_holds_r2_fields_and_gate_log_offset(root):
         event = by_ref[store.imported_row_id(str(cli_common.GATE_LOG), offset, hashlib.sha256(line).hexdigest())]
         offset += len(line)
         assert event["source_key"] == f"gate:{row['gate']}"
-        assert {k: v for k, v in event["fields"].items() if k not in ("source_key", "task_epoch")} == {
+        assert {k: v for k, v in event["fields"].items()
+                if k not in ("source_key", "task_epoch", "writer_marker")} == {
             "session": "s1", "verb": event["fields"]["verb"], "gate": row["gate"],
             "outcome": "pass" if row["passed"] else "refuse", "time": row["ts"]}
     refused = [e for e in gate_events if e["fields"]["outcome"] == "refuse"]
@@ -272,7 +273,8 @@ def test_judge_names_cover_every_set_current_judge_call():
             sources.append(path.name)
             passed |= _judge_names_passed(path)
 
-    assert sources == ["advisor.py", "grounding_judge.py", "driver.py"]
+    assert sources == ["advisor.py", "conditions.py", "grounding_judge.py", "procedure.py", "result_image.py",
+                       "driver.py"]
     assert len(passed) >= 18
     assert passed | {"unattributed"} == set(judge_ledger.JUDGE_NAMES)
 

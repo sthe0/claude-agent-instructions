@@ -571,7 +571,7 @@ def _attempt_problem(path: Path, offset) -> "str | None":
     return None
 
 
-def check_imported_coverage(conn) -> dict:
+def check_imported_coverage(conn, bound=None, known=frozenset()) -> dict:
     """Every transcript with usage fields has token rows and a last collector read that committed
     up to the last complete line it attempted; bytes appended since are listed, not counted."""
     uncovered, grown, covered, no_open_epoch = [], [], 0, 0
@@ -598,9 +598,10 @@ def check_imported_coverage(conn) -> dict:
             grown.append({"transcript": str(path), "bytes": size - offset["read_size"]})
         no_open_epoch += conn.execute("SELECT COUNT(*) FROM token_usage WHERE transcript = ? AND task_id IS NULL",
                                       (str(path),)).fetchone()[0]
-    judge = judge_ledger_coverage(conn)
+    judge = judge_ledger_coverage(conn, bound, known)
     return {"ok": not uncovered and not judge["failures"], "covered": covered, "uncovered": uncovered,
-            "judge": judge, "gaps": {"grown_since_read": grown, "no_open_epoch": no_open_epoch}}
+            "judge": judge, "failures": judge["failures"], "excused": judge["excused"],
+            "gaps": {"grown_since_read": grown, "no_open_epoch": no_open_epoch}}
 
 
 def _judge_call_lines(path: Path, limit: int):
@@ -619,15 +620,49 @@ def _judge_call_lines(path: Path, limit: int):
                 yield start, _sha(raw), obj
 
 
-def judge_ledger_coverage(conn) -> dict:
+NOT_REQUESTED_BEFORE_FIX = "usage_not_requested_before_fix"
+PRE_FIX_WRITER_NOT_REQUESTED = "pre_fix_writer:not_requested"
+PINNED_NOT_REQUESTED = "pinned_not_requested"
+
+
+def _not_requested_class(obj: dict, bound) -> str:
+    """How a not_requested line is read against the fix bound: a line its fixed writer marked
+    fails whatever its time; an unmarked line before the bound is the named loss of the writer the
+    fix replaced; an unmarked line at or after it was written by a process still running the
+    pre-fix code, and is listed under that writer."""
+    if obj.get(judge_ledger.WRITER_MARKER) or bound is None:
+        return "fail"
+    when = _line_time(obj.get("ts"))
+    if when is not None and when < bound:
+        return NOT_REQUESTED_BEFORE_FIX
+    return PRE_FIX_WRITER_NOT_REQUESTED
+
+
+def _line_time(ts) -> "datetime | None":
+    """A ledger line's ts, written as epoch seconds or as an ISO time."""
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        return datetime.fromtimestamp(ts, timezone.utc)
+    if isinstance(ts, str):
+        try:
+            moment = datetime.fromisoformat(ts)
+        except ValueError:
+            return None
+        return moment if moment.tzinfo else None
+    return None
+
+
+def judge_ledger_coverage(conn, bound=None, known=frozenset()) -> dict:
     """The judge ledger's call lines read so far, against their judge_usage rows. A line with usage
     and no row fails; a line written since usage is recorded (it carries usage_schema) with neither
-    usage nor a reason fails, and so does one whose Claude call never asked for usage; every other
-    reason is counted under its name (`usage_unavailable:<host id>`, `no_usage`, `unparsed`, …);
-    an older line without usage is listed, never counted as a failure."""
+    usage nor a reason fails, and so does one whose Claude call never asked for usage, unless the
+    fix `bound` (an aware datetime) excuses it (_not_requested_class); every other reason is
+    counted under its name (`usage_unavailable:<host id>`, `no_usage`, `unparsed`, …); an older
+    line without usage is listed, never counted as a failure. Excused lines whose invocation_id is
+    in `known` are counted apart."""
     path = judge_ledger.ledger_path()
     out = {"failures": [], "lines": 0, "with_usage": 0, "without_usage_before_schema": 0,
-           "without_usage_by_reason": {}}
+           "without_usage_by_reason": {},
+           "excused": {NOT_REQUESTED_BEFORE_FIX: [], PRE_FIX_WRITER_NOT_REQUESTED: [], PINNED_NOT_REQUESTED: 0}}
     offset = _offset_row(conn, path) if path.exists() else None
     if offset is None:
         return out
@@ -635,18 +670,27 @@ def judge_ledger_coverage(conn) -> dict:
     rows = {r[0] for r in conn.execute("SELECT ledger_row_id FROM judge_usage")}
     for start, sha, obj in _judge_call_lines(path, offset["byte_offset"]):
         out["lines"] += 1
-        where = {"offset": start, "judge": obj["judge"]}
+        where = {"offset": start, "judge": obj["judge"], "invocation_id": obj.get("invocation_id"),
+                 "epoch": obj.get("ts"), "test_run": False,
+                 "writer_attribute": bool(obj.get(judge_ledger.WRITER_MARKER))}
         if isinstance(obj.get("usage"), dict):
             out["with_usage"] += 1
             if store.imported_row_id(str(path), start, sha, origin) not in rows:
-                out["failures"].append({**where, "reason": "judge_line_without_row"})
+                out["failures"].append({**where, "class": "judge_line_without_row", "reason": "judge_line_without_row"})
         elif "usage_schema" not in obj:
             out["without_usage_before_schema"] += 1
         elif obj.get("usage_reason"):
             reasons = out["without_usage_by_reason"]
             reasons[obj["usage_reason"]] = reasons.get(obj["usage_reason"], 0) + 1
-            if obj["usage_reason"] == host_llm.USAGE_NOT_REQUESTED:
-                out["failures"].append({**where, "reason": "judge_line_usage_not_requested"})
+            if obj["usage_reason"] != host_llm.USAGE_NOT_REQUESTED:
+                continue
+            verdict = _not_requested_class(obj, bound)
+            if verdict == "fail":
+                out["failures"].append({**where, "class": "judge_line_usage_not_requested",
+                                        "reason": "judge_line_usage_not_requested"})
+                continue
+            out["excused"][verdict].append(where)
+            out["excused"][PINNED_NOT_REQUESTED] += obj.get("invocation_id") in known
         else:
-            out["failures"].append({**where, "reason": "judge_line_without_usage"})
+            out["failures"].append({**where, "class": "judge_line_without_usage", "reason": "judge_line_without_usage"})
     return out

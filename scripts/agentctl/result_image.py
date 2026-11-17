@@ -35,12 +35,15 @@ from __future__ import annotations
 
 import re
 
+from lib import judge_ledger
+from lib.runtime_models import HOST_CLAUDE
+
+from . import advisor
 from .text_shape import normalize_string
 
-# The judge model and its budget. Same tier as advisor.judge_binary_ask: this is
-# a one-bit classification over a couple of sentences, and it sits in front of a
-# warning, so it may never be worth a slow turn.
-_JUDGE_MODEL = "haiku"
+# The judge's budget. Same tier as advisor.judge_binary_ask: this is a one-bit
+# classification over a couple of sentences, and it sits in front of a warning,
+# so it may never be worth a slow turn.
 _JUDGE_TIMEOUT_S = 8
 
 # Clause boundaries. The prefilter reads an image as a sequence of clauses rather
@@ -217,7 +220,12 @@ def judge_echo(
     try:
         control = (verify_command or done_criterion or "(none declared)").strip()
         prompt = _ECHO_JUDGE_PROMPT.format(control=control, image=image)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        argv = advisor._prompt_argv(HOST_CLAUDE, advisor._JUDGE_COMPLEXITY)
+        judge_ledger.begin_attributed_call("result_image_echo")
+        try:
+            result = runner(argv, timeout=timeout, stdin=prompt)
+        finally:
+            judge_ledger.set_current_judge(None)
         if result.returncode != 0:
             return False
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]

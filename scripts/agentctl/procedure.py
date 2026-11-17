@@ -46,11 +46,14 @@ from __future__ import annotations
 
 import re
 
+from lib import judge_ledger
+from lib.runtime_models import HOST_CLAUDE
+
+from . import advisor
 from .text_shape import normalize_string as _normalize_string
 
 # Same tier and budget as result_image's and conditions' judges: a one-bit
 # classification over a sentence or two.
-_JUDGE_MODEL = "haiku"
 _JUDGE_TIMEOUT_S = 8
 
 #: Word-overlap (Jaccard over token sets) at or above which the pair is worth a model's
@@ -170,7 +173,12 @@ def judge_collapse(
         return False
     try:
         prompt = _COLLAPSE_JUDGE_PROMPT.format(method=method, procedure=procedure)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        argv = advisor._prompt_argv(HOST_CLAUDE, advisor._JUDGE_COMPLEXITY)
+        judge_ledger.begin_attributed_call("procedure_collapse")
+        try:
+            result = runner(argv, timeout=timeout, stdin=prompt)
+        finally:
+            judge_ledger.set_current_judge(None)
         if result.returncode != 0:
             return False
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]

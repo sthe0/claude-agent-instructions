@@ -10,7 +10,8 @@
     telemetry.py check-profile-unchanged --reference F --premises P --transcripts-snapshot T
     telemetry.py align-causes [--inputs DIR] [--draft | --text-out FILE | --report]
     telemetry.py check-causes --imported --expect N
-    telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)
+    telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage
+        [--not-requested-until-landing F] [--not-requested-known K]) [--json]
     telemetry.py check-events --task <id> [--unrecorded-window F]
         [--known-losses K (--known-losses-until TS | --known-losses-until-landing F2)]
     telemetry.py check-latency --max-seconds S --since-landing F
@@ -61,7 +62,11 @@ leave the exit unchanged. It exits 1 on a mismatch, an expected judge call (a ju
 task) with no ledger row, or a missing context birth `--require-spawn` / `--require-compaction`
 asks for. `--imported-coverage` exits 1 unless every transcript with usage lines has a last
 collector read that committed up to its last complete line, with a token row per message id read.
-Both exit 2 on a usage error.
+`--not-requested-until-landing F` bounds the fix of the judge writer that never asked for usage:
+an unmarked not_requested line before the landing is listed under `usage_not_requested_before_fix`,
+one at or after it under `pre_fix_writer:not_requested`; a line carrying `writer_marker` fails.
+`--not-requested-known K` (judge-ledger JSONL) counts the excused lines it pins apart. `--json`
+prints `failures` and `excused` at the top level. Both exit 2 on a usage error.
 
 `check-events --task <id>` matches every engine-history command and gate evaluation of the task's
 sessions to its live event row and exits 1 on an unmatched act; an act inside the
@@ -202,10 +207,23 @@ def _check_causes(args) -> int:
     return 0 if result["ok"] else 1
 
 
+def _known_invocation_ids(path: str) -> frozenset:
+    """The invocation_ids of a JSONL file of judge-ledger lines."""
+    with open(path, encoding="utf-8") as handle:
+        return frozenset(json.loads(line)["invocation_id"] for line in handle if line.strip())
+
+
 def _check_tokens(args) -> int:
-    from lib.telemetry import tokens
+    from lib.telemetry import report, tokens
     if not args.task and not args.imported_coverage:
         print("check-tokens: give --task <id> or --imported-coverage", file=sys.stderr)
+        return 2
+    try:
+        landing = _read_json_file(args.not_requested_until_landing, None) \
+            if args.not_requested_until_landing else None
+        known = _known_invocation_ids(args.not_requested_known) if args.not_requested_known else frozenset()
+    except (OSError, ValueError, KeyError, TypeError) as err:
+        print(f"check-tokens: {err}", file=sys.stderr)
         return 2
     conn = store.open_readonly()
     if conn is None:
@@ -213,9 +231,13 @@ def _check_tokens(args) -> int:
         return 2
     try:
         if args.imported_coverage:
-            result = tokens.check_imported_coverage(conn)
+            bound = report.outage_end_from_landing(conn, landing) if landing is not None else None
+            result = tokens.check_imported_coverage(conn, bound, known)
         else:
             result = tokens.check_task(conn, args.task, args.require_spawn, args.require_compaction)
+    except (ValueError, TypeError, KeyError) as err:
+        print(f"check-tokens: {err}", file=sys.stderr)
+        return 2
     finally:
         conn.close()
     print(json.dumps(result, sort_keys=True))
@@ -277,7 +299,7 @@ def _check_record(args) -> int:
             outage = (outage_from, outage_until) if outage_from is not None else None
             result = report.check_latency(conn, args.max_seconds, landed_at, datetime.now(timezone.utc),
                                           outage, entries if isinstance(entries, list) else None)
-    except (report.LatencyInputError, report.KnownLossError) as err:
+    except (report.KnownLossError, ValueError, TypeError, KeyError) as err:
         print(f"{args.command}: {err}", file=sys.stderr)
         return 2
     finally:
@@ -353,6 +375,9 @@ def main(argv=None) -> int:
     tok.add_argument("--require-spawn", action="store_true", help="exit 1 without a spawn context birth")
     tok.add_argument("--require-compaction", action="store_true", help="exit 1 without a compaction")
     tok.add_argument("--imported-coverage", action="store_true")
+    tok.add_argument("--not-requested-until-landing", metavar="F", help="landing record bounding the judge-writer fix")
+    tok.add_argument("--not-requested-known", metavar="K", help="judge-ledger JSONL of pinned not_requested lines")
+    tok.add_argument("--json", action="store_true", help="print the result as JSON (the default output)")
     evt = sub.add_parser("check-events", help="check that every engine act of a task has its event row")
     evt.add_argument("--task", required=True)
     evt.add_argument("--unrecorded-window", default=None, help="JSON file with unrecorded_window {from, to}")

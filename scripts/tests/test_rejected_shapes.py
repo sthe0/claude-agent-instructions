@@ -140,12 +140,12 @@ def _omit(label: str, path: Path) -> str:
 
 
 def _judge(verdict: str):
-    def run(argv, timeout=None):
+    def run(argv, timeout=None, stdin=""):
         return RunResult(0, verdict + "\n", "")
     return run
 
 
-def _judge_unavailable(argv, timeout=None):
+def _judge_unavailable(argv, timeout=None, stdin=""):
     """The judge cannot be reached — the shape a missing/failing `claude -p` takes."""
     return RunResult(1, "", "no such model")
 

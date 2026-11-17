@@ -153,12 +153,12 @@ def _write_plan(path: Path, *, conditions: str, preconditions: str | None) -> st
 
 def _judge(verdict: str):
     """A judge runner that always answers `verdict`."""
-    def run(argv, timeout=None):
+    def run(argv, timeout=None, stdin=""):
         return RunResult(0, verdict + "\n", "")
     return run
 
 
-def _judge_unavailable(argv, timeout=None):
+def _judge_unavailable(argv, timeout=None, stdin=""):
     """The judge cannot be reached — the shape a missing/failing `claude -p` takes."""
     return RunResult(1, "", "no such model")
 
@@ -279,8 +279,8 @@ def test_genuine_conditions_never_reach_the_preconditions_refusal(store, tmp_pat
 
     asked: list[str] = []
 
-    def counting_judge(argv, timeout=None):
-        asked.extend(argv)
+    def counting_judge(argv, timeout=None, stdin=""):
+        asked.append(stdin)
         return RunResult(0, "RESTATEMENT\n", "")
 
     d = _submit(store, plan, counting_judge)
