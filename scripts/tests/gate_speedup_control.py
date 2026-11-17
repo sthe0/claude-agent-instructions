@@ -2060,8 +2060,10 @@ def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool, warm_store:
     rewritten_by_name = {name: reported[0] for name, reported in declared.items() if reported}
     if MUTATION_ONLY not in rewritten_by_name:
         raise SystemExit(f"catalogue {MUTATION_ONLY} is not registered or cannot be resolved")
+    own_warm: Path | None = None
     if drop_from_key and warm_store is None:
-        raise SystemExit("--drop-from-key needs --warm-store: the files are picked from a store keyed without the exclusion")
+        own_warm = Path(f"/tmp/cls-control-{os.getpid()}-warm.sqlite")
+        save_warm_store, warm_store = (save_warm_store or own_warm), None
     saved = os.environ.get(catalogue_key.EXCLUDE_ENV)
     os.environ.pop(catalogue_key.EXCLUDE_ENV, None)
     picks: dict[str, tuple[str, str]] = {}
@@ -2103,10 +2105,12 @@ def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool, warm_store:
                 seen = observe(exp, state)
         if drop_from_key:
             os.environ[catalogue_key.EXCLUDE_ENV] = picks["b"][0]
-            with Experiment(repo, "mutation", warm_store) as exp:
+            with Experiment(repo, "mutation", warm_store or save_warm_store) as exp:
                 state = exp.prepare()
                 seen = observe(exp, state)
     finally:
+        if own_warm is not None and own_warm.name.startswith("cls-control-"):
+            own_warm.unlink(missing_ok=True)
         if saved is None:
             os.environ.pop(catalogue_key.EXCLUDE_ENV, None)
         else:

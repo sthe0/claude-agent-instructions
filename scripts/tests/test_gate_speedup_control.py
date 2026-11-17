@@ -940,6 +940,30 @@ def test_the_mutation_scenario_restores_the_key_exclusion_when_it_stops_early(mo
     assert os.environ[control.catalogue_key.EXCLUDE_ENV] == "scripts/kept.py"
 
 
-def test_the_mutation_drop_control_refuses_to_start_without_a_warm_store():
-    with pytest.raises(SystemExit, match="warm-store"):
+def test_the_mutation_drop_control_without_a_warm_store_saves_its_own_copy_and_removes_it(monkeypatch):
+    saved = []
+
+    class FakeExperiment:
+        store = Path("/nonexistent/store.sqlite")
+
+        def __init__(self, *_args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def prepare(self):
+            return {"registry": None, "deps": {}}
+
+    def fake_copy(_source, target):
+        Path(target).write_text("copy")
+        saved.append(Path(target))
+
+    monkeypatch.setattr(control, "Experiment", FakeExperiment)
+    monkeypatch.setattr(control.result_store, "copy_store", fake_copy)
+    with pytest.raises(Exception):
         control.mutation_scenario(control.REPO_DIR, Path("/nonexistent/out.json"), drop_from_key=True)
+    assert len(saved) == 1 and saved[0].name.startswith("cls-control-") and not saved[0].exists()
