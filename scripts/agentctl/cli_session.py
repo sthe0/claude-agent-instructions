@@ -22,6 +22,8 @@ from .render import build_site_prompt
 from .state import CriterionType, Node, SessionState
 from .store import StateStore
 from .cli_common import (
+    EvidenceDirError,
+    _evidence_session_dir,
     _flush_order_effort,
     _adopt_parent_difficulty,
     _adopt_norm_handoff,
@@ -152,12 +154,29 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     state_file = config_root.resolve_agentctl_state_file(args.session)
     if state_file is not None:
         delivery.delete_stamp(state_file)
-    return Directive(
-        True, new.node, "classify",
-        (f"resolved task re-opened (reopen #{reentry_count + 1}); run classify"
-         if reopening else "session re-armed for new task; run classify"),
-        data={"resolved_reentry_count": reentry_count + 1} if reopening else {},
+    detail = (
+        f"resolved task re-opened (reopen #{reentry_count + 1}); run classify"
+        if reopening else "session re-armed for new task; run classify"
     )
+    data = {"resolved_reentry_count": reentry_count + 1} if reopening else {}
+    absent = _absent_evidence_dir(args.session) if reopening else None
+    if absent is not None:
+        detail += (
+            f"; the session's evidence directory {absent} is absent (the core-session-state reaper removes "
+            "a resolved session's evidence after its retention, and a session that never dispatched a stage has none) "
+            "— the earlier stages' logs, if any, are gone; the next dispatch creates the directory again"
+        )
+        data["evidence_absent"] = str(absent)
+    return Directive(True, new.node, "classify", detail, data=data)
+
+
+def _absent_evidence_dir(session_id: str) -> Path | None:
+    """The session's evidence directory when it does not exist, None when it exists or no durable root resolves."""
+    try:
+        session_dir = _evidence_session_dir(session_id, "stage").parent
+    except EvidenceDirError:
+        return None
+    return None if session_dir.exists() else session_dir
 
 
 def cmd_plugin_activate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

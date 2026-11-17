@@ -54,6 +54,10 @@ TEMP_RESIDUE = "reaper/builtin/temp_residue.py"
 T_LIVENESS = "tests/test_reaper_liveness.py"
 T_RESIDUE = "tests/test_reaper_temp_residue.py"
 T_HOLDERS = "tests/test_reaper_holders.py"
+CORE_STATE = "reaper/builtin/core_session_state.py"
+T_CORE_STATE = "tests/test_reaper_core_session_state.py"
+CLI_SESSION = "agentctl/cli_session.py"
+T_REOPEN = "tests/test_agentctl_reopen_evidence.py"
 
 TIMER_SCRIPT = "install-reaper-timer.sh"
 OPT_IN = "reaper/opt_in.py"
@@ -348,7 +352,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "pressure-cooldown": Mutant(
         RUNNER,
-        "elapsed = prev is None or (ctx.now - prev) >= PRESSURE_COOLDOWN_MIN * 60.0",
+        "elapsed = ignore_cooldown or prev is None or (ctx.now - prev) >= PRESSURE_COOLDOWN_MIN * 60.0",
         "elapsed = True",
         _ids(T_PRESSURE, "test_cooldown_not_elapsed_is_not_due",
              "test_a_second_pass_inside_the_cooldown_does_not_run"),
@@ -938,6 +942,125 @@ CATALOGUE: "dict[str, Mutant]" = {
         TIMER_SCRIPT, "ExecStart=$PYTHON $HOOK --force-run\n", "ExecStart=$PYTHON $HOOK --force-run --on-pressure\n",
         _ids(T_RUNNER, GUARD),
     ),
+    "core-state-no-session-removed": Mutant(
+        CORE_STATE, "    if not tied:\n", "    if False:\n",
+        _ids(T_CORE_STATE, "test_an_entry_no_state_names_is_kept_untied"),
+    ),
+    "core-state-unresolved-removed": Mutant(
+        CORE_STATE, '    if root_state.get("node") != RESOLVED_NODE:\n', "    if False:\n",
+        _ids(T_CORE_STATE, "test_a_lineage_root_that_is_not_resolved_keeps_the_entry"),
+    ),
+    "core-state-retention-ignored": Mutant(
+        CORE_STATE, "    if idle < retention_s:\n", "    if False:\n",
+        _ids(
+            T_CORE_STATE,
+            "test_a_lineage_younger_than_the_retention_is_kept",
+            "test_the_end_of_a_child_run_counts_as_the_lineage_age",
+        ),
+    ),
+    "core-state-retention-floor": Mutant(
+        CORE_STATE, "    if value < RETENTION_FLOOR_DAYS:\n", "    if value < 1:\n",
+        _ids(T_CORE_STATE, "test_a_retention_below_the_floor_keeps_and_the_floor_itself_is_accepted"),
+    ),
+    "core-state-ancestor-live-ignored": Mutant(
+        CORE_STATE, "    for member in tree.members:\n", "    for member in tree.members & {entry}:\n",
+        _ids(T_CORE_STATE, "test_a_live_run_of_an_ancestor_holds_the_descendants_entries"),
+    ),
+    "core-state-child-open-ignored": Mutant(
+        CORE_STATE,
+        '    return run.get("ended") is None and child_runs.pid_alive(run.get("dispatcher_pid"))\n',
+        "    return False\n",
+        _ids(
+            T_CORE_STATE,
+            "test_a_running_child_holds_the_resolved_root_and_every_session_of_the_lineage",
+            "test_a_live_run_of_an_ancestor_holds_the_descendants_entries",
+        ),
+    ),
+    "core-state-child-must-resolve": Mutant(
+        CORE_STATE, "    root_state = world.states[tree.root] or {}\n", "    root_state = world.states[name] or {}\n",
+        _ids(T_CORE_STATE, "test_a_child_is_judged_by_its_lineage_root_not_by_its_own_node"),
+    ),
+    "core-state-ended-child-holds": Mutant(
+        CORE_STATE,
+        '    return run.get("ended") is None and child_runs.pid_alive(run.get("dispatcher_pid"))\n',
+        '    return child_runs.pid_alive(run.get("dispatcher_pid"))\n',
+        _ids(T_CORE_STATE, "test_a_run_with_ended_set_releases_even_under_a_living_dispatcher"),
+    ),
+    "core-state-closed-dead-holds": Mutant(
+        CORE_STATE,
+        '    return run.get("ended") is None and child_runs.pid_alive(run.get("dispatcher_pid"))\n',
+        '    return run.get("ended") is not None or child_runs.pid_alive(run.get("dispatcher_pid"))\n',
+        _ids(T_CORE_STATE, "test_a_closed_run_under_a_dead_dispatcher_releases"),
+    ),
+    "core-state-dead-dispatcher-holds": Mutant(
+        CORE_STATE,
+        '    return run.get("ended") is None and child_runs.pid_alive(run.get("dispatcher_pid"))\n',
+        '    return run.get("ended") is None\n',
+        _ids(T_CORE_STATE, "test_an_open_run_under_a_dead_dispatcher_releases"),
+    ),
+    "core-state-reaper-writes-state": Mutant(
+        CORE_STATE, "    pending = [tree.root]\n",
+        '    (world.state_dir / f"{tree.root}.json").touch()\n    pending = [tree.root]\n',
+        _ids(T_CORE_STATE, "test_the_reaper_reads_engine_state_and_never_writes_it"),
+    ),
+    "core-state-lineage-not-transitive": Mutant(
+        CORE_STATE, "        pending.extend(kids)\n", "        pending.extend(kids if member == tree.root else ())\n",
+        _ids(T_CORE_STATE, "test_a_running_child_holds_the_resolved_root_and_every_session_of_the_lineage"),
+    ),
+    "core-state-lineage-unreadable-removes": Mutant(
+        CORE_STATE, "    if tree.unreadable:\n", "    if False:\n",
+        _ids(T_CORE_STATE, "test_a_lineage_that_cannot_be_read_in_full_keeps_every_entry_of_it"),
+    ),
+    "core-state-k1-holder-ignored": Mutant(
+        CORE_STATE, "sweep=world.sweep", "sweep=liveness.HolderSweep()",
+        _ids(T_CORE_STATE, "test_a_process_holding_the_entry_keeps_it"),
+    ),
+    "core-state-k1-floor-not-retention": Mutant(
+        CORE_STATE, "floor_s=retention_s", "floor_s=3 * 86400.0",
+        _ids(T_CORE_STATE, "test_fresh_content_keeps_the_entry_for_the_retention_not_for_a_shorter_floor"),
+    ),
+    "core-state-k1-idle-floor-ignored": Mutant(
+        CORE_STATE, "floor_s=retention_s", "floor_s=0.0",
+        _ids(T_CORE_STATE, "test_fresh_content_keeps_the_entry_for_the_retention_not_for_a_shorter_floor"),
+    ),
+    "core-state-reader-guard-blind": Mutant(
+        TEMP_RESIDUE, 'SANDBOX_KIND = "instruction-sandbox"\n', 'SANDBOX_KIND = "instruction-sandbox"\nSTRAY = "agent-reviews"\n',
+        _ids(T_CORE_STATE, "test_no_script_outside_the_in_session_readers_names_the_evidence_resolver_path_or_agent_reviews"),
+    ),
+    "core-state-retention-unset-removes": Mutant(
+        CORE_STATE, "        return None, RETENTION_UNSET\n", "        return RETENTION_FLOOR_DAYS, None\n",
+        _ids(T_CORE_STATE, "test_without_a_retention_nothing_is_removable_and_the_slug_says_why"),
+    ),
+    "core-state-remove-no-rejudge": Mutant(
+        CORE_STATE, "    if judgment.action != REMOVE:\n", "    if False:\n",
+        _ids(T_CORE_STATE, "test_remove_judges_again_and_refuses_what_became_held_or_young"),
+    ),
+    "core-state-follows-symlink": Mutant(
+        CORE_STATE,
+        "    return [os.path.join(store.base, name) for name in names]\n",
+        "    return [os.path.realpath(os.path.join(store.base, name)) for name in names]\n",
+        _ids(T_CORE_STATE, "test_a_symlink_in_a_store_is_not_followed_and_one_inside_an_entry_is_not_entered"),
+    ),
+    "core-state-crosses-filesystem": Mutant(
+        CORE_STATE, "root_dev=store.dev,", "root_dev=-1,",
+        _ids(T_CORE_STATE, "test_a_directory_on_another_filesystem_is_not_walked_into"),
+    ),
+    "core-state-optin": Mutant(
+        CORE_STATE, "    enabled = opt_in.enabled(NAME)\n", "    enabled = True\n",
+        _ids(T_CORE_STATE, "test_without_the_opt_in_a_live_pass_keeps_what_it_would_remove_and_a_dry_run_shows_remove"),
+    ),
+    "core-state-pressure-paths": Mutant(
+        CORE_STATE, "    return [s.base for s in _stores()]\n", "    return []\n",
+        _ids(
+            T_CORE_STATE,
+            "test_the_pressure_paths_are_the_existing_store_roots",
+            "test_a_pressure_pass_removes_the_removable_entries_and_nothing_else",
+        ),
+    ),
+    "reopen-absence-silent": Mutant(
+        CLI_SESSION, "    absent = _absent_evidence_dir(args.session) if reopening else None\n", "    absent = None\n",
+        _ids(T_REOPEN, "test_a_reopen_whose_evidence_directory_is_gone_reports_the_path_and_still_reopens"),
+    ),
 }
 
 
@@ -969,6 +1092,7 @@ def _run_child(subject: Path, ids: "tuple[str, ...]", xml_path: Path) -> int:
 def _copy_subject(parent: Path) -> Path:
     subject = parent / "scripts"
     shutil.copytree(SCRIPTS_DIR, subject, symlinks=True, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+    shutil.copy2(SCRIPTS_DIR.parent / "config.md", parent / "config.md")
     return subject
 
 
@@ -1022,7 +1146,10 @@ def run_control() -> int:
         if early is not None:
             print(f"control: {description}", file=sys.stderr)
             return CONTROL_RED
-        return 0 if all(s == "passed" for s in description.split(",")) else CONTROL_RED
+        failing = [node for node, status in zip(ids, description.split(",")) if status != "passed"]
+        for node in failing:
+            print(f"control: {node} did not pass", file=sys.stderr)
+        return CONTROL_RED if failing else 0
 
 
 def main(argv: "list[str] | None" = None) -> int:
