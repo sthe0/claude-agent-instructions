@@ -1826,7 +1826,8 @@ def parse_report_only(items) -> frozenset:
     for item in items or []:
         limit, _, path = item.partition(":")
         if limit != "R3" or path not in ("event", "stat"):
-            raise SystemExit(f"bad --report-only {item!r}; use R3:event or R3:stat")
+            print(f"verify-acceptance: bad --report-only {item!r}; use R3:event or R3:stat", file=sys.stderr)
+            raise SystemExit(EXIT_BAD)
         out.add((limit, path))
     return frozenset(out)
 

@@ -1600,8 +1600,9 @@ def test_report_only_keeps_stat_coverage_judged(tmp_path, trees):
     report = report_only_report(tmp_path, trees)
     report["r3"]["runs"] = [r for r in report["r3"]["runs"] if not (r["path"] == "stat" and r["arm"] == "new")]
     assert acceptance(tmp_path, report, trees, "--report-only", "R3:stat") == 1
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as bad:
         acceptance(tmp_path, report_only_report(tmp_path, trees), trees, "--report-only", "R1:stat")
+    assert bad.value.code == 2
 
 
 def test_r1_judged_on_cpu_time(capsys):
