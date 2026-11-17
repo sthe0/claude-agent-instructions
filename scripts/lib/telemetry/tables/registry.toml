@@ -1,4 +1,4 @@
-version = 3
+version = 4
 
 [[members]]
 name = "cli:accept"
@@ -1543,3 +1543,11 @@ part_of = []
 place = "mandate_cycle"
 source_keys = ["judge:mandate_cycle_judge"]
 calling_modules = ["scripts/mandate_cycle/driver.py"]
+
+[[members]]
+name = "hook:hook-guard-pgrep-wait"
+since = 4
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["hook:hook-guard-pgrep-wait"]
