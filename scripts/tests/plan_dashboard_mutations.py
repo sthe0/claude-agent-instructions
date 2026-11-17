@@ -1518,6 +1518,27 @@ def _latency_from_the_last_write(original):
     return lambda stamps, earlier_ends, change_ns, end_ns: (change_ns, False)
 
 
+def _stat_due_as_sweep_start(original):
+    return lambda cycles, sweeps, offset, resolution: _module("plan_dashboard_harness").due_sets(
+        cycles, sweeps, offset, resolution)
+
+
+def _closing_sweep_skipped(original):
+    return lambda taker, screen_ids, **kwargs: None
+
+
+def _report_only_unapplied(original):
+    return lambda items: (original(items), frozenset())[1]
+
+
+def _r1_from_wall(original):
+    def mutated(name, cell, limits):
+        runs = [dict(r, first_rows_cpu_s=r.get("first_rows_s")) if r.get("arm") == "new" else r
+                for r in cell.get("runs", [])]
+        return original(name, dict(cell, runs=runs), limits)
+    return mutated
+
+
 LAUNCHER = "plan_dashboard_cli"
 HARNESS = "plan_dashboard_harness"
 FILE_MODULES = {LAUNCHER: Path(__file__).resolve().parents[1] / "plan-dashboard.py",
@@ -1554,6 +1575,12 @@ SCRIPT_MODULE_MUTATIONS = {
     "r3-cell-counts-pooled": (HARNESS, "counted_runs", _counted_runs_ignore_the_path),
     "r3-latency-from-last-write": (HARNESS, "first_unshown_change_ns", _latency_from_the_last_write),
     "save-exit-wait-short": (HARNESS, "SAVE_EXIT_WAIT_S", lambda _original: 6.0),
+    "stat-sweep-every-cycle-end": (HARNESS, "STAT_SWEEP_EVERY", lambda _original: 1),
+    "stat-due-by-sweep-start": (HARNESS, "due_by_change_time", _stat_due_as_sweep_start),
+    "stat-no-closing-sweep": (HARNESS, "closing_sweep", _closing_sweep_skipped),
+    "smoke-void-counted": (HARNESS, "record_counted", lambda _original: (lambda record: True)),
+    "report-only-ignored": (HARNESS, "parse_report_only", _report_only_unapplied),
+    "r1-from-wall": (HARNESS, "judge_cell_r1", _r1_from_wall),
 }
 
 

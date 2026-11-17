@@ -56,6 +56,7 @@ STREAM_SCREEN_MAX_MS = 20.0
 MIN_RUNS, MAX_RUNS, SPREAD_TARGET = 5, 30, 0.05
 R3_CYCLES, R3_MIN_RUNS, K1_MIN_RUNS = 20, 5, 3
 R3_RUN_CAP_S = 660
+STAT_SWEEP_EVERY = 4
 WATCH_ENV = "PLAN_DASHBOARD_WATCH"
 INTERLEAVE_EVERY = 3
 REDRAW_SPACING_MIN_S = 0.5
@@ -447,6 +448,7 @@ class Trace:
         self.exit_code: int | None = None
         self.display: list[str] = []
         self.child_samples: list[tuple[float, int]] = []
+        self.first_rows_cpu_s: float | None = None
         self.wall_minus_mono_ns = time.time_ns() - time.monotonic_ns()
 
     def seconds(self, t_ns: int) -> float:
@@ -486,6 +488,25 @@ def descendants(root_pid: int) -> int:
         frontier = {pid for pid, ppid in parent.items() if ppid in frontier}
         count += len(frontier)
     return count
+
+
+def proc_tree_cpu_s(root_pid: int, proc_root: str = "/proc") -> float:
+    """CPU seconds (utime, stime, cutime, cstime) of ``root_pid`` and every process below it, read from
+    ``proc_root``/<pid>/stat; the time a launched process tree has spent, whatever the machine's load."""
+    stats = {}
+    for entry in os.listdir(proc_root):
+        if not entry.isdigit():
+            continue
+        try:
+            fields = Path(proc_root, entry, "stat").read_text().rsplit(")", 1)[1].split()
+            stats[int(entry)] = (int(fields[1]), sum(int(f) for f in fields[11:15]))
+        except (OSError, ValueError, IndexError):
+            continue
+    tree, frontier = {root_pid} & set(stats), {root_pid}
+    while frontier:
+        frontier = {pid for pid, (ppid, _) in stats.items() if ppid in frontier and pid not in tree}
+        tree |= frontier
+    return sum(stats[pid][1] for pid in tree) / os.sysconf("SC_CLK_TCK")
 
 
 EVENTS_SLOT = "<events-pipe>"
@@ -578,6 +599,8 @@ def run_pty(argv: list[str], *, cwd: Path, env: dict, events: bool, max_s: float
                     if key != last_state:
                         last_state = key
                         trace.frames.append((trace.seconds(stamp), parsed))
+                        if trace.first_rows_cpu_s is None and parsed and parsed["rows"]:
+                            trace.first_rows_cpu_s = proc_tree_cpu_s(pid)
                 else:
                     partial += data
                     *lines, partial = partial.split(b"\n")
@@ -809,12 +832,19 @@ def summarize_run(trace_like: dict, *, arm: str, changed_count: int | None, chan
     frames = [(t, f) for t, f in trace_like["frames"]]
     screen = screen_summary(frames)
     first_ids = set(next((f["rows"] for _, f in frames if f and f["rows"]), {}))
-    record = {"arm": arm, "changed_count": changed_count, "load1": load1, **screen}
+    record = {"arm": arm, "changed_count": changed_count, "load1": load1, **screen,
+              "first_rows_cpu_s": trace_like.get("first_rows_cpu_s") if screen["first_rows_s"] is not None else None}
     record.update(event_summary(trace_like["events"], trace_like["t0_ns"], arm=arm, first_screen_ids=first_ids,
                                 changes=changes, first_row_marks=screen["first_rows_marks"]))
     record.update(redraw_summary(trace_like["events"]))
     record["marks_screen_s"] = marks_screen_s(record)
     return record
+
+
+def run_view(trace) -> dict:
+    """What ``summarize_run`` reads of a finished run."""
+    return {"frames": trace.frames, "events": trace.events, "t0_ns": trace.t0_ns,
+            "first_rows_cpu_s": trace.first_rows_cpu_s}
 
 
 def marks_screen_s(run: dict) -> float | None:
@@ -887,17 +917,26 @@ def start_thread(job) -> None:
 
 class SweepTaker:
     """Takes a sweep of the sources at a ``cycle_end`` when none is running, in a thread of its own so the terminal
-    reader never waits; each sweep is stamped with its start and end on the monotonic clock."""
+    reader never waits; each sweep is stamped with its start and end on the monotonic clock. On the stat path
+    (``stat_path``) the first ``cycle_end`` takes the baseline sweep and a later one takes a sweep only when
+    ``STAT_SWEEP_EVERY`` ``cycle_end`` events have arrived since the previous sweep ended, so cycles in between share
+    the machine with no sweep."""
 
-    def __init__(self, take, spawn=start_thread, now=time.monotonic_ns):
-        self.take, self.spawn, self.now = take, spawn, now
+    def __init__(self, take, spawn=start_thread, now=time.monotonic_ns, stat_path: bool = False):
+        self.take, self.spawn, self.now, self.stat_path = take, spawn, now, stat_path
         self.sweeps: list[dict] = []
         self.busy = False
+        self.started = False
+        self.arrived = 0
 
     def on_event(self, trace, event) -> None:
         if event.get("ev") != "cycle_end" or self.busy:
             return
-        self.busy = True
+        if self.stat_path and self.started:
+            self.arrived += 1
+            if self.arrived < STAT_SWEEP_EVERY:
+                return
+        self.busy, self.started = True, True
         screen_ids, start = ContractWatcher.screen_ids(trace.frames), self.now()
         self.spawn(lambda: self.sweep(screen_ids, start))
 
@@ -906,7 +945,18 @@ class SweepTaker:
             changes = self.take(screen_ids)
             self.sweeps.append({"start_ns": start, "end_ns": self.now(), "changes": changes})
         finally:
-            self.busy = False
+            self.busy, self.arrived = False, 0
+
+
+def closing_sweep(taker: SweepTaker, screen_ids: set[str], *, sleep=time.sleep, wait_s: float = 60.0) -> None:
+    """One more sweep, after the run's last cycle and the end of any sweep still running: it finds the changes
+    written after the last sweep. It starts after the last cycle, so no cycle shares the machine with it, and it
+    judges coverage only."""
+    deadline = time.monotonic() + wait_s
+    while taker.busy and time.monotonic() < deadline:
+        sleep(0.05)
+    taker.busy = True
+    taker.sweep(screen_ids, taker.now())
 
 
 IN_MODIFY, IN_MOVED_TO, IN_CREATE, IN_DELETE, IN_Q_OVERFLOW = 0x2, 0x80, 0x100, 0x200, 0x4000
@@ -984,6 +1034,17 @@ def due_sets(cycles: list[dict], sweeps: list[dict], wall_minus_mono_ns: int, re
         out[cycle["cycle"]] = [c for c in pool if c["change_ns"] <= limit]
         pool = [c for c in pool if c["change_ns"] > limit]
     return out
+
+
+def due_by_change_time(cycles: list[dict], sweeps: list[dict], wall_minus_mono_ns: int,
+                       resolution_ns: int) -> dict[int, list[dict]]:
+    """Per cycle, every change any sweep found that happened at least one mtime resolution before the cycle's start,
+    whichever sweep found it: on the stat path sweeps are sparse, so a change is due from its own time, not from the
+    next sweep. A source written twice between two sweeps is judged on its last write only (a stat sweep cannot see
+    the earlier one), a window of up to about ``STAT_SWEEP_EVERY`` cycles instead of one."""
+    found = [c for sweep in sorted(sweeps, key=lambda s: s["start_ns"]) for c in sweep["changes"]]
+    return {cycle["cycle"]: [c for c in found if c["change_ns"] <= cycle["start_ns"] + wall_minus_mono_ns - resolution_ns]
+            for cycle in cycles}
 
 
 def applying_cycle(by_number: dict[int, dict], cycle_no: int, path: str, change_mono_ns: int) -> int | None:
@@ -1171,11 +1232,11 @@ def time_over_limit(values: list, limit: float) -> bool:
 def judge_cell_r1(name: str, cell: dict, limits: dict) -> list[str]:
     new = runs_of(cell, "new")
     misses = []
-    values = [r.get("first_rows_s") for r in new]
+    values = [r.get("first_rows_cpu_s") for r in new]
     if len(new) < MIN_RUNS or len(runs_of(cell, "old")) < MIN_RUNS:
         return [f"{name}: fewer than {MIN_RUNS} runs"]
     if time_over_limit(values, limits["R1"]):
-        misses.append(f"{name}: R1 median first-row time {median(values)} s is not under {limits['R1']} s")
+        misses.append(f"{name}: R1 median first-row CPU time {median(values)} s is not under {limits['R1']} s")
     if any(r.get("rows_unconfirmed_unmarked") is None or r["rows_unconfirmed_unmarked"] > 0 for r in new):
         misses.append(f"{name}: a first-screen row has neither the old marking nor a row_confirmed before the rows were painted")
     return misses
@@ -1232,14 +1293,15 @@ def latency_limit(run: dict, limits: dict) -> float:
     return limits["R3_latency_watch" if run.get("path") == "event" else "R3_latency"]
 
 
-def judge_r3(report: dict, limits: dict) -> list[str]:
+def judge_r3(report: dict, limits: dict, report_only=frozenset()) -> list[str]:
     new = [r for r in (report.get("r3") or {}).get("runs", []) if r.get("arm") == "new"]
     misses = []
     for path in ("event", "stat"):
         if len(counted_runs(new, path)) < R3_MIN_RUNS:
             misses.append(f"R3: fewer than {R3_MIN_RUNS} counted new-code runs on the {path} path")
     runs = [r for r in new if r.get("counted")]
-    if any(r.get("median_s") is None or r["median_s"] >= limits["R3"] for r in runs):
+    if any(r.get("median_s") is None or r["median_s"] >= limits["R3"]
+           for r in runs if ("R3", r.get("path")) not in report_only):
         misses.append(f"R3: a run's own median is not under {limits['R3']} s")
     if any(not r.get("covered_all") for r in runs):
         misses.append("R3: a cycle's applied set misses a source the harness found changed")
@@ -1277,7 +1339,7 @@ def judge_k1(report: dict) -> list[str]:
     return misses
 
 
-def judge_report(report: dict, limits: dict) -> list[str]:
+def judge_report(report: dict, limits: dict, report_only=frozenset()) -> list[str]:
     misses = []
     cells = report["cells"]
     for name in REQUIRED_CELLS:
@@ -1295,7 +1357,7 @@ def judge_report(report: dict, limits: dict) -> list[str]:
                 misses.append(f"{name}: fewer than {MIN_RUNS} runs")
             else:
                 misses += judge_cell_r6(name, cell, limits)
-    return misses + judge_r3(report, limits) + judge_k1(report)
+    return misses + judge_r3(report, limits, report_only) + judge_k1(report)
 
 
 # --- subcommands: census ------------------------------------------------------------------------------
@@ -1758,6 +1820,42 @@ def cmd_verify_floors(args) -> int:
 
 # --- subcommands: verify-acceptance -------------------------------------------------------------------
 
+def parse_report_only(items) -> frozenset:
+    """The (limit, path) pairs reported and judged against nothing; only an R3 path may be one."""
+    out = set()
+    for item in items or []:
+        limit, _, path = item.partition(":")
+        if limit != "R3" or path not in ("event", "stat"):
+            raise SystemExit(f"bad --report-only {item!r}; use R3:event or R3:stat")
+        out.add((limit, path))
+    return frozenset(out)
+
+
+def add_report_only_option(parser) -> None:
+    parser.add_argument("--report-only", action="append", default=[], metavar="LIMIT:PATH",
+                        help="report this limit's timing medians as `measured` lines and judge them against nothing")
+
+
+def measured_lines(report: dict, report_only: frozenset) -> list[str]:
+    """`measured` lines for what is reported and not judged: report-only R3 medians and the new runs' wall-clock first rows."""
+    lines = []
+    new_r3 = [r for r in (report.get("r3") or {}).get("runs", []) if r.get("arm") == "new" and r.get("counted")]
+    for _, path in sorted(report_only):
+        lines.append(f"measured R3 {path} median_s {median([r.get('median_s') for r in new_r3 if r.get('path') == path])}")
+    for name, cell in sorted((report.get("cells") or {}).items()):
+        if name in R1_CELLS:
+            lines.append(f"measured R1 {name} wall-clock first_rows_s "
+                         f"{median([r.get('first_rows_s') for r in runs_of(cell, 'new')])}")
+    return lines
+
+
+def judge_with_measured_lines(report: dict, limits: dict, report_only_items) -> list[str]:
+    report_only = parse_report_only(report_only_items)
+    for line in measured_lines(report, report_only):
+        print(line)
+    return judge_report(report, limits, report_only)
+
+
 def cmd_verify_acceptance(args) -> int:
     try:
         report, floors = load_json(args.report), load_json(args.floors)
@@ -1769,7 +1867,7 @@ def cmd_verify_acceptance(args) -> int:
         for reason in bad:
             print(f"verify-acceptance: {reason}", file=sys.stderr)
         return EXIT_BAD
-    misses = judge_report(report, limits_with(parse_limits(args.limit)))
+    misses = judge_with_measured_lines(report, limits_with(parse_limits(args.limit)), args.report_only)
     for miss in misses:
         print(f"verify-acceptance: {miss}", file=sys.stderr)
     if not misses:
@@ -1900,9 +1998,7 @@ class Campaign:
             return False
         record = self.runner(job["what"], job)
         (self.r3 if job["what"] == "r3" else self.k1).append(record)
-        cell = f"{job['arm']}-{job['path']}" if job["what"] == "r3" else job["arm"]
-        state = "counted" if record.get("counted", True) else "void"
-        self.log(f"measured {job['what']} {cell} {state} {record.get('void_reason') or '-'}")
+        self.log(measured_line(job, record))
         self.band_since = 0
         return True
 
@@ -2005,8 +2101,7 @@ class RealRunner:
         trace = run_pty(dashboard_argv(tree, events=events), cwd=tree, env=self.env(arm), events=events,
                         max_s=90, stop=done)
         load1 = os.getloadavg()[0]
-        record = summarize_run({"frames": trace.frames, "events": trace.events, "t0_ns": trace.t0_ns},
-                               arm=arm, changed_count=changed_count, changes=changes, load1=load1)
+        record = summarize_run(run_view(trace), arm=arm, changed_count=changed_count, changes=changes, load1=load1)
         record["cell"] = cell
         if events:
             record.update(last_moments(trace.events, trace.t0_ns, cell))
@@ -2015,7 +2110,8 @@ class RealRunner:
     def do_r3(self, job):
         arm, path = job["arm"], job["path"]
         tree = self.new if arm == "new" else self.old
-        sweeper = SweepTaker(ContractWatcher())
+        stat_path = path == "stat"
+        sweeper = SweepTaker(ContractWatcher(), stat_path=stat_path)
         observer = RunObserver(observed_dirs())
         observer.start()
         load_start = os.getloadavg()[0]
@@ -2025,11 +2121,14 @@ class RealRunner:
                             stop=lambda t: timed_cycle_count(t.events, t.t0_ns, list(sweeper.sweeps)) > R3_CYCLES)
         finally:
             observer.stop()
+        if stat_path:
+            closing_sweep(sweeper, ContractWatcher.screen_ids(trace.frames))
         events, sweeps = trace.events, list(sweeper.sweeps)
         cycles = cycle_records(events, trace.t0_ns)
         resolution = mtime_resolution(self.state_dir)["value_ns"]
         offset = trace.wall_minus_mono_ns
-        covered = check_cycle_coverage(cycles, due_sets(cycles, sweeps, offset, resolution), offset)
+        due = (due_by_change_time if stat_path else due_sets)(cycles, sweeps, offset, resolution)
+        covered = check_cycle_coverage(cycles, due, offset)
         return r3_run_record(arm, path, covered, events, sweeps, stamps=observer.stamps, observer_ok=observer.ok,
                              loads=(load_start, os.getloadavg()[0]))
 
@@ -2070,6 +2169,63 @@ def cmd_campaign(args) -> int:
     print(f"campaign done {iso_now()}", flush=True)
     pid_path.unlink(missing_ok=True)
     return EXIT_OK
+
+
+def record_counted(record) -> bool:
+    return record.get("counted", True)
+
+
+def measured_line(job: dict, record: dict) -> str:
+    cell = f"{job['arm']}-{job['path']}" if job["what"] == "r3" else job["arm"]
+    state = "counted" if record_counted(record) else "void"
+    return f"measured {job['what']} {cell} {state} {record.get('void_reason') or '-'}"
+
+
+def smoke_jobs() -> list[dict]:
+    return [{"what": "r3", "arm": arm, "path": path} for arm, path in R3_CELLS] \
+        + [{"what": "k1", "arm": arm, "path": None, "index": 0} for arm in ("old", "new")]
+
+
+def enumerated_watch_paths(state_dir: Path) -> list[str]:
+    trace_file = state_dir / "enumeration-trace.json"
+    return sorted({p for paths in (load_json(trace_file)["paths"].values() if trace_file.exists() else [])
+                   for p in paths})
+
+
+def cmd_smoke(args) -> int:
+    """One R3 run per cell and one K1 run per code through the campaign's runner; nothing is judged or kept but smoke.log."""
+    state_dir = Path(args.state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        floors, sources = load_json(args.floors), load_json(args.sources)
+    except (OSError, ValueError) as err:
+        print(f"smoke: unreadable input: {err}", file=sys.stderr)
+        return EXIT_BAD
+    code, reasons = verify_floors_report(floors, limits_with({}), sources)
+    if code != EXIT_OK:
+        for reason in reasons:
+            print(f"smoke: {reason}", file=sys.stderr)
+        return EXIT_BAD
+    runner = RealRunner(state_dir, Path(args.old), Path(args.new), load_json(CONTRACT_PATH),
+                        enumerated_watch_paths(state_dir))
+    counted = True
+    with open(state_dir / "smoke.log", "w", buffering=1) as log:
+        for job in smoke_jobs():
+            record = runner(job["what"], job)
+            line = measured_line(job, record)
+            log.write(line + "\n")
+            print(line, flush=True)
+            counted = counted and record_counted(record)
+    return EXIT_OK if counted else EXIT_MISS
+
+
+def add_smoke_parser(sub) -> None:
+    smoke = sub.add_parser("smoke", help="rehearse every R3 cell and both K1 codes once, judging nothing")
+    smoke.add_argument("--old", type=Path, required=True)
+    smoke.add_argument("--new", type=Path, required=True)
+    smoke.add_argument("--floors", type=Path, default=STATE_DIR_DEFAULT / "floors.json")
+    smoke.add_argument("--sources", type=Path, default=SOURCES_PATH)
+    smoke.set_defaults(func=cmd_smoke)
 
 
 def parse_until(text: str) -> float:
@@ -2174,7 +2330,9 @@ def build_parser() -> argparse.ArgumentParser:
     va.add_argument("--tree", type=Path, default=Path.cwd())
     va.add_argument("--old-tree", type=Path, default=None)
     va.add_argument("--limit", action="append", default=[])
+    add_report_only_option(va)
     va.set_defaults(func=cmd_verify_acceptance)
+    add_smoke_parser(sub)
     return parser
 
 

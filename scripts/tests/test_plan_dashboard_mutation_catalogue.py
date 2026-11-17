@@ -99,6 +99,12 @@ HARNESS_MUTATIONS = (
     "r3-cell-counts-pooled",
     "r3-latency-from-last-write",
     "save-exit-wait-short",
+    "stat-sweep-every-cycle-end",
+    "stat-due-by-sweep-start",
+    "stat-no-closing-sweep",
+    "smoke-void-counted",
+    "report-only-ignored",
+    "r1-from-wall",
 )
 SCRIPT_MODULE_TESTS = {**dict.fromkeys(HARNESS_MUTATIONS, HARNESS_TESTS),
                        "launcher-imports-every-subcommand": TUI_TESTS}

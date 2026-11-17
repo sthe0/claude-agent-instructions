@@ -334,6 +334,7 @@ def put(path: Path, text: str = "x\n", age_ns: int = 0) -> Path:
 class FakeTrace:
     def __init__(self, frames=()):
         self.frames, self.events, self.t0_ns, self.wall_minus_mono_ns = list(frames), [], 0, 0
+        self.first_rows_cpu_s = None
 
 
 def test_the_changed_count_follows_the_contract_not_the_trace(tmp_path, monkeypatch):
@@ -622,7 +623,8 @@ def test_mtime_resolution_is_measured_in_the_state_directory(tmp_path, monkeypat
 # --- acceptance ----------------------------------------------------------------------------------------
 
 def run_record(arm, changed=90, first_rows=0.3, **over):
-    base = {"arm": arm, "changed_count": changed, "first_rows_s": first_rows, "old_marking_at_first_rows": True,
+    base = {"arm": arm, "changed_count": changed, "first_rows_s": first_rows, "first_rows_cpu_s": first_rows,
+            "old_marking_at_first_rows": True,
             "rows_confirmed_s": 0.8, "marks_confirmed_s": 0.9, "first_screen_confirmed_s": 0.85,
             "mark_confirmed_max_s": 0.88, "marks_missing": 0, "applied_ok": True, "last_old_cleared_s": 1.0,
             "live_check_end_s": 1.1, "rows_unconfirmed_unmarked": 0, "last_row_shown_s": 1.0, "last_mark_shown_s": 1.0}
@@ -1397,3 +1399,232 @@ def test_bands_are_the_order_s_numeric_bands():
     assert all(a[1] < b[0] for a, b in zip(ranges, ranges[1:]))
     assert h.OPTIONAL_CELLS == ("360-440",) and "360-440" not in h.REQUIRED_CELLS and "225-275" in h.REQUIRED_CELLS
     assert (h.band_of(250), h.band_of(400), h.band_of(300)) == ("225-275", "360-440", None)
+
+
+# --- stage 15: sparse sweeps on the stat path, coverage by change time, the closing sweep, the smoke ------
+
+def timed_share(taker_kwargs, cycle_ends=20, step=2.0, duration=0.1, sweep_s=2.6):
+    """The share of cycles (from the second on) that start in no sweep, when a sweep takes ``sweep_s`` and the cycle
+    ends reach the taker in time order."""
+    now, jobs, pending = [0], [], None
+    taker = h.SweepTaker(lambda ids: [], spawn=jobs.append, now=lambda: now[0], **taker_kwargs)
+    cycles = []
+    for n in range(1, cycle_ends + 1):
+        start = (n - 1) * step
+        end = start + duration
+        if pending and pending[1] <= end:
+            now[0] = ns(pending[1])
+            pending[0]()
+            pending = None
+        now[0] = ns(end)
+        taker.on_event(FakeTrace(), ev("cycle_end", end, cycle=n))
+        if jobs:
+            pending = (jobs.pop(), end + sweep_s)
+        cycles.append(cyc(n, start, duration))
+    after = cycles[1:]
+    return sum(1 for c in after if not h.cycle_untimed(c, taker.sweeps)) / len(after), taker
+
+
+def sweeps_taken(cycle_ends, **taker_kwargs):
+    jobs = []
+    taker = h.SweepTaker(lambda ids: [], spawn=lambda job: (jobs.append(job), job()), now=lambda: 0, **taker_kwargs)
+    for n in range(1, cycle_ends + 1):
+        taker.on_event(FakeTrace(), ev("cycle_end", n * 2.0, cycle=n))
+    return len(taker.sweeps)
+
+
+def test_a_stat_path_run_s_sweeps_leave_sweep_free_cycles():
+    stat_share, stat_taker = timed_share({"stat_path": True})
+    event_share, event_taker = timed_share({})
+    assert h.STAT_SWEEP_EVERY == 4
+    assert stat_share > 0.5 and stat_share > event_share
+    assert len(stat_taker.sweeps) < len(event_taker.sweeps)
+    assert sweeps_taken(9, stat_path=True) == 3, "the first cycle_end, then one per STAT_SWEEP_EVERY"
+    assert sweeps_taken(9) == 9 and sweeps_taken(9, stat_path=False) == 9
+
+
+def test_a_stat_path_change_is_due_by_change_time_whichever_sweep_found_it():
+    cycles = stat_cycles(6)                                 # starts 0, 2.1, 4.2, 6.3, 8.4, 10.5
+    resolution = 1000
+    replaced = h.change_time_ns({"mtime_ns": 1, "ctime_ns": ns(5.0)}, "/b")   # an old mtime kept, a newer ctime
+    assert replaced == ns(5.0)
+    found = [{"path": "/a", "kind": "state", "change_ns": ns(3.0)}, {"path": "/b", "kind": "state", "change_ns": replaced}]
+    late = {"start_ns": ns(12.0), "end_ns": ns(14.6), "changes": found}
+    due = h.due_by_change_time(cycles, [late], 0, resolution)
+    assert {n: [c["path"] for c in due[n]] for n in due} == {1: [], 2: [], 3: ["/a"], 4: ["/a", "/b"],
+                                                           5: ["/a", "/b"], 6: ["/a", "/b"]}
+    assert all(not v for v in h.due_sets(cycles, [late], 0, resolution).values())
+    tight = h.due_by_change_time(cycles, [{**late, "changes": [{**found[0], "change_ns": cycles[2]["start_ns"] - resolution + 1}]}],
+                                 0, resolution)
+    assert tight[3] == [] and len(tight[4]) == 1
+    cycles[2]["applied"], cycles[3]["applied"] = ["/a"], ["/b"]
+    assert all(c["covered"] for c in h.check_cycle_coverage(cycles, due, 0))
+    cycles[3]["applied"] = []
+    assert [c["covered"] for c in h.check_cycle_coverage(cycles, due, 0)] == [True, True, True, False, False, False]
+
+
+class StubWatcher:
+    taken = []
+    screen_ids = staticmethod(lambda frames: set())
+
+    def __call__(self, ids):
+        StubWatcher.taken.append(ids)
+        return [{"path": "/a", "kind": "state", "change_ns": ns(1.0)}]
+
+
+class StubObserver:
+    def __init__(self, dirs):
+        self.stamps, self.ok = {}, True
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+def do_r3(monkeypatch, tmp_path, path):
+    """``RealRunner.do_r3`` on a stream of three cycles that applied nothing, a watcher that sees one change at 1.0 s
+    in every sweep it takes, and no sweep during the run: the only sweep there can be is the closing one."""
+    StubWatcher.taken = []
+    spies = []
+
+    class Spy(h.SweepTaker):
+        def __init__(self, *args, **kwargs):
+            spies.append(kwargs.get("stat_path", False))
+            super().__init__(*args, **{**kwargs, "now": lambda: ns(100.0)})
+
+    trace = FakeTrace()
+    trace.t0_ns = T0
+    for n in range(1, 4):
+        trace.events += [ev("cycle_start", (n - 1) * 2.0, cycle=n), ev("cycle_end", (n - 1) * 2.0 + 0.1, cycle=n, applied=[])]
+    monkeypatch.setattr(h, "SweepTaker", Spy)
+    monkeypatch.setattr(h, "ContractWatcher", StubWatcher)
+    monkeypatch.setattr(h, "RunObserver", StubObserver)
+    monkeypatch.setattr(h, "observed_dirs", lambda: [])
+    monkeypatch.setattr(h, "mtime_resolution", lambda d: {"value_ns": 1000})
+    monkeypatch.setattr(h, "run_pty", lambda *a, **k: trace)
+    runner = h.RealRunner.__new__(h.RealRunner)
+    runner.state_dir, runner.old, runner.new = tmp_path, tmp_path / "old", tmp_path / "new"
+    runner.env = lambda arm: {}
+    return runner.do_r3({"arm": "new", "path": path}), spies
+
+
+def test_a_change_after_the_last_sweep_is_found_by_the_closing_sweep(tmp_path, monkeypatch):
+    now = [ns(30.0)]
+    late = [{"path": "/a", "kind": "state", "change_ns": ns(8.0)}]
+    taker = h.SweepTaker(lambda ids: late, now=lambda: now[0])
+    taker.busy = True
+    h.closing_sweep(taker, {"id"}, sleep=lambda s: setattr(taker, "busy", False))
+    assert taker.sweeps == [{"start_ns": ns(30.0), "end_ns": ns(30.0), "changes": late}] and not taker.busy
+    cycles = stat_cycles(6)
+    assert not any(c["covered"] is False for c in h.check_cycle_coverage(cycles, h.due_by_change_time(cycles, [], 0, 1000), 0))
+    due = h.due_by_change_time(cycles, taker.sweeps, 0, 1000)
+    assert [n for n in due if due[n]] == [5, 6]
+    assert not any(h.cycle_untimed(c, taker.sweeps) for c in cycles)
+
+    stat, spies = do_r3(monkeypatch, tmp_path, "stat")
+    assert spies == [True] and StubWatcher.taken == [set()]
+    assert stat["covered_all"] is False and stat["uncovered"] == 2 and stat["untimed_cycles"] == 0
+    event, spies = do_r3(monkeypatch, tmp_path, "event")
+    assert spies == [False] and StubWatcher.taken == []
+    assert event["covered_all"] is True
+
+
+def smoke_args(tmp_path, floors=None):
+    floors_path = write(tmp_path, "floors.json", floors or good_floors())
+    sources = write(tmp_path, "sources.json", SOURCES)
+    return ["--state-dir", str(tmp_path / "state"), "smoke", "--new", str(tmp_path / "new"), "--old", str(tmp_path / "old"),
+            "--floors", str(floors_path), "--sources", str(sources)]
+
+
+class SmokeRunner:
+    void, calls = None, []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, what, job):
+        SmokeRunner.calls.append((what, job["arm"], job.get("path")))
+        bad = SmokeRunner.calls[-1] == SmokeRunner.void
+        if what == "r3":
+            return r3_rec(job["arm"], job["path"], counted=not bad, void_reason="short" if bad else None)
+        return {"arm": job["arm"], "counted": not bad, "void_reason": "strace" if bad else None}
+
+
+SMOKE_JOBS = [("r3", "new", "event"), ("r3", "new", "stat"), ("r3", "old", "stat"), ("k1", "old", None), ("k1", "new", None)]
+
+
+def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(h, "RealRunner", SmokeRunner)
+    for void in (None, *SMOKE_JOBS):
+        SmokeRunner.void, SmokeRunner.calls = void, []
+        state = tmp_path / "state"
+        assert h.main(smoke_args(tmp_path)) == (0 if void is None else 1), void
+        assert SmokeRunner.calls == SMOKE_JOBS, "one run per cell and per K1 code, no retry of a void"
+        lines = (state / "smoke.log").read_text().splitlines()
+        assert len(lines) == 5 and sum(" void " in line for line in lines) == (void is not None)
+        assert capsys.readouterr().out.count("measured ") == 5
+        (state / "smoke.log").unlink()
+        assert not (state / "acceptance.json").exists() and not (state / "campaign.log").exists()
+    SmokeRunner.calls = []
+    stale = good_floors()
+    stale["instrument_sha256"] = "0" * 64
+    assert h.main(smoke_args(tmp_path, stale)) == 2 and SmokeRunner.calls == []
+    missing = smoke_args(tmp_path)
+    missing[missing.index("--floors") + 1] = str(tmp_path / "no-such-floors.json")
+    assert h.main(missing) == 2 and SmokeRunner.calls == []
+
+
+def report_only_report(tmp_path, trees):
+    report = good_report(tmp_path, *trees)
+    for run in report["r3"]["runs"]:
+        if run["path"] == "stat":
+            run["median_s"] = 0.30
+    return report
+
+
+def test_report_only_stat_r3_is_reported_not_judged(tmp_path, trees, capsys):
+    report = report_only_report(tmp_path, trees)
+    assert acceptance(tmp_path, report, trees) == 1
+    capsys.readouterr()
+    assert acceptance(tmp_path, report, trees, "--report-only", "R3:stat") == 0
+    assert "measured R3 stat" in capsys.readouterr().out
+
+
+def test_report_only_keeps_stat_coverage_judged(tmp_path, trees):
+    report = report_only_report(tmp_path, trees)
+    stat_new = [r for r in report["r3"]["runs"] if r["path"] == "stat" and r["arm"] == "new"]
+    stat_new[0]["covered_all"] = False
+    assert acceptance(tmp_path, report, trees, "--report-only", "R3:stat") == 1
+    report = report_only_report(tmp_path, trees)
+    report["r3"]["runs"] = [r for r in report["r3"]["runs"] if not (r["path"] == "stat" and r["arm"] == "new")]
+    assert acceptance(tmp_path, report, trees, "--report-only", "R3:stat") == 1
+    with pytest.raises(SystemExit):
+        acceptance(tmp_path, report_only_report(tmp_path, trees), trees, "--report-only", "R1:stat")
+
+
+def test_r1_judged_on_cpu_time(capsys):
+    limits = h.limits_with({})
+    r1 = lambda wall, cpu: [m for m in h.judge_cell_r1("c", cell_with(  # noqa: E731
+        [run_record("new", first_rows=wall, first_rows_cpu_s=cpu) for _ in range(h.MIN_RUNS)]), limits) if "R1 median" in m]
+    assert r1(5.0, 0.5) == []
+    assert len(r1(0.5, 5.0)) == 1
+    assert len([m for m in h.judge_cell_r1("c", cell_with([run_record("new", first_rows_cpu_s=None)
+                                                          for _ in range(h.MIN_RUNS)]), limits) if "R1 median" in m]) == 1
+
+
+def test_first_rows_cpu_read_from_proc(tmp_path):
+    def stat(pid, ppid, comm, utime, stime, cutime, cstime):
+        fields = [pid, f"({comm})", "S", ppid, 0, 0, 0, -1, 0, 0, 0, 0, 0, utime, stime, cutime, cstime, 20, 0, 1, 0, 5]
+        (tmp_path / str(pid)).mkdir()
+        (tmp_path / str(pid) / "stat").write_text(" ".join(str(f) for f in fields) + "\n")
+
+    stat(100, 1, "py thon) x", 10, 20, 30, 40)
+    stat(101, 100, "git", 1, 2, 3, 4)
+    stat(102, 101, "sh", 100, 0, 0, 0)
+    stat(200, 1, "other", 999, 999, 999, 999)
+    (tmp_path / "self").mkdir()
+    ticks = os.sysconf("SC_CLK_TCK")
+    assert h.proc_tree_cpu_s(100, str(tmp_path)) == pytest.approx((10 + 20 + 30 + 40 + 1 + 2 + 3 + 4 + 100) / ticks)
+    assert h.proc_tree_cpu_s(999, str(tmp_path)) == 0.0
