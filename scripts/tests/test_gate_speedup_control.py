@@ -1004,3 +1004,32 @@ def test_a_failing_run_deletes_the_stored_passes_of_the_catalogue_it_failed_and_
     with result_store.ResultStore(store_path) as opened:
         assert opened.rows_of(failing) == []
         assert opened.rows_of(kept)
+
+
+def test_a_timed_out_run_keeps_the_stored_pass_of_a_catalogue_it_never_finished(tmp_path):
+    from lib import catalogue_key, result_store
+    failing, unfinished = "t::cat_fails", "t::cat_unfinished"
+    registry = catalogue_key.Registry((
+        catalogue_key.Subject("fails", (failing,), frozenset({"lib/a.py"}), ("t::n",)),
+        catalogue_key.Subject("unfinished", (unfinished,), frozenset({"lib/a.py"}), ("t::n",))))
+    core = tmp_path / "core"
+    (core / "lib").mkdir(parents=True)
+    (core / "lib/a.py").write_text("A = 1\n")
+    environment = result_store.current_environment({"dists": [], "git": "g"})
+    store_path = tmp_path / "db" / "r.sqlite"
+    with result_store.ResultStore(store_path) as opened:
+        old = [(result_store.FILE, "lib/a.py", "a" * 64)]
+        opened.put("b" * 40, environment, {failing: old, unfinished: old})
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    report = tmp_path / "tests.jsonl"
+    records = [{"kind": "collected", "nodeid": i} for i in (failing, unfinished)]
+    records += [{"kind": "report", "nodeid": failing, "when": "call", "outcome": "failed"}]
+    report.write_text("".join(json.dumps(line) + "\n" for line in records))
+    sha = "c" * 40
+    plan = gate.ReusePlan(store_path, environment, trace, tmp_path / "out", {}, registry, core)
+    gate.settle_reuse(plan, sha, gate.SuiteRun(1, (failing,), sha, timed_out=True, report_path=str(report),
+                                               hermetic=True))
+    with result_store.ResultStore(store_path) as opened:
+        assert opened.rows_of(failing) == []
+        assert opened.rows_of(unfinished)

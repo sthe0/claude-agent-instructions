@@ -998,8 +998,10 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
         try:
             lines = _test_report().read_lines(run.report_path)
             outcome = _test_report().outcomes(lines)
+            # Only a catalogue that failed contradicts its stored pass; one a timed-out run never finished
+            # keeps it, or every timeout would force full catalogue reruns at the next landings.
             failed_catalogues = [i for i in _test_report().collected_ids(lines) if plan.registry.find(i) is not None
-                                 and i not in left_out and (outcome.get(i) != "passed" or i in run.failures)]
+                                 and i not in left_out and (outcome.get(i) == "failed" or i in run.failures)]
             if failed_catalogues:
                 with result_store.ResultStore(plan.store) as store:
                     store.forget(failed_catalogues)
