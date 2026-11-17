@@ -184,8 +184,10 @@ def test_foreign_layer_hook_key_resolves_as_foreign_hook():
 
 def test_hook_key_without_explicit_layer_stays_unresolved():
     row("hook:arc:x", 10, mechanism="arc:x", test=False)
+    row("hook:arc:y", 11, mechanism="arc:y", layer="ext", test=False)
     rc, payload = check_version()
-    assert rc == 1 and classes(payload) == [("unresolved", "hook:arc:x")] and payload["foreign_hook"] == {}
+    assert rc == 1 and payload["foreign_hook"] == {}
+    assert classes(payload) == [("unresolved", "hook:arc:x"), ("unresolved", "hook:arc:y")]
 
 
 def test_unknown_hook_key_of_core_layer_stays_unresolved():
