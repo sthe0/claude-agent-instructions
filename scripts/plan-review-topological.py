@@ -443,15 +443,20 @@ def count_pulls(transcript: "str | None", view_dir: str) -> "int | None":
     return len(seen) if parsed or not lines else None
 
 
-def view_dir_for(plan_path: str, pair: str, view_root: "str | None" = None) -> "str | None":
-    """The view directory the reviewer of `pair` is granted, or None when the plan does
-    not build one (a plan that does not load, a pair it does not have)."""
+def view_dir_for(plan_path: str, pair: str, view_root: "str | None" = None,
+                 history_path: "str | None" = None) -> "str | None":
+    """The view directory the reviewer of `pair` (a pair or a unit) is granted, with the
+    history files of `history_path` when its history is printed as an index; None when
+    there is none (a unit whose history is inline, a plan that does not load, a pair it
+    does not have)."""
     try:
-        site = build_site_prompt("topo-pair", plan_path, pair=pair, view_root=view_root,
-                                 materialize=False)
+        history = json.loads(Path(history_path).read_text(encoding="utf-8")) if history_path else None
+        kind, selector = ("topo-unit", "unit") if plan.is_unit_id(pair) else ("topo-pair", "pair")
+        site = build_site_prompt(kind, plan_path, view_root=view_root, history=history,
+                                 materialize=False, **{selector: pair})
     except (ValueError, OSError, plan.PlanError):
         return None
-    return str(site.view_dir)
+    return None if site.view_dir is None else str(site.view_dir)
 
 
 def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int | None", "int | None", "str | None"]:
@@ -466,10 +471,10 @@ def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int 
         duration = int(duration_found.group(1)) if duration_found else None
     candidates = [stderr_path, row.get("transcript_path") if row else None]
     transcript = next((c for c in candidates if c and os.path.isfile(c)), None)
-    if plan.is_unit_id(pair):
-        pulls = 0
+    if launched.view_dir is not None:
+        pulls = count_pulls(transcript, launched.view_dir)
     else:
-        pulls = None if launched.view_dir is None else count_pulls(transcript, launched.view_dir)
+        pulls = 0 if plan.is_unit_id(pair) else None
     return (round(float(cost), 4) if cost is not None else None,
             int(duration) if duration is not None else None, pulls, transcript)
 
@@ -601,7 +606,10 @@ class Driver:
             self.refuse(pair, refusal)
             return None
         sha = hashlib.sha256(Path(self.plan_path).read_bytes()).hexdigest()
-        view_dir = None if plan.is_unit_id(pair) else view_dir_for(self.plan_path, pair, self.view_root)
+        if history_path is not None:
+            view_dir = view_dir_for(self.plan_path, pair, self.view_root, history_path=history_path)
+        else:
+            view_dir = None if plan.is_unit_id(pair) else view_dir_for(self.plan_path, pair, self.view_root)
         offset = cost_log_size()
         argv = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
                                 history_path=history_path, view_root=self.view_root,

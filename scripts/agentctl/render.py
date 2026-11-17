@@ -22,6 +22,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -33,7 +34,12 @@ from lib import kind_baselines, principle_provenance
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
 from . import grants as _grants, plan_refs, plan_store, protected_actions
-from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
+from .config import (
+    PlanLimitError,
+    plan_field_inline_limit,
+    plan_size_limits,
+    review_history_inline_limit,
+)
 from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
@@ -654,18 +660,23 @@ def unit_base_text(doc: PlanDoc) -> str:
     return _lines_text(_meta_node_lines(doc) + render_final_checks_md(doc))
 
 
-def row_part_text(doc: PlanDoc, review_id: str) -> str:
-    """The text of every node a unit or pair review judges — the base unit's own
-    fields, the full stage fields of a stage node — for diffing two plan versions; a
-    node the plan lacks contributes nothing."""
+def _row_part_chunks(doc: PlanDoc, review_id: str) -> list[tuple[str, str]]:
+    """`(part label, text)` of every node a unit or pair review judges, in review order."""
     nodes = (unit_node(review_id),) if is_unit_id(review_id) else split_pair_id(review_id)
     chunks = []
     for node in nodes:
         if node == PAIR_BASE_NODE:
-            chunks.append(unit_base_text(doc))
+            chunks.append(("order/meta", unit_base_text(doc)))
         elif any(s.index == node for s in doc.stages):
-            chunks.append(render_stage_fields(doc, int(node)))
-    return "\n".join(chunks)
+            chunks.append((f"stage {node}", render_stage_fields(doc, int(node))))
+    return chunks
+
+
+def row_part_text(doc: PlanDoc, review_id: str) -> str:
+    """The text of every node a unit or pair review judges — the base unit's own
+    fields, the full stage fields of a stage node — for diffing two plan versions; a
+    node the plan lacks contributes nothing."""
+    return "\n".join(text for _, text in _row_part_chunks(doc, review_id))
 
 
 def row_diff(old: PlanDoc, new: PlanDoc, review_id: str) -> str:
@@ -971,46 +982,245 @@ def _prior_review_section(history: dict, noun: str = "pair") -> list[str]:
     sections of a re-review bundle, from the `plan-review-pair-history` payload."""
     lines = [f"## Prior review of this {noun}", ""]
     for position, record in enumerate(history["records"], start=1):
-        reviewer, recorded = record["reviewer_verdict"], record["effective_verdict"]
-        verdicts = f"`{reviewer}`" if reviewer == recorded else f"`{reviewer}` (recorded as `{recorded}`)"
-        lines.append(f"Review {position} (record {record['record_seq']}): verdict {verdicts}")
+        lines.append(_review_record_heading(position, record))
         for concern in record["concerns"]:
-            if not concern["id"]:
-                lines.append(f"- (not in the concern ledger) {concern['text']}")
-                continue
-            marks = f"{concern['severity']} (effective: {concern['effective_severity']})"
-            if concern["unresolved"]:
-                marks += " — UNRESOLVED BLOCKER"
-            lines.append(f"- `{concern['id']}` — {marks} — parts: {', '.join(concern['parts'])}")
-            lines.append(f"  {concern['text']}")
+            lines.extend(_concern_lines(concern))
         if not record["concerns"]:
             lines.append("- no concerns")
         lines.append("")
-    lines.append("## Changed since the prior verdict")
-    lines.append("")
-    changed = history["changed_parts_since_last"]
-    lines.append(
-        f"Parts of this {noun} changed since the last review: " + ", ".join(f"`{p}`" for p in changed)
-        if changed else "Nothing changed since the prior verdict."
-    )
-    lines.append("")
+    lines.extend(_changed_parts_lines(history, noun))
     diff = history.get("prior_diff")
     if diff is not None:
-        lines.append(f"## What changed in this {noun} since the prior verdict")
-        lines.append("")
-        if not diff["available"]:
-            lines.append(
-                f"The prior version is unavailable, so there is no diff: judge the {noun} whole."
-            )
-        elif not diff["text"]:
-            lines.append(f"The text of this {noun}'s parts reads the same as in the prior version.")
-        else:
+        lines.extend(_diff_heading_lines(noun))
+        if diff["available"] and diff["text"]:
             lines.extend(["```diff", diff["text"], "```"])
+        else:
+            lines.append(_no_diff_line(diff, noun))
         lines.append("")
     return lines
 
 
-def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
+def _review_record_heading(position: int, record: dict) -> str:
+    reviewer, recorded = record["reviewer_verdict"], record["effective_verdict"]
+    verdicts = f"`{reviewer}`" if reviewer == recorded else f"`{reviewer}` (recorded as `{recorded}`)"
+    return f"Review {position} (record {record['record_seq']}): verdict {verdicts}"
+
+
+def _concern_lines(concern: dict) -> list[str]:
+    if not concern["id"]:
+        return [f"- (not in the concern ledger) {concern['text']}"]
+    marks = f"{concern['severity']} (effective: {concern['effective_severity']})"
+    if concern["unresolved"]:
+        marks += " — UNRESOLVED BLOCKER"
+    return [f"- `{concern['id']}` — {marks} — parts: {', '.join(concern['parts'])}",
+            f"  {concern['text']}"]
+
+
+def _changed_parts_lines(history: dict, noun: str) -> list[str]:
+    changed = history["changed_parts_since_last"]
+    return [
+        "## Changed since the prior verdict",
+        "",
+        f"Parts of this {noun} changed since the last review: " + ", ".join(f"`{p}`" for p in changed)
+        if changed else "Nothing changed since the prior verdict.",
+        "",
+    ]
+
+
+def _diff_heading_lines(noun: str) -> list[str]:
+    return [f"## What changed in this {noun} since the prior verdict", ""]
+
+
+def _no_diff_line(diff: dict, noun: str) -> str:
+    if not diff["available"]:
+        return f"The prior version is unavailable, so there is no diff: judge the {noun} whole."
+    return f"The text of this {noun}'s parts reads the same as in the prior version."
+
+
+# --- A re-review history too long to print: the prompt carries an index built by code, and
+# the history itself sits in files of the review's view directory, read on demand. ---------
+
+HISTORY_VIEW_DIR = "history"
+PRIOR_REVIEWS_FILE = f"{HISTORY_VIEW_DIR}/prior-reviews.md"
+
+_FIELD_LINE = re.compile(r"^- \*\*([^*]+?):?\*\*")
+_HEADING_LINE = re.compile(r"^#{1,6} (.+)$")
+_STAGE_HEADING = re.compile(r"^## Stage (\d+):")
+_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+@dataclass(frozen=True)
+class HistorySection:
+    """The re-review history section of a review prompt and the view files it names
+    (view-relative path -> text); no files when the history is printed inline."""
+    lines: list[str]
+    files: dict
+
+    @property
+    def indexed(self) -> bool:
+        return bool(self.files)
+
+
+def _section_opened_by(line: str) -> "str | None":
+    """The section a rendered plan line opens: a top-level `- **Field:**` bullet or a heading."""
+    found = _FIELD_LINE.match(line) or _HEADING_LINE.match(line)
+    return found.group(1) if found else None
+
+
+def _row_line_labels(doc: PlanDoc, review_id: str) -> list[tuple[str, str]]:
+    """`(part, section)` of every line of `row_part_text(doc, review_id).splitlines()`."""
+    chunks = _row_part_chunks(doc, review_id)
+    labels: list[tuple[str, str]] = []
+    for position, (part, text) in enumerate(chunks):
+        piece = text if position == len(chunks) - 1 else text + "\n"
+        section = "(heading)"
+        for line in piece.splitlines():
+            section = _section_opened_by(line) or section
+            labels.append((part, section))
+    return labels
+
+
+def diff_segments(diff_text: str, doc: PlanDoc, review_id: str) -> "list[tuple[tuple[str, str], list[str]]] | None":
+    """`diff_text` (a `row_diff` against `doc`) cut into contiguous runs of lines, each
+    tagged `(part, section)` by the changed line of `doc` it carries — a removed line by the
+    section it sits in, or the one it opens. Context lines join the change they surround,
+    so a run holds at least one changed line. Joined, the runs are `diff_text`. None when
+    the diff does not apply to `doc` (the plan changed after the diff was taken)."""
+    new_lines = row_part_text(doc, review_id).splitlines()
+    labels = _row_line_labels(doc, review_id)
+    tagged: list[tuple["tuple[str, str] | None", str]] = []
+    cursor, run, here = 0, None, None
+    for number, line in enumerate(diff_text.split("\n")):
+        hunk = _HUNK_HEADER.match(line)
+        if number < 2 or hunk:
+            if hunk:
+                start, count = int(hunk.group(1)), hunk.group(2)
+                cursor = start if count == "0" else start - 1
+                run, here = None, (labels[cursor - 1] if 0 < cursor <= len(labels) else None)
+            tagged.append((None, line))
+            continue
+        if line[:1] in (" ", "+"):
+            if cursor >= len(new_lines) or new_lines[cursor] != line[1:]:
+                return None
+            here = labels[cursor]
+            cursor += 1
+            if line[:1] == "+":
+                run = here
+        elif line[:1] == "-":
+            if here is None:
+                here = labels[min(cursor, len(labels) - 1)] if labels else ("(removed)", "(removed)")
+            opened = _section_opened_by(line[1:])
+            if opened is not None:
+                stage = _STAGE_HEADING.match(line[1:])
+                here = (f"stage {stage.group(1)}" if stage else here[0], opened)
+            run = here
+        else:
+            return None
+        tagged.append((run, line))
+    runs: list[tuple[tuple[str, str], list[str]]] = []
+    headers: list[str] = []
+    for label, line in tagged:
+        if label is None:
+            headers.append(line)
+        elif runs and runs[-1][0] == label:
+            runs[-1][1].extend([*headers, line])
+            headers = []
+        else:
+            runs.append((label, [*headers, line]))
+            headers = []
+    if headers:
+        runs.append((("(diff)", "(header)"), headers))
+    return runs
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "part"
+
+
+def _indexed_diff(diff_text: str, doc: PlanDoc, review_id: str,
+                  view_dir: "Path | str") -> tuple[list[str], dict[str, str]]:
+    segments = diff_segments(diff_text, doc, review_id) or [
+        (("(whole diff)", "(the plan changed after the diff was taken)"), diff_text.split("\n"))]
+    lines = [
+        f"The diff since the prior verdict is {len(diff_text)} chars, too long to print here. It "
+        "is cut into the view files below, one per run of changed lines of one part and field, in "
+        "diff order: read together they are the whole diff.",
+        "",
+        "| Part | Field | Lines added | Lines removed | File |",
+        "|---|---|---|---|---|",
+    ]
+    files: dict[str, str] = {}
+    first = True
+    for number, ((part, section), run) in enumerate(segments, start=1):
+        body = run[2:] if first else run
+        first = False
+        added = sum(1 for line in body if line.startswith("+"))
+        removed = sum(1 for line in body if line.startswith("-"))
+        name = f"{HISTORY_VIEW_DIR}/diff-{number:03d}-{_slug(part)}-{_slug(section)}.diff"
+        files[name] = "\n".join(run) + "\n"
+        lines.append(f"| {part} | {section} | {added} | {removed} | `{Path(view_dir) / name}` |")
+    return lines, files
+
+
+def _indexed_records(history: dict, noun: str, view_dir: "Path | str") -> tuple[list[str], dict[str, str]]:
+    lines = [f"## Prior review of this {noun}", ""]
+    filed: list[str] = []
+    for position, record in enumerate(history["records"], start=1):
+        heading = _review_record_heading(position, record)
+        inline = [c for c in record["concerns"] if c["unresolved"]]
+        rest = [c for c in record["concerns"] if not c["unresolved"]]
+        lines.append(f"{heading} — {len(inline)} concern(s) inline, {len(rest)} in the file")
+        for concern in inline:
+            lines.extend(_concern_lines(concern))
+        lines.append("")
+        if rest:
+            filed.append(heading)
+            for concern in rest:
+                filed.extend(_concern_lines(concern))
+            filed.append("")
+    if not filed:
+        return lines, {}
+    lines[2:2] = [
+        "Every concern that is still an unresolved blocker is printed below in full; the other "
+        f"concerns of these reviews are in `{Path(view_dir) / PRIOR_REVIEWS_FILE}`.",
+        "",
+    ]
+    return lines, {PRIOR_REVIEWS_FILE: _lines_text(filed)}
+
+
+def review_history_section(
+    history: dict, doc: PlanDoc, review_id: str, noun: str, view_dir: "Path | str",
+    limit: "int | None",
+) -> HistorySection:
+    """The history section of a re-review prompt. Printed whole (`_prior_review_section`)
+    while it is at most `limit` characters (None: no limit); over it, the prior reviews
+    keep each unresolved blocker inline and file the rest, and the diff becomes an index of
+    view files under `view_dir`. `doc` is the plan itself, never a pointerized view."""
+    inline = _prior_review_section(history, noun)
+    if limit is None or len("\n".join(inline)) <= limit:
+        return HistorySection(inline, {})
+    lines, files = _indexed_records(history, noun, view_dir)
+    lines.extend(_changed_parts_lines(history, noun))
+    diff = history.get("prior_diff")
+    if diff is not None:
+        lines.extend(_diff_heading_lines(noun))
+        if diff["available"] and diff["text"]:
+            index, diff_files = _indexed_diff(diff["text"], doc, review_id, view_dir)
+            lines.extend(index)
+            files.update(diff_files)
+        else:
+            lines.append(_no_diff_line(diff, noun))
+        lines.append("")
+    return HistorySection(lines, files)
+
+
+def _history_lines(history: "dict | None", section: "HistorySection | None", noun: str) -> list[str]:
+    if history is None:
+        return []
+    return list(section.lines) if section is not None else _prior_review_section(history, noun)
+
+
+def _protocol_lines(history: "dict | None", noun: str, history_indexed: bool = False) -> list[str]:
     """The `## Review protocol` section and the closing marker line shared by
     the pair and the unit bundle; `noun` is `pair` or `unit`. Every marker is
     sourced from `plan` (`REVIEW_MARKER`, `VERDICT_MARKER`, `PLAN_DIGEST_MARKER`,
@@ -1056,6 +1266,12 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
             f"`order:`) leading the concern or right after its marker: `{SEVERITY_BLOCKING}: "
             f"{CONDITION_MARKERS[0]} stage:3 <concern>`."
         )
+    if history_indexed:
+        lines.append(
+            f"  - The history of this {noun} is an index: the live plan parts this prompt shows "
+            "or names are complete and are what you judge. The history files it lists only help you locate what "
+            "changed and what was raised before; open the ones your question needs."
+        )
     lines.append(
         f"- after the concerns, a line `{CUSTOMER_QUESTIONS_MARKER}` followed by one "
         f"`{CUSTOMER_QUESTION_MARKER} <question>` line per question only the customer can "
@@ -1074,7 +1290,7 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
 def render_pair_review_bundle(
     doc: PlanDoc, pair_id: str, *, plan_sha256: str, view_dir: "Path | str",
     history: "dict | None" = None, agreed_understanding: "str | None" = None,
-    understanding_doc: "PlanDoc | None" = None,
+    understanding_doc: "PlanDoc | None" = None, history_section: "HistorySection | None" = None,
 ) -> str:
     """The `--review-topo` starting prompt for one reliance edge: the order
     context, the base's full node file, the service's declared product
@@ -1083,6 +1299,8 @@ def render_pair_review_bundle(
     review and the parts changed since it, the plan digest line and the
     review protocol/checklist. `history` is the `plan-review-pair-history`
     data payload; without it the bundle is the first-review rendering.
+    `history_section` (`review_history_section`) replaces the history printed
+    whole.
 
     Every marker string in the protocol section is sourced from
     `plan.REVIEW_MARKER` / `plan.VERDICT_MARKER` / `plan.PLAN_DIGEST_MARKER`
@@ -1162,14 +1380,13 @@ def render_pair_review_bundle(
     )
     lines.append("")
 
-    if history is not None:
-        lines.extend(_prior_review_section(history))
+    lines.extend(_history_lines(history, history_section, "pair"))
 
     lines.extend(_grounding_verdict_section(doc))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
-    lines.extend(_protocol_lines(history, "pair"))
+    lines.extend(_protocol_lines(history, "pair", bool(history_section and history_section.indexed)))
     lines.append("Conditions:")
     for marker, text in zip(CONDITION_MARKERS, _pair_conditions(doc, base, service)):
         lines.append(f"- `{marker}` {text}")
@@ -1274,7 +1491,7 @@ def _grounding_verdict_section(doc: PlanDoc) -> list[str]:
 
 def render_unit_review_bundle(
     doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
-    agreed_understanding: "str | None" = None,
+    agreed_understanding: "str | None" = None, history_section: "HistorySection | None" = None,
 ) -> str:
     """The `--review-topo` starting prompt for one UNIT: every field of the
     node, inlined, and its full edge set; nothing else is read. `unit:base`
@@ -1313,14 +1530,13 @@ def render_unit_review_bundle(
     lines.append("3. Check the other conditions below, then reply per the protocol.")
     lines.append("")
 
-    if history is not None:
-        lines.extend(_prior_review_section(history, "unit"))
+    lines.extend(_history_lines(history, history_section, "unit"))
 
     lines.extend(_grounding_verdict_section(doc))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
-    lines.extend(_protocol_lines(history, "unit"))
+    lines.extend(_protocol_lines(history, "unit", bool(history_section and history_section.indexed)))
     lines.append("Conditions:")
     for marker, text in zip(CONDITION_MARKERS, _unit_conditions(doc, node)):
         lines.append(f"- `{marker}` {text}")
@@ -1796,7 +2012,10 @@ def build_site_prompt(
     Every kind but `topo-unit` and `enumerate-node` (which print every field of one node
     and read nothing) builds a view directory under `view_root` (default: the topo units
     root): the node files, `objects/<sha256>` for every file the shown nodes were
-    resolved from and for every field printed as a pointer, and `MANIFEST.json`.
+    resolved from and for every field printed as a pointer, and `MANIFEST.json`. A
+    re-review `history` longer than `review-history-inline-max-chars` is printed as an
+    index and its files join the view (`review_history_section`); a `topo-unit` then gets
+    a view holding those files alone.
     `materialize=False` computes the same prompt and view path without writing.
     `with_view=False` is for a caller that grants the model no directory and has no prompt
     ceiling (the two dispatch kinds only): the text carries no view header, no file listing
@@ -1813,13 +2032,31 @@ def build_site_prompt(
         raise ValueError(f"with_view=False is for {', '.join(_NO_VIEW_KINDS)} only, not {kind!r}")
     source = _load_site_source(plan_path)
     doc = source.doc
+    history_limit = review_history_inline_limit()
+
+    def history_section(review_id: str, noun: str, view_dir: Path) -> "HistorySection | None":
+        if history is None:
+            return None
+        return review_history_section(history, doc, review_id, noun, view_dir, history_limit)
 
     if kind == "topo-unit":
         node = parse_unit(doc, unit or "")
-        text = render_unit_review_bundle(
-            doc, unit, plan_sha256=source.plan_sha256, history=history,
-            agreed_understanding=agreed_understanding)
-        return SitePrompt(text, (), frozenset({"meta" if node == PAIR_BASE_NODE else int(node)}))
+        shown = frozenset({"meta" if node == PAIR_BASE_NODE else int(node)})
+
+        def render_unit(view_dir: Path) -> tuple[str, "HistorySection | None"]:
+            section = history_section(unit, "unit", view_dir)
+            return render_unit_review_bundle(
+                doc, unit, plan_sha256=source.plan_sha256, history=history,
+                agreed_understanding=agreed_understanding, history_section=section), section
+
+        text, section = render_unit(Path("<view>"))
+        if section is None or not section.indexed:
+            return SitePrompt(text, (), shown)
+        files = _site_files(section.files, {})
+        view_dir = _publish_site_view(view_root, source.plan_sha256,
+                                      f"{kind}-{unit.replace(':', '-')}", files, materialize)
+        return SitePrompt(render_unit(view_dir)[0], (str(view_dir),), shown, view_dir,
+                          tuple(sorted(files)))
     if kind == "enumerate-node":
         if stage is None:
             return SitePrompt(unit_base_text(doc), (), frozenset({"meta"}))
@@ -1858,12 +2095,14 @@ def build_site_prompt(
         view_nodes = shown | {int(service)}
 
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
+            section = history_section(pair, "pair", view_dir)
             bundle = render_pair_review_bundle(
                 shown_doc, pair, plan_sha256=source.plan_sha256, view_dir=view_dir,
                 history=history, agreed_understanding=agreed_understanding,
-                understanding_doc=doc)
+                understanding_doc=doc, history_section=section)
             return ("\n".join([*header(view_dir), bundle]),
-                    {node_file_name(service): node_file_text(shown_doc, service)})
+                    {node_file_name(service): node_file_text(shown_doc, service),
+                     **(section.files if section is not None else {})})
     else:
         shown = frozenset({"meta"})
         view_nodes = shown | {stage_node.index for stage_node in doc.stages}
@@ -1915,14 +2154,23 @@ def build_site_prompt(
         return SitePrompt(render(placeholder)[0], (), shown)
     first_text, node_files = render(placeholder)
     files = view_files(first_text, node_files)
-    root = Path(view_root) if view_root is not None else _default_view_root()
-    name = (f"site-{source.plan_sha256[:16]}-{label}-"
-            f"{hashlib.sha256(_site_manifest(files).encode('utf-8')).hexdigest()[:12]}")
-    view_dir = root / name
-    if materialize:
-        _materialize_site_view(root, name, files)
+    view_dir = _publish_site_view(view_root, source.plan_sha256, label, files, materialize)
     text, _ = render(view_dir)
     return SitePrompt(text, (str(view_dir),), shown, view_dir, tuple(sorted(files)))
+
+
+def _publish_site_view(
+    view_root: "str | Path | None", plan_sha256: str, label: str, files: dict[str, bytes],
+    materialize: bool,
+) -> Path:
+    """The view directory holding `files`, named by the plan, the site and the files'
+    manifest; written (and verified) only when `materialize`."""
+    root = Path(view_root) if view_root is not None else _default_view_root()
+    name = (f"site-{plan_sha256[:16]}-{label}-"
+            f"{hashlib.sha256(_site_manifest(files).encode('utf-8')).hexdigest()[:12]}")
+    if materialize:
+        _materialize_site_view(root, name, files)
+    return root / name
 
 
 def _default_view_root() -> Path:
