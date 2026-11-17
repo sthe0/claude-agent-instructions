@@ -1143,6 +1143,12 @@ def _key_without_times(original):
     return mutated
 
 
+def _key_of_the_roots_only(original):
+    def mutated(root_keys, subdirs):
+        return original(root_keys, [])
+    return mutated
+
+
 def _reuse_ignores_presumption(original):
     def mutated(kept, key, presumption):
         return original(kept, key, kept and kept.held)
@@ -1176,6 +1182,10 @@ SNAPSHOT_MUTATIONS = {
     "child-index-reuse-off": (MODEL, "child_reusable", _always(False)),
     "child-index-ignores-floor": (MODEL, "child_reusable", _reuse_ignores_floor),
     "reuse-skips-observed": (SNAPSHOT, "replay_observation", _always(None)),
+    "transcript-pass-per-reader": (SNAPSHOT, "transcript_shared", _always(None)),
+    "transcript-index-reuse-off": (SNAPSHOT, "transcript_reusable", _always(False)),
+    "transcript-key-ignores-subdirs": (SNAPSHOT, "transcript_key", _key_of_the_roots_only),
+    "transcript-unsettled-key-stored": (SNAPSHOT, "transcript_key_settled", _always(True)),
     "stat-cycle-memo-off": (SNAPSHOT, "new_cycle_memo", _always(None)),
     "stat-dir-time-key-off": (SNAPSHOT, "directory_key", _directory_key_without_times),
     "stat-dir-key-after-listing": (SNAPSHOT, "listing_under_key", _key_read_after_the_listing),

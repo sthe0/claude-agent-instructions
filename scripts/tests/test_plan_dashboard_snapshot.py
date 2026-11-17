@@ -1492,6 +1492,70 @@ def test_a_changed_since_rebuilds_the_child_index(root, settled_clock, monkeypat
     assert globs.count(str(root.state_root)) == 2
 
 
+def transcript_index_in_a_stat_cycle(root, callers: int = 1):
+    with a_stat_cycle():
+        for _ in range(callers):
+            found = attention.transcript_index(root.transcripts_root)
+    return found
+
+
+def test_one_transcript_index_pass_per_stat_cycle(root, monkeypatch):
+    monkeypatch.setattr(store, "MTIME_STEP_NS", 10 ** 30)
+    store.reset()
+    with a_stat_cycle():
+        attention.transcript_index(root.transcripts_root)
+        store.TRANSCRIPTS.index(store.transcript_roots(root.transcripts_root))
+        attention.transcript_index(root.transcripts_root)
+    assert store.TRANSCRIPTS.passes == 1
+    transcript_index_in_a_stat_cycle(root)
+    assert store.TRANSCRIPTS.passes == 2
+
+
+def test_an_unchanged_transcript_tree_is_not_indexed_again(root, settled_clock):
+    store.reset()
+    results = [transcript_index_in_a_stat_cycle(root, callers=2) for _ in range(3)]
+    assert store.TRANSCRIPTS.passes == 1
+    assert HARNESS in results[0] and results[2] == results[0]
+
+
+def test_a_new_transcript_is_seen_by_the_next_stat_cycle(root, settled_clock):
+    store.reset()
+    assert "other-9" not in transcript_index_in_a_stat_cycle(root)
+    directory = transcript_path(root).parent
+    (directory / "other-9.jsonl").write_text("{}\n", encoding="utf-8")
+    move_directory_key(directory)
+    assert list(transcript_index_in_a_stat_cycle(root)["other-9"]) == [directory / "other-9.jsonl"]
+
+
+def test_a_kept_transcript_index_is_not_changed_by_its_callers(root, settled_clock):
+    store.reset()
+    transcript_index_in_a_stat_cycle(root)
+    kept = transcript_index_in_a_stat_cycle(root)
+    before = {stem: list(paths) for stem, paths in kept.items()}
+    for edit in (lambda: kept[HARNESS].append("x"), lambda: kept.__setitem__("x", ()), lambda: kept.pop(HARNESS)):
+        try:
+            edit()
+        except (TypeError, AttributeError):
+            pass
+    after = transcript_index_in_a_stat_cycle(root)
+    assert {stem: list(paths) for stem, paths in after.items()} == before
+
+
+def test_a_transcript_index_under_an_unsettled_key_is_not_reused(root, monkeypatch):
+    far = [time.time_ns() + FAR_FUTURE_NS]
+    monkeypatch.setattr(store, "now_ns", lambda: far[0])
+    store.reset()
+    transcript_index_in_a_stat_cycle(root)
+    directory = transcript_path(root).parent
+    (directory / "other-9.jsonl").write_text("{}\n", encoding="utf-8")
+    move_directory_key(directory)
+    far[0] = stamp(directory) + store.MTIME_STEP_NS - 1
+    passes = store.TRANSCRIPTS.passes
+    transcript_index_in_a_stat_cycle(root)
+    transcript_index_in_a_stat_cycle(root)
+    assert store.TRANSCRIPTS.passes == passes + 2
+
+
 def test_a_reused_stat_cycle_records_the_same_sources(root, settled_clock):
     store.reset()
     store.OBSERVED.reset()

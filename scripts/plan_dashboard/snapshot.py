@@ -39,7 +39,7 @@ import stat as stat_module
 import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 from lib import config_root, engine_session_binding
 
@@ -897,18 +897,71 @@ def harness_sessions_driving(engine_session: str) -> list[str]:
     return list(harness_index().get(config_root.sanitize_session_id(engine_session), []))
 
 
+def transcript_key(root_keys, subdirs) -> tuple:
+    """What the transcript roots and every project directory under them say of their names: a transcript
+    created, renamed or deleted moves its project directory's times, an append changes no name."""
+    return (tuple(root_keys),
+            tuple((path, identity_of(st)) for found in subdirs for _, (path, st) in sorted(found.items())))
+
+
+def transcript_key_settled(key) -> bool:
+    root_keys, subdirs = key
+    return (all(settled_key(root_key) for root_key in root_keys)
+            and all(now_ns() - _last_change(ident) >= MTIME_STEP_NS for _, ident in subdirs))
+
+
+def transcript_reusable(kept: KeptResult | None, key, roots) -> bool:
+    return kept is not None and kept.key == key and kept.held == roots
+
+
+def transcript_shared(shared, generation: int, roots):
+    """The transcript index this stat-path cycle already made for ``roots``, else None."""
+    if shared is not None and shared[0] == generation and shared[1] == roots:
+        return shared[2]
+    return None
+
+
 class TranscriptListing:
     """The main-session transcripts by session id, each project directory listed again only when its identity
-    changed (a created or deleted transcript moves its directory's mtime)."""
+    changed (a created or deleted transcript moves its directory's mtime). On the stat path one pass serves
+    every reader of a cycle, and the result (an immutable mapping of tuples) outlives the cycle while the
+    identities of the roots and of every project directory are unchanged."""
 
     def __init__(self):
         self.dirs = IdentityCache("transcript")
+        self.passes = 0
+        self.kept: KeptResult | None = None
+        self.cycle: tuple | None = None
+        self._lock = threading.RLock()
 
     def index(self, roots) -> dict[str, list[Path]]:
+        roots = tuple(roots)
+        generation = stat_cycle_generation()
+        if generation is None:
+            return self._pass([self._subdirs(root) for root in roots])
+        with self._lock:
+            shared = transcript_shared(self.cycle, generation, roots)
+            if shared is not None:
+                return shared
+            subdirs = [self._subdirs(root) for root in roots]
+            key = transcript_key([result_key(root) for root in roots], subdirs)
+            settled_at_key = transcript_key_settled(key)
+            if transcript_reusable(self.kept, key, roots):
+                REUSED.note("transcripts", self.kept)
+                result = self.kept.value
+            else:
+                result = MappingProxyType({stem: tuple(paths) for stem, paths in self._pass(subdirs).items()})
+                if settled_at_key:
+                    self.kept = KeptResult(key, roots, result)
+            self.cycle = (generation, roots, result)
+            return result
+
+    def _pass(self, subdirs) -> dict[str, list[Path]]:
+        self.passes += 1
         found: dict[str, list[Path]] = {}
         seen = set()
-        for root in roots:
-            for sub, (path, st) in sorted(self._subdirs(root).items()):
+        for listed_here in subdirs:
+            for sub, (path, st) in sorted(listed_here.items()):
                 seen.add(path)
                 for transcript in self.dirs.fetch(path, st, self._names):
                     found.setdefault(transcript.stem, []).append(transcript)
@@ -942,7 +995,10 @@ class TranscriptListing:
             return []
 
     def clear(self) -> None:
-        self.dirs.clear()
+        with self._lock:
+            self.dirs.clear()
+            self.kept = self.cycle = None
+            self.passes = 0
 
 
 TRANSCRIPTS = TranscriptListing()

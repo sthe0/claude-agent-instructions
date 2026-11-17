@@ -2603,7 +2603,7 @@ def test_a_reused_stat_cycle_reports_its_reused_readers(tmp_path, monkeypatch, t
         ended = [e for e in got if e["ev"] == "cycle_end"]
         children = {e["cycle"]: e["reused"] for e in got if e["ev"] == "children_done"}
         assert len(ended) >= 2, got
-        assert ended[-1]["reused"] == ["binding", "state"] and children[ended[-1]["cycle"]] is True
+        assert ended[-1]["reused"] == ["binding", "state", "transcripts"] and children[ended[-1]["cycle"]] is True
 
     run_fleet(scenario, root, timers, stream, path="stat", interval=2.0)
 

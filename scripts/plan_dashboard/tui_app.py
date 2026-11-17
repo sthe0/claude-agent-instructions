@@ -720,7 +720,7 @@ async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool
     app.parked.extend(parked or ())
     if (cycle := cycle_of(app, snapshot)) is not None:
         note(app, "cycle_end", cycle=cycle, applied=seen[0], found_by=found_by(app, seen[0]),
-             cpu_ns=cycle_cpu_ns(), reused=reused_readers(app, cycle, ("binding", "state")))
+             cpu_ns=cycle_cpu_ns(), reused=reused_readers(app, cycle, ("binding", "state", "transcripts")))
         finish_cycle(app, cycle)
 
 
