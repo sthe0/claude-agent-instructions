@@ -1554,6 +1554,29 @@ def _void_k1_runs_counted(original):
     return lambda r3, k1: original(r3, [dict(r, counted=True) for r in k1])
 
 
+def _children_read_aborts_on_a_missing_thread(original):
+    def mutated(root_pid, proc_root="/proc", children_files=True):
+        ticks, frontier = {}, [root_pid]
+        while frontier:
+            pid = frontier.pop()
+            if pid in ticks:
+                continue
+            try:
+                fields = Path(proc_root, str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+                ticks[pid] = sum(int(f) for f in fields[11:15])
+            except (OSError, ValueError, IndexError):
+                continue
+            kids = []
+            try:
+                for thread in os.listdir(Path(proc_root, str(pid), "task")):
+                    kids += [int(c) for c in Path(proc_root, str(pid), "task", thread, "children").read_text().split()]
+            except (OSError, ValueError):
+                pass
+            frontier += kids
+        return ticks
+    return mutated
+
+
 LAUNCHER = "plan_dashboard_cli"
 HARNESS = "plan_dashboard_harness"
 FILE_MODULES = {LAUNCHER: Path(__file__).resolve().parents[1] / "plan-dashboard.py",
@@ -1597,7 +1620,8 @@ SCRIPT_MODULE_MUTATIONS = {
     "smoke-void-counted": (HARNESS, "record_counted", lambda _original: (lambda record: True)),
     "report-only-ignored": (HARNESS, "parse_report_only", _report_only_unapplied),
     "r1-from-wall": (HARNESS, "judge_cell_r1", _r1_from_wall),
-    "cpu-walk-no-ppid-fallback": (HARNESS, "proc_children_by_ppid", lambda _original: (lambda proc_root="/proc": {})),
+    "cpu-walk-no-ppid-fallback": (HARNESS, "proc_children_by_ppid", lambda _original: (lambda proc_root="/proc": ({}, {}))),
+    "children-read-aborts-on-first-missing-thread": (HARNESS, "proc_tree_ticks", _children_read_aborts_on_a_missing_thread),
     "next-measurement-counts-void-k1": (HARNESS, "next_measurement", _void_k1_runs_counted),
 }
 

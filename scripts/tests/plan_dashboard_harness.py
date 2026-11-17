@@ -492,19 +492,23 @@ def descendants(root_pid: int) -> int:
     return count
 
 
-def proc_children_by_ppid(proc_root: str = "/proc") -> dict[int, list[int]]:
-    """``pid -> children`` from one scan of every ``proc_root``/<pid>/stat, for a kernel that has no
-    ``task/*/children`` files (built without CONFIG_PROC_CHILDREN)."""
+def proc_children_by_ppid(proc_root: str = "/proc") -> tuple[dict[int, list[int]], dict[int, int]]:
+    """``(pid -> children, pid -> CPU ticks)`` from one scan of every ``proc_root``/<pid>/stat, for a kernel that
+    has no ``task/*/children`` files (built without CONFIG_PROC_CHILDREN). The ticks come from the stat read
+    that gave the parent, so a process reaped later is still counted and a reused pid is never mixed in."""
     by_parent: dict[int, list[int]] = {}
+    ticks: dict[int, int] = {}
     for entry in os.listdir(proc_root):
         if not entry.isdigit():
             continue
         try:
-            ppid = int(Path(proc_root, entry, "stat").read_text().rsplit(")", 1)[1].split()[1])
+            fields = Path(proc_root, entry, "stat").read_text().rsplit(")", 1)[1].split()
+            ppid, own = int(fields[1]), sum(int(f) for f in fields[11:15])
         except (OSError, ValueError, IndexError):
             continue
         by_parent.setdefault(ppid, []).append(int(entry))
-    return by_parent
+        ticks[int(entry)] = own
+    return by_parent, ticks
 
 
 def proc_tree_ticks(root_pid: int, proc_root: str = "/proc", children_files: bool = True) -> dict[int, int]:
@@ -512,16 +516,19 @@ def proc_tree_ticks(root_pid: int, proc_root: str = "/proc", children_files: boo
     process's children come from its ``task/*/children`` files; when none of its threads has one (or
     ``children_files`` is false), from the ppid map of a single scan of ``proc_root`` (taken once per call, on
     first need)."""
-    ticks, frontier, by_parent = {}, [root_pid], None
+    ticks, frontier, by_parent, scanned = {}, [root_pid], None, {}
     while frontier:
         pid = frontier.pop()
         if pid in ticks:
             continue
-        try:
-            fields = Path(proc_root, str(pid), "stat").read_text().rsplit(")", 1)[1].split()
-            ticks[pid] = sum(int(f) for f in fields[11:15])
-        except (OSError, ValueError, IndexError):
-            continue
+        if pid in scanned:
+            ticks[pid] = scanned[pid]
+        else:
+            try:
+                fields = Path(proc_root, str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+                ticks[pid] = sum(int(f) for f in fields[11:15])
+            except (OSError, ValueError, IndexError):
+                continue
         kids, listed = [], False
         try:
             threads = os.listdir(Path(proc_root, str(pid), "task")) if children_files else []
@@ -535,7 +542,7 @@ def proc_tree_ticks(root_pid: int, proc_root: str = "/proc", children_files: boo
                 continue
         if not listed:
             if by_parent is None:
-                by_parent = proc_children_by_ppid(proc_root)
+                by_parent, scanned = proc_children_by_ppid(proc_root)
             kids = by_parent.get(pid, [])
         frontier += kids
     return ticks

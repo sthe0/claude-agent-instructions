@@ -108,6 +108,7 @@ HARNESS_MUTATIONS = (
     "r1-from-wall",
     "cpu-walk-no-ppid-fallback",
     "next-measurement-counts-void-k1",
+    "children-read-aborts-on-first-missing-thread",
 )
 SCRIPT_MODULE_TESTS = {**dict.fromkeys(HARNESS_MUTATIONS, HARNESS_TESTS),
                        "launcher-imports-every-subcommand": TUI_TESTS}

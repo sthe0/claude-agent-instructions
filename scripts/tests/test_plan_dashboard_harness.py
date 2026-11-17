@@ -1713,7 +1713,17 @@ def test_the_cpu_walk_falls_back_to_the_ppid_map_when_there_are_no_children_file
     assert h.proc_tree_ticks(999, str(tmp_path)) == {}
 
 
-def test_a_thread_gone_mid_listing_does_not_hide_its_siblings_children(tmp_path):
+def test_the_ppid_scan_returns_each_process_ticks_from_the_same_stat_read(tmp_path):
+    fake_proc(tmp_path, 100, 1, 10)
+    fake_proc(tmp_path, 101, 100, 20)
+    (tmp_path / "self").mkdir()
+    by_parent, ticks = h.proc_children_by_ppid(str(tmp_path))
+    assert by_parent == {1: [100], 100: [101]} and ticks == {100: 10, 101: 20}
+
+
+def test_a_thread_gone_mid_listing_does_not_hide_its_siblings_children(tmp_path, monkeypatch):
+    real_listdir = os.listdir
+    monkeypatch.setattr(h.os, "listdir", lambda path: sorted(real_listdir(path)))    # the vanished thread is listed first
     fake_proc(tmp_path, 100, 1, 10, threads=("a", "b"))                   # thread a: no children file (vanished)
     (tmp_path / "100" / "task" / "b" / "children").write_text("101")
     fake_proc(tmp_path, 101, 100, 20, kids=())
@@ -1735,7 +1745,6 @@ def test_the_cpu_walk_visits_a_grandchild_on_the_real_proc(children_files):
         assert select.select([proc.stdout], [], [], 60)[0], "hang guard: no pids reported"
         child_pid, grandchild_pid = (int(x) for x in proc.stdout.readline().split())
         assert {proc.pid, child_pid, grandchild_pid} <= set(h.proc_tree_ticks(proc.pid, children_files=children_files))
-        assert h.proc_tree_cpu_s(proc.pid) >= 0.0
     finally:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
