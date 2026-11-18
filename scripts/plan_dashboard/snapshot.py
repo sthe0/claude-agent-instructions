@@ -449,6 +449,41 @@ class KeptEntry:
         return self._view.stat(self.path)
 
 
+def judged_coverage(view: "KeptView", key: str) -> tuple:
+    """``(covers, covered)``: the cover test read once, with ``trusting``, under the view's lock and run for
+    ``key`` outside it, so a test that is slow (or that calls back into the view) holds no one up."""
+    with view._lock:
+        trusting, covers = view.trusting, view.covers
+    return covers, trusting and (covers is None or bool(covers(key)))
+
+
+def stat_coverage(view: "KeptView", key: str) -> tuple:
+    return judged_coverage(view, key)
+
+
+def scandir_coverage(view: "KeptView", key: str) -> tuple:
+    return judged_coverage(view, key)
+
+
+def trust_holds(view: "KeptView", covers) -> bool:
+    """Whether the view still trusts with the cover test a judgement was made by (under the view's lock)."""
+    return view.trusting and view.covers is covers
+
+
+def next_epoch(epoch: int) -> int:
+    return epoch + 1
+
+
+def marked_directories(paths, directories) -> list[str]:
+    """The directories whose names or entries a mark may have changed: the one holding each marked path and
+    each marked directory."""
+    return [*(os.path.dirname(key) for key in paths), *directories]
+
+
+def relisted_directories(key: str) -> tuple[str, ...]:
+    return (key,)
+
+
 class KeptView:
     """What the event path knows of the file system without asking it again.
 
@@ -459,10 +494,13 @@ class KeptView:
 
     def __init__(self):
         self._lock = threading.RLock()
+        self.epoch = 0
         self.reset()
 
     def reset(self) -> None:
         with self._lock:
+            self.epoch = next_epoch(self.epoch)
+            self.versions: dict[str, int] = {}
             self.trusting = False
             self.covers = None
             self.stats: dict[str, os.stat_result | None] = {}
@@ -497,19 +535,37 @@ class KeptView:
     def distrust(self) -> None:
         with self._lock:
             self.trusting = False
+            self.epoch = next_epoch(self.epoch)
 
-    def _kept(self, key: str) -> bool:
-        return self.trusting and (self.covers is None or self.covers(key))
+    def answers_from_memory(self, judged: tuple) -> bool:
+        """Under the lock: whether a ``(covers, covered)`` judgement still stands. A trust swapped in since it
+        was made leaves the call to be answered live."""
+        covers, covered = judged
+        return covered and trust_holds(self, covers)
+
+    def _bump(self, directories) -> None:
+        for directory in directories:
+            self.versions[directory] = self.versions.get(directory, 0) + 1
+
+    def version_of(self, directory) -> tuple[int, int]:
+        """``(epoch, version)`` of ``directory``: it moves when a mark names a path in it or the directory, when
+        a relist or an unsettled stat in it dirties an entry, and (the epoch) when the view is reset or
+        distrusted. A result kept under one is stale under another."""
+        with self._lock:
+            return self.epoch, self.versions.get(str(directory), 0)
 
     def mark(self, paths=(), directories=(), by: str = "event") -> None:
         """Ask again about ``paths`` and about the names in ``directories`` at the next read of each."""
         with self._lock:
-            for key in (*map(str, paths), *map(str, directories)):
+            paths, directories = [*map(str, paths)], [*map(str, directories)]
+            for key in (*paths, *directories):
                 self.marks += 1
                 self.dirty[key] = self.marks
                 self.found.setdefault(key, by)
-            for key in map(str, directories):
+            for key in directories:
                 self.relist[key] = self.marks
+            self._bump(marked_directories(paths, directories))
+            self._bump(key for key in paths if key in self.listings)
 
     def take_found(self) -> dict[str, str]:
         with self._lock:
@@ -518,9 +574,10 @@ class KeptView:
 
     def stat(self, path):
         key = str(path)
+        judged = stat_coverage(self, key)
         with self._lock:
             seen = self.dirty.get(key)
-            if self._kept(key) and key in self.stats and seen is None:
+            if self.answers_from_memory(judged) and key in self.stats and seen is None:
                 kept = self.stats[key]
                 if kept is None:
                     raise FileNotFoundError(2, "absent when last looked", key)
@@ -575,15 +632,17 @@ class KeptView:
                 self.marks += 1
                 self.dirty[key] = self.marks
                 self.found.setdefault(key, FOUND_BY_STAT)
+                self._bump([os.path.dirname(key)])
 
     def scandir(self, root, by_directory_time: bool = False) -> list[KeptEntry]:
         """The entries of ``root``. On the stat path a directory is listed once per cycle; with
         ``by_directory_time`` — for a directory whose names are only created, renamed or replaced — its listing
         and its settled stats are also kept across cycles for as long as ``directory_key`` is the same."""
         key = str(root)
+        judged = scandir_coverage(self, key)
         with self._lock:
             seen = self.relist.get(key)
-            kept = self.listings.get(key) if self._kept(key) and seen is None else None
+            kept = self.listings.get(key) if self.answers_from_memory(judged) and seen is None else None
             memo, generation = (self._memo(), self.generation) if kept is None else (None, 0)
             if memo is not None:
                 kept = memo.listings.get(key)
@@ -591,6 +650,8 @@ class KeptView:
             kept = self._list(key, by_directory_time, memo, generation)
             with self._lock:
                 self.listings[key] = kept
+                if seen is not None:
+                    self._bump(relisted_directories(key))
                 if self.relist.get(key) == seen:
                     self.relist.pop(key, None)
         return [KeptEntry(name, os.path.join(key, name), is_dir, self) for name, is_dir in kept]
@@ -647,8 +708,16 @@ class KeptView:
         """Everything kept, as ``(kind, path)`` with kind ``stat`` or ``dir``, in a fixed order: the ring a
         reconciliation walks."""
         with self._lock:
-            return sorted([("stat", key) for key in self.stats if self._kept(key)]
-                          + [("dir", key) for key in self.listings if self._kept(key)], key=lambda i: (i[1], i[0]))
+            trusting, covers = self.trusting, self.covers
+            stats, listings = list(self.stats), list(self.listings)
+        if not trusting:
+            return []
+        covered = (lambda key: True) if covers is None else covers
+        items = [("stat", key) for key in stats if covered(key)] + [("dir", key) for key in listings if covered(key)]
+        with self._lock:
+            if not trust_holds(self, covers):
+                return []
+        return sorted(items, key=lambda i: (i[1], i[0]))
 
     def differs(self, item: tuple[str, str]) -> bool:
         """Whether the file system no longer holds what the kept view has for ``item`` (one live stat or
@@ -673,14 +742,86 @@ class KeptView:
 KEPT = KeptView()
 
 
+class KeptListing:
+    """What one event-path ``listed`` pass made: the listing, what it fed ``OBSERVED``, the directory's version
+    taken before the pass and the cover test the pass ran under."""
+
+    __slots__ = ("version", "covers", "found", "observed", "generation")
+
+    def __init__(self, version: tuple, covers, found: dict, observed):
+        self.version, self.covers, self.found, self.observed = version, covers, found, observed
+        self.generation = stat_cycle_generation()
+
+
+LISTINGS: dict[tuple, KeptListing] = {}
+
+
+def listing_reusable(kept: KeptListing | None, version: tuple, covers) -> bool:
+    return kept is not None and kept.version == version and kept.covers is covers
+
+
+def copy_listing(found: dict) -> dict:
+    return dict(found)
+
+
+def replay_listing(kind: str, observed) -> None:
+    replay_observation(kind, observed)
+
+
+def listing_settled(kind: str) -> bool:
+    """Whether the pass that just fed ``OBSERVED`` saw every file settled: a file that crossed the settle
+    boundary after the pass began has no mark behind it yet."""
+    return not OBSERVED.unsettled(kind)
+
+
+def children_covered(covers, root, found: dict) -> bool:
+    return all(covers(path) for path, _ in found.values())
+
+
+def keep_listing(key: tuple, version: tuple, covers, found: dict, kind: str) -> None:
+    """Keep a pass of the event path that read ``version`` of its directory before it, for as long as nothing
+    moves it: the directory and every file in it are covered, so a change reaches the view as a mark, and no
+    file was unsettled."""
+    root = key[1]
+    if covers is not None and not (covers(root) and children_covered(covers, root, found)):
+        return
+    if not listing_settled(kind):
+        return
+    kept = KeptListing(version, covers, copy_listing(found), OBSERVED.capture(kind))
+    with KEPT._lock:
+        if trust_holds(KEPT, covers):
+            LISTINGS[key] = kept
+
+
+def kept_listing(key: tuple, kind: str, root) -> dict | None:
+    """The kept pass for ``key`` while the view trusts with the same cover test and the directory's version is the
+    one it was read under; its observation is replayed, as the pass would have made it. None when a pass is due."""
+    with KEPT._lock:
+        kept, trusting, covers, version = LISTINGS.get(key), KEPT.trusting, KEPT.covers, KEPT.version_of(root)
+    if not trusting or not listing_reusable(kept, version, covers):
+        return None
+    replay_listing(kind, kept.observed)
+    REUSED.note(kind, kept)
+    return copy_listing(kept.found)
+
+
 def listed(kind: str, root, suffix: str, by_directory_time: bool = False) -> dict[str, tuple[str, os.stat_result]]:
     """``scan(root, suffix)``, recorded in ``OBSERVED`` as every identity of ``kind``, with the directory's
-    marker taken before the pass."""
+    marker taken before the pass. On the event path a pass is kept and served again while the directory's
+    version in the kept view is unchanged."""
+    key = (kind, str(root), suffix, by_directory_time)
+    again = kept_listing(key, kind, root)
+    if again is not None:
+        return again
+    with KEPT._lock:
+        trusting, covers, version = KEPT.trusting, KEPT.covers, KEPT.version_of(root)
     read_ns = now_ns()
     marker = directory_marker(root)
     found = scan(root, suffix, by_directory_time)
     directory = None if marker is None else {"path": str(root), "marker": marker, "taken_ns": read_ns}
     OBSERVED.scanned(kind, {path: (st, read_ns) for path, st in found.values()}, directory)
+    if trusting:
+        keep_listing(key, version, covers, found, kind)
     return found
 
 
@@ -1015,6 +1156,7 @@ def transcript_roots(transcripts_root) -> list[Path]:
 
 def reset() -> None:
     KEPT.reset()
+    LISTINGS.clear()
     OBSERVED.reset()
     STATES.clear()
     BINDINGS.clear()

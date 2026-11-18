@@ -266,6 +266,51 @@ def test_a_write_before_the_cycle_start_stamp_is_in_that_cycle(started, layout):
     assert str(written) in kept.dirty
 
 
+@pytest.fixture(autouse=True)
+def cold_covers_memo():
+    watch.COVERS_MEMO.clear()
+    yield
+    watch.COVERS_MEMO.clear()
+
+
+COVERS_TABLE = (
+    "/r/a", "/r/a/x.json", "/r/a/x.txt", "/r/a/d/y.json", "/r/a/d/y.txt", "/r/a/d/e/z.json", "/r/ab/x.json",
+    "/elsewhere/x.json", "/r/a//x.json", "/r/a/x.json/", "/r/a/./x.json", "/r/b", "/r/b/x.json", "/r/b/d/y.json",
+)
+
+
+def test_memoized_covers_agrees_with_source_covers():
+    sources = (watch.Source("a", Path("/r/a"), 1, ".json"), watch.Source("b", Path("/r/b"), 0, ".json"))
+    asked = [(source.kind, path, watch.covers_of(source, path)) for path in COVERS_TABLE for source in sources]
+    assert asked == [(source.kind, path, source.covers(path)) for path in COVERS_TABLE for source in sources]
+    assert {answer for _, _, answer in asked} == {True, False}
+
+
+def test_source_covers_runs_once_per_path(monkeypatch):
+    asked, real = [], watch.Source.covers
+    monkeypatch.setattr(watch.Source, "covers", lambda source, path: (asked.append(path), real(source, path))[1])
+    source = watch.Source("a", Path("/r/a"), 1, ".json")
+    for path in ("/r/a/x.json", "/r/a/x.json", "/r/a/y.json", "/r/a/x.json"):
+        watch.covers_of(source, path)
+    assert asked == ["/r/a/x.json", "/r/a/y.json"]
+
+
+def test_the_covers_memo_is_bounded(monkeypatch):
+    monkeypatch.setattr(watch, "COVERS_MEMO_MAX", 4)
+    source = watch.Source("a", Path("/r/a"), 1, ".json")
+    for number in range(watch.COVERS_MEMO_MAX + 1):
+        watch.covers_of(source, f"/r/a/{number}.json")
+    assert 0 < len(watch.COVERS_MEMO) <= watch.COVERS_MEMO_MAX
+
+
+def test_watcher_sources_are_a_tuple(layout):
+    given = layout.sources()
+    count = len(given)
+    watcher = watch.Watcher(given, inotify=object())
+    given.append(watch.Source("extra", Path("/r/extra"), 0, ".json"))
+    assert isinstance(watcher.sources, tuple) and len(watcher.sources) == count
+
+
 def test_the_event_path_detection_follows_the_last_start_up_watch(layout, monkeypatch):
     log: list = []
     monkeypatch.setattr(watch, "Inotify", lambda: FakeInotify(log=log))

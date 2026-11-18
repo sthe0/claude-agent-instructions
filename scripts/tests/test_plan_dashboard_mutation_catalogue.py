@@ -51,7 +51,11 @@ SNAPSHOT_NAMES = (
     "binding-key-ignores-times", "binding-reuse-ignores-presumption", "state-listing-reuse-off",
     "state-key-ignores-times", "state-window-kept", "child-index-reuse-off", "child-index-ignores-floor",
     "reuse-skips-observed", "transcript-pass-per-reader", "transcript-index-reuse-off",
-    "transcript-key-ignores-subdirs", "transcript-unsettled-key-stored")
+    "transcript-key-ignores-subdirs", "transcript-unsettled-key-stored", "kept-covers-under-lock",
+    "kept-scandir-covers-under-lock", "kept-covers-identity-unchecked", "listing-reuse-off",
+    "listing-reuse-ignores-mark", "listing-reuse-ignores-relist", "listing-reuse-kept-after-distrust",
+    "listing-version-after-pass", "listing-reuse-root-only-covered", "listing-reuse-shared-result",
+    "listing-reuse-no-replay", "listing-reuse-despite-unsettled")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
                         "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
                         "startup-applied-last-read-only", "startup-applied-at-check-end",
@@ -63,7 +67,8 @@ WATCH_NAMES = (
     "redraw-at-idle", "watch-failure-not-fallen-back", "event-cycle-reads-all", "redraw-not-spaced",
     "light-tick-reads-sources", "light-tick-skips-tmux", "light-tick-owns-redraw", "light-tick-ignores-pending-event",
     "sweep-not-sliced", "skipped-slice-share-lost", "held-redraw-waits-for-next-tick", "owed-header-repaint-dropped",
-    "owed-tmux-poll-dropped", "cycle-start-after-read", "detection-at-path-choice")
+    "owed-tmux-poll-dropped", "cycle-start-after-read", "detection-at-path-choice", "covers-memo-across-sources",
+    "covers-unmemoized", "covers-memo-unbounded", "watcher-sources-list")
 WATCH_PILOT_NAMES = tuple(name for name, (module, _, _) in mutations.WATCH_MUTATIONS.items()
                           if module == mutations.TUI_APP)
 WATCH_STDLIB_NAMES = tuple(name for name in WATCH_NAMES if name not in WATCH_PILOT_NAMES)

@@ -1172,7 +1172,53 @@ def _window_kept(original):
     return mutated
 
 
+def _coverage_decided_under_the_lock(original):
+    def mutated(view, key):
+        with view._lock:
+            trusting, covers = view.trusting, view.covers
+            return covers, trusting and (covers is None or bool(covers(key)))
+    return mutated
+
+
+def _trust_checked_without_the_cover_test(original):
+    return lambda view, covers: view.trusting
+
+
+def _epoch_kept(original):
+    return lambda epoch: epoch
+
+
+def _marks_name_no_directory(original):
+    return lambda paths, directories: []
+
+
+def _relist_bumps_nothing(original):
+    return lambda key: ()
+
+
+def _listing_version_read_after_the_pass(original):
+    def mutated(key, version, covers, found, kind):
+        return original(key, importlib.import_module(SNAPSHOT).KEPT.version_of(key[1]), covers, found, kind)
+    return mutated
+
+
+def _children_covered_by_the_root(original):
+    return lambda covers, root, found: covers(root)
+
+
 SNAPSHOT_MUTATIONS = {
+    "kept-covers-under-lock": (SNAPSHOT, "stat_coverage", _coverage_decided_under_the_lock),
+    "kept-scandir-covers-under-lock": (SNAPSHOT, "scandir_coverage", _coverage_decided_under_the_lock),
+    "kept-covers-identity-unchecked": (SNAPSHOT, "trust_holds", _trust_checked_without_the_cover_test),
+    "listing-reuse-off": (SNAPSHOT, "listing_reusable", _always(False)),
+    "listing-reuse-ignores-mark": (SNAPSHOT, "marked_directories", _marks_name_no_directory),
+    "listing-reuse-ignores-relist": (SNAPSHOT, "relisted_directories", _relist_bumps_nothing),
+    "listing-reuse-kept-after-distrust": (SNAPSHOT, "next_epoch", _epoch_kept),
+    "listing-version-after-pass": (SNAPSHOT, "keep_listing", _listing_version_read_after_the_pass),
+    "listing-reuse-root-only-covered": (SNAPSHOT, "children_covered", _children_covered_by_the_root),
+    "listing-reuse-shared-result": (SNAPSHOT, "copy_listing", lambda _original: lambda found: found),
+    "listing-reuse-no-replay": (SNAPSHOT, "replay_listing", lambda _original: lambda kind, observed: None),
+    "listing-reuse-despite-unsettled": (SNAPSHOT, "listing_settled", _always(True)),
     "binding-index-reuse-off": (SNAPSHOT, "binding_reusable", _always(False)),
     "binding-pass-per-reader": (SNAPSHOT, "shared_this_cycle", _always(None)),
     "binding-key-ignores-times": (SNAPSHOT, "binding_key", _key_without_times),
@@ -1314,7 +1360,40 @@ def _held_redraw_one_tick_late(original):
     return mutated
 
 
+def _covers_memo_keyed_by_path_only(original):
+    memo = {}
+
+    def mutated(source, path):
+        key = os.fspath(path)
+        if key not in memo:
+            memo[key] = source.covers(path)
+        return memo[key]
+    return mutated
+
+
+def _covers_memo_without_a_bound(original):
+    def mutated(source, path):
+        memo = _watch().COVERS_MEMO
+        key = (source, os.fspath(path))
+        if key not in memo:
+            memo[key] = source.covers(path)
+        return memo[key]
+    return mutated
+
+
+def _watcher_keeps_the_given_sources(original):
+    class Mutated(original):
+        def __init__(self, sources, *args, **kwargs):
+            super().__init__(sources, *args, **kwargs)
+            self.sources = sources
+    return Mutated
+
+
 WATCH_MUTATIONS = {
+    "covers-memo-across-sources": (WATCH, "covers_of", _covers_memo_keyed_by_path_only),
+    "covers-unmemoized": (WATCH, "covers_of", lambda _original: lambda source, path: source.covers(path)),
+    "covers-memo-unbounded": (WATCH, "covers_of", _covers_memo_without_a_bound),
+    "watcher-sources-list": (WATCH, "Watcher", _watcher_keeps_the_given_sources),
     "overflow-not-swept": (WATCH, "needs_sweep", _always(False)),
     "new-dir-not-watched": (WATCH, "adopt", lambda _original: lambda *args, **kwargs: None),
     "pattern-dirs-not-watched": (WATCH, "directories_to_watch", _directories_holding_a_source_only),

@@ -1570,3 +1570,175 @@ def test_a_reused_stat_cycle_records_the_same_sources(root, settled_clock):
     store.OBSERVED.reset()
     assert {item["kind"] for item in full} >= {"state", "binding"}
     assert one_cycle() == full
+
+
+class Cover:
+    """A cover test of the kept view: covers what lies under ``prefix`` except the names in ``outside``."""
+
+    def __init__(self, prefix, outside=()):
+        self.prefix, self.outside = str(prefix), tuple(outside)
+
+    def __call__(self, path) -> bool:
+        return str(path).startswith(self.prefix) and not str(path).endswith(self.outside)
+
+
+@pytest.fixture
+def listing(tmp_path, monkeypatch):
+    """A trusting kept view over a directory of two settled files, on a clock far past them."""
+    store.reset()
+    monkeypatch.setattr(store, "now_ns", lambda: time.time_ns() + FAR_FUTURE_NS)
+    root = tmp_path / "listed"
+    root.mkdir()
+    for name in ("a", "b"):
+        (root / f"{name}.json").write_text("{}", encoding="utf-8")
+    cover = Cover(tmp_path)
+    store.KEPT.trust(cover)
+    yield SimpleNamespace(root=root, cover=cover)
+    store.reset()
+
+
+def list_state(listing):
+    return store.listed("state", listing.root, ".json")
+
+
+def count_kept_reads(monkeypatch) -> SimpleNamespace:
+    """Counters on ``KeptView.scandir`` calls and ``KeptEntry`` constructions."""
+    counts = SimpleNamespace(scandir=0, entries=0)
+    real_scandir, real_entry = store.KeptView.scandir, store.KeptEntry
+
+    def scandir(view, *args, **kwargs):
+        counts.scandir += 1
+        return real_scandir(view, *args, **kwargs)
+
+    class Counted(real_entry):
+        __slots__ = ()
+
+        def __init__(self, *args):
+            counts.entries += 1
+            super().__init__(*args)
+
+    monkeypatch.setattr(store.KeptView, "scandir", scandir)
+    monkeypatch.setattr(store, "KeptEntry", Counted)
+    return counts
+
+
+def test_kept_stat_decides_coverage_outside_the_lock(listing):
+    held = []
+    store.KEPT.trust(lambda path: held.append(store.KEPT._lock._is_owned()) or True)
+    store.KEPT.stat(listing.root / "a.json")
+    assert held == [False]
+
+
+def test_kept_scandir_decides_coverage_outside_the_lock(listing):
+    held = []
+    store.KEPT.trust(lambda path: held.append(store.KEPT._lock._is_owned()) or True)
+    store.KEPT.scandir(listing.root)
+    assert held == [False]
+
+
+def test_a_trust_swap_during_a_stat_answers_live(listing, monkeypatch):
+    path = listing.root / "a.json"
+    store.KEPT.stat(path)
+    live, real_stat = [], os.stat
+    monkeypatch.setattr(os, "stat", lambda target, *args, **kwargs: (live.append(str(target)), real_stat(target, *args, **kwargs))[1])
+    other = Cover(listing.root.parent)
+
+    def swapping(_path) -> bool:
+        store.KEPT.trust(other)
+        return True
+
+    store.KEPT.trust(swapping)
+    store.KEPT.stat(path)
+    assert live == [str(path)]
+
+
+def test_an_unchanged_directory_is_not_relisted_on_the_event_path(listing, monkeypatch):
+    first = list_state(listing)
+    counts = count_kept_reads(monkeypatch)
+    second = list_state(listing)
+    assert (counts.scandir, counts.entries) == (0, 0)
+    assert second == first and set(second) == {"a", "b"}
+
+
+def test_a_marked_child_is_seen_by_the_next_listing(listing):
+    first = list_state(listing)
+    (listing.root / "a.json").write_text('{"grown": true}', encoding="utf-8")
+    store.KEPT.mark([listing.root / "a.json"])
+    assert list_state(listing)["a"][1].st_size != first["a"][1].st_size
+
+
+def test_a_relisted_directory_is_listed_again(listing, monkeypatch):
+    list_state(listing)
+    store.KEPT.mark(directories=[listing.root])
+    list_state(listing)
+    counts = count_kept_reads(monkeypatch)
+    list_state(listing)
+    assert counts.scandir == 1
+
+
+def test_distrust_drops_listing_reuse(listing, monkeypatch):
+    list_state(listing)
+    store.KEPT.distrust()
+    store.KEPT.trust(listing.cover)
+    counts = count_kept_reads(monkeypatch)
+    list_state(listing)
+    assert counts.scandir == 1
+
+
+def test_a_mark_during_the_pass_is_not_reused(listing, monkeypatch):
+    passes, real_scandir = [], store.KeptView.scandir
+
+    def marking(view, root, *args, **kwargs):
+        entries = real_scandir(view, root, *args, **kwargs)
+        if not passes:
+            view.mark([Path(root) / "a.json"])
+        passes.append(root)
+        return entries
+
+    monkeypatch.setattr(store.KeptView, "scandir", marking)
+    list_state(listing)
+    list_state(listing)
+    assert len(passes) == 2
+
+
+def test_listing_reuse_needs_every_child_covered(listing, monkeypatch):
+    store.KEPT.trust(Cover(listing.root.parent, outside=("b.json",)))
+    list_state(listing)
+    counts = count_kept_reads(monkeypatch)
+    list_state(listing)
+    assert counts.scandir == 1
+
+
+def test_a_reused_listing_is_a_fresh_copy(listing):
+    first = list_state(listing)
+    first.clear()
+    second = list_state(listing)
+    assert set(second) == {"a", "b"}
+    second.clear()
+    assert set(list_state(listing)) == {"a", "b"}
+
+
+def test_a_reused_listing_replays_its_observation(listing):
+    list_state(listing)
+    recorded = store.OBSERVED.capture("state")
+    assert recorded[0]
+    store.OBSERVED.scanned("state", {})
+    list_state(listing)
+    assert store.OBSERVED.capture("state") == recorded
+
+
+def test_unsettled_entries_are_not_reused(listing, monkeypatch):
+    start = time.time_ns()
+    clock, real_marker = [start], store.directory_marker
+    monkeypatch.setattr(store, "now_ns", lambda: clock[0])
+
+    def marker_after_the_clock_moves(path):
+        clock[0] = start + FAR_FUTURE_NS
+        return real_marker(path)
+
+    monkeypatch.setattr(store, "directory_marker", marker_after_the_clock_moves)
+    list_state(listing)
+    assert store.OBSERVED.unsettled("state")
+    counts = count_kept_reads(monkeypatch)
+    list_state(listing)
+    assert counts.scandir == 1

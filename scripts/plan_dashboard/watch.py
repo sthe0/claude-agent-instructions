@@ -78,6 +78,22 @@ class Source:
         return len(parts) <= self.depth or (len(parts) == self.depth + 1 and self.accepts(path))
 
 
+COVERS_MEMO_MAX = 65536
+COVERS_MEMO: dict[tuple[Source, str], bool] = {}
+
+
+def covers_of(source: Source, path) -> bool:
+    """``source.covers(path)``, asked once per ``(source, path string)``. Cleared at the bound: the paths are
+    bounded by the files under the watched roots, but deleted ones would pile up over a long session."""
+    key = (source, os.fspath(path))
+    known = COVERS_MEMO.get(key)
+    if known is None:
+        if len(COVERS_MEMO) >= COVERS_MEMO_MAX:
+            COVERS_MEMO.clear()
+        known = COVERS_MEMO[key] = source.covers(path)
+    return known
+
+
 def sources_for(state_root, binding_dir, transcript_roots, cost_log, listing_file=None) -> list[Source]:
     """The watch roots and patterns of the dashboard's readers: state ``*.json``, bindings ``*.json``,
     transcripts ``*/*.jsonl`` (and so ``*/{name}.jsonl``) under each projects root, the cost ledger's directory
@@ -169,7 +185,7 @@ class Drained:
 
 class Watcher:
     def __init__(self, sources: list[Source], inotify: Inotify | None = None):
-        self.sources = sources
+        self.sources = tuple(sources)
         self.inotify = inotify if inotify is not None else Inotify()
         self.directories: dict[int, str] = {}
         self.watched: dict[str, int] = {}
@@ -186,10 +202,10 @@ class Watcher:
             return False
 
     def accepts(self, path) -> bool:
-        return any(source.covers(path) and source.accepts(path) for source in self.sources)
+        return any(covers_of(source, path) and source.accepts(path) for source in self.sources)
 
     def covers(self, path) -> bool:
-        return any(source.covers(path) for source in self.sources)
+        return any(covers_of(source, path) for source in self.sources)
 
     def watch(self, directory) -> None:
         directory = str(directory)
