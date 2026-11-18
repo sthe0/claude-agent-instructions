@@ -41,6 +41,8 @@ _TRANSCRIPTS: dict = {}
 _CHILDREN: dict = {}
 _STATE_KEPT: dict = {}
 _CHILD_KEPT: dict = {}
+_STATE_EVENT: dict = {}
+_CHILD_EVENT: dict = {}
 
 
 class UnknownSession(KeyError):
@@ -55,6 +57,8 @@ def clear_cache() -> None:
         _CHILDREN.clear()
         _STATE_KEPT.clear()
         _CHILD_KEPT.clear()
+        _STATE_EVENT.clear()
+        _CHILD_EVENT.clear()
     snapshot.STATES.clear()
 
 
@@ -738,12 +742,32 @@ def _list_states(root: Path) -> dict:
             for stem, (path, st) in listing.items()}
 
 
+def state_event_reusable(kept, version, covers) -> bool:
+    return snapshot.view_unchanged(kept, version, covers)
+
+
+def _event_state_listing(root: Path) -> dict:
+    trusting, covers, version = snapshot.event_view(snapshot.KEPT.version_of, root)
+    with CACHE_LOCK:
+        kept = _STATE_EVENT.get(str(root))
+    if trusting and state_event_reusable(kept, version, covers):
+        snapshot.replay_observation("state", kept.observed)
+        snapshot.REUSED.note("state", kept)
+        return dict(kept.value)
+    mtimes = _list_states(root)
+    kept = snapshot.keep_read(root, version, covers, None, lambda: dict(mtimes), "state") if trusting else None
+    with CACHE_LOCK:
+        _STATE_EVENT[str(root)] = kept
+    return mtimes
+
+
 def _state_listing(root: Path) -> dict:
     """stem → (path, stat, mtime) of the state files. On the stat path the listing outlives the cycle while
     the directory's key is unchanged; a reuse replays what the listing observed. The kept dict is shared
-    and read-only for callers."""
+    and read-only for callers. On the event path the listing is kept while the directory's version in the kept
+    view is unchanged, and each call gets a copy of its own."""
     if snapshot.stat_cycle_generation() is None:
-        return _list_states(root)
+        return _event_state_listing(root)
     key = state_key(root)
     ok = snapshot.settled_key(key)
     with CACHE_LOCK:
@@ -836,7 +860,7 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
     state file is created after its parent starts and later saves only raise its mtime."""
     floor = child_floor(since)
     if snapshot.stat_cycle_generation() is None:
-        return _child_pass(state_root, floor)
+        return _event_child_index(state_root, floor)
     key = snapshot.result_key(state_root)
     ok = snapshot.settled_key(key)
     with CACHE_LOCK:
@@ -848,6 +872,34 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
     if ok:
         with CACHE_LOCK:
             _CHILD_KEPT[str(state_root)] = snapshot.KeptResult(key, floor, _copy_index(index))
+    return index
+
+
+def child_version(state_root) -> tuple[int, int]:
+    return snapshot.KEPT.version_of(state_root)
+
+
+def child_event_reusable(kept, version, covers, floor) -> bool:
+    """The kept event-path index is what a pass would make: the state root's version and the cover test are
+    those it was made under, and so is the floor."""
+    return snapshot.view_unchanged(kept, version, covers) and kept.held == floor
+
+
+def keep_child_index(state_root, version, covers, floor, index):
+    return snapshot.keep_read(state_root, version, covers, floor, lambda: _copy_index(index))
+
+
+def _event_child_index(state_root, floor: float | None) -> dict[str, list[dict]]:
+    trusting, covers, version = snapshot.event_view(child_version, state_root)
+    with CACHE_LOCK:
+        kept = _CHILD_EVENT.get(str(state_root))
+    if trusting and child_event_reusable(kept, version, covers, floor):
+        snapshot.REUSED.note("children", kept)
+        return _copy_index(kept.value)
+    index = _child_pass(state_root, floor)
+    kept = keep_child_index(state_root, version, covers, floor, index) if trusting else None
+    with CACHE_LOCK:
+        _CHILD_EVENT[str(state_root)] = kept
     return index
 
 

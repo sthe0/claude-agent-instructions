@@ -14,6 +14,7 @@ import io
 import json
 import os
 import threading
+import time
 import types
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -22,7 +23,7 @@ import pytest
 
 from agentctl import effort
 from agentctl.state import Declaration, Difficulty, SessionState
-from plan_dashboard import model
+from plan_dashboard import model, snapshot as store
 from plan_dashboard_fixtures import (
     WriteAttempt, build_fixture_root, read_only_guard, set_mtime, write_transcript,
 )
@@ -984,3 +985,78 @@ def test_the_guard_refuses_a_write_under_the_root(tmp_path):
     with pytest.raises(WriteAttempt):
         with read_only_guard(root.home):
             (root.state_root / "new.json").write_text("{}", encoding="utf-8")
+
+
+@pytest.fixture
+def kept_root(tmp_path, monkeypatch):
+    """The conversation fixture's state root under a trusting kept view, on a clock far past its files."""
+    root = conversation_root(tmp_path)
+    store.reset()
+    model.clear_cache()
+    monkeypatch.setattr(store, "now_ns", lambda: time.time_ns() + 36_000 * 1_000_000_000)
+    store.KEPT.trust(lambda path: str(path).startswith(str(tmp_path)))
+    yield root
+    store.reset()
+    model.clear_cache()
+
+
+def count_calls(monkeypatch, owner, name) -> list:
+    calls, real = [], getattr(owner, name)
+
+    def counting(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, counting)
+    return calls
+
+
+def test_an_unchanged_state_root_is_not_relisted_on_the_event_path(kept_root, monkeypatch):
+    first = model._state_listing(kept_root.state_root)
+    listings = count_calls(monkeypatch, store, "listed")
+    second = model._state_listing(kept_root.state_root)
+    assert listings == []
+    assert second == first and set(second) == {"parent", "child", "sibling"}
+
+
+def test_an_unchanged_state_root_is_not_globbed_again_on_the_event_path(kept_root, monkeypatch):
+    first = model.child_index(kept_root.state_root)
+    globs = count_calls(monkeypatch, store.KEPT, "glob")
+    second = model.child_index(kept_root.state_root)
+    assert globs == []
+    assert second == first and set(second) == {"parent"}
+
+
+def test_a_marked_state_file_is_seen_by_the_next_child_pass(kept_root):
+    assert model.child_index(kept_root.state_root)["parent"][0]["goal"] == "goal of child"
+    child = kept_root.state_root / "child.json"
+    child.write_text(json.dumps({"session_id": "child", "node": "EXECUTING", "goal": "a new goal of the child",
+                                 "parent_link": {"parent_session": "parent", "stage_index": 1}}), encoding="utf-8")
+    store.KEPT.mark([child])
+    assert model.child_index(kept_root.state_root)["parent"][0]["goal"] == "a new goal of the child"
+
+
+def test_a_reused_child_index_is_a_fresh_copy(kept_root):
+    first = model.child_index(kept_root.state_root)
+    first["parent"][0]["goal"] = "changed by the caller"
+    first.clear()
+    second = model.child_index(kept_root.state_root)
+    assert second["parent"][0]["goal"] == "goal of child"
+    second["parent"][0]["goal"] = "changed by the next caller"
+    assert model.child_index(kept_root.state_root)["parent"][0]["goal"] == "goal of child"
+
+
+def test_a_mark_during_the_child_pass_is_not_reused(kept_root, monkeypatch):
+    passes, real_glob = [], store.KEPT.glob
+
+    def marking(root, *args, **kwargs):
+        found = real_glob(root, *args, **kwargs)
+        if not passes:
+            store.KEPT.mark([Path(root) / "child.json"])
+        passes.append(root)
+        return found
+
+    monkeypatch.setattr(store.KEPT, "glob", marking)
+    model.child_index(kept_root.state_root)
+    model.child_index(kept_root.state_root)
+    assert len(passes) == 2

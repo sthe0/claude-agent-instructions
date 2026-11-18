@@ -1750,3 +1750,36 @@ def test_unsettled_entries_are_not_reused(listing, monkeypatch):
     counts = count_kept_reads(monkeypatch)
     list_state(listing)
     assert counts.scandir == 1
+
+
+@pytest.fixture
+def bound(root, tmp_path, monkeypatch):
+    """A trusting kept view over the fixture root's bindings directory, on a clock far past its files."""
+    store.reset()
+    monkeypatch.setattr(store, "now_ns", lambda: time.time_ns() + FAR_FUTURE_NS)
+    store.KEPT.trust(Cover(tmp_path))
+    yield bindings_dir(root)
+    store.reset()
+
+
+def test_an_unchanged_bindings_directory_is_not_reread_on_the_event_path(bound, monkeypatch):
+    first = store.BINDINGS.read()
+    counts = count_kept_reads(monkeypatch)
+    fetched, real_fetch = [], store.IdentityCache.fetch
+
+    def counting(cache, *args, **kwargs):
+        fetched.append(args[0])
+        return real_fetch(cache, *args, **kwargs)
+
+    monkeypatch.setattr(store.IdentityCache, "fetch", counting)
+    second = store.BINDINGS.read()
+    assert (counts.scandir, counts.entries, fetched) == (0, 0, [])
+    assert second == first and first[0]
+
+
+def test_a_marked_binding_is_seen_by_the_next_read(bound):
+    assert store.BINDINGS.read()[0] == {ALPHA: [HARNESS]}
+    path = bound / f"{HARNESS}.json"
+    path.write_text(json.dumps({"driven": [{"session": BETA, "ts": "2026-10-01T00:00:00+00:00"}]}), encoding="utf-8")
+    store.KEPT.mark([path])
+    assert store.BINDINGS.read()[0] == {BETA: [HARNESS]}

@@ -936,9 +936,26 @@ def _unread_rows_blank(original):
     return mutated
 
 
+def _child_index_kept_uncopied(original):
+    def mutated(state_root, version, covers, floor, index):
+        return importlib.import_module(SNAPSHOT).keep_read(state_root, version, covers, floor, lambda: index)
+    return mutated
+
+
+def _child_version_read_after_the_pass(original):
+    def mutated(state_root, version, covers, floor, index):
+        return original(state_root, importlib.import_module(SNAPSHOT).KEPT.version_of(state_root), covers, floor, index)
+    return mutated
+
+
 MUTATIONS.update({
     "model-child-index-rereads": (MODEL, "child_index", _child_cache_dropped),
     "model-child-index-no-bound": (MODEL, "child_index", _child_index_unbounded),
+    "state-listing-event-reuse-off": (MODEL, "state_event_reusable", _always(False)),
+    "child-pass-event-reuse-off": (MODEL, "child_event_reusable", _always(False)),
+    "child-pass-reuse-ignores-mark": (MODEL, "child_version", _always((0, 0))),
+    "child-pass-reuse-shared-result": (MODEL, "keep_child_index", _child_index_kept_uncopied),
+    "child-pass-version-after-pass": (MODEL, "keep_child_index", _child_version_read_after_the_pass),
 })
 
 TUI_MUTATIONS.update({
@@ -1219,6 +1236,8 @@ SNAPSHOT_MUTATIONS = {
     "listing-reuse-shared-result": (SNAPSHOT, "copy_listing", lambda _original: lambda found: found),
     "listing-reuse-no-replay": (SNAPSHOT, "replay_listing", lambda _original: lambda kind, observed: None),
     "listing-reuse-despite-unsettled": (SNAPSHOT, "listing_settled", _always(True)),
+    "binding-event-reuse-off": (SNAPSHOT, "binding_event_reusable", _always(False)),
+    "binding-event-reuse-ignores-mark": (SNAPSHOT, "binding_version", _always((0, 0))),
     "binding-index-reuse-off": (SNAPSHOT, "binding_reusable", _always(False)),
     "binding-pass-per-reader": (SNAPSHOT, "shared_this_cycle", _always(None)),
     "binding-key-ignores-times": (SNAPSHOT, "binding_key", _key_without_times),

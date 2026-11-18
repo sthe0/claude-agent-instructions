@@ -55,7 +55,8 @@ SNAPSHOT_NAMES = (
     "kept-scandir-covers-under-lock", "kept-covers-identity-unchecked", "listing-reuse-off",
     "listing-reuse-ignores-mark", "listing-reuse-ignores-relist", "listing-reuse-kept-after-distrust",
     "listing-version-after-pass", "listing-reuse-root-only-covered", "listing-reuse-shared-result",
-    "listing-reuse-no-replay", "listing-reuse-despite-unsettled")
+    "listing-reuse-no-replay", "listing-reuse-despite-unsettled", "binding-event-reuse-off",
+    "binding-event-reuse-ignores-mark")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
                         "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
                         "startup-applied-last-read-only", "startup-applied-at-check-end",

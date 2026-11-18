@@ -756,8 +756,13 @@ class KeptListing:
 LISTINGS: dict[tuple, KeptListing] = {}
 
 
-def listing_reusable(kept: KeptListing | None, version: tuple, covers) -> bool:
+def view_unchanged(kept, version: tuple, covers) -> bool:
+    """Whether a result kept under ``version`` and ``covers`` was made under the view's present ones."""
     return kept is not None and kept.version == version and kept.covers is covers
+
+
+def listing_reusable(kept: KeptListing | None, version: tuple, covers) -> bool:
+    return view_unchanged(kept, version, covers)
 
 
 def copy_listing(found: dict) -> dict:
@@ -826,6 +831,48 @@ def listed(kind: str, root, suffix: str, by_directory_time: bool = False) -> dic
     return found
 
 
+class KeptRead:
+    """What one event-path pass of a reader made from a directory: its whole result (a private copy), the
+    directory's version taken before the pass, the cover test the pass ran under, the ``held`` condition it was
+    made under and, when the reader feeds ``OBSERVED``, what it fed."""
+
+    __slots__ = ("version", "covers", "held", "value", "observed", "generation")
+
+    def __init__(self, version: tuple, covers, held, value, observed):
+        self.version, self.covers, self.held, self.value, self.observed = version, covers, held, value, observed
+        self.generation = stat_cycle_generation()
+
+
+def event_view(version_of, directory) -> tuple[bool, object, tuple]:
+    """``(trusting, covers, version)`` of the kept view, read together under its lock before a reader's pass."""
+    with KEPT._lock:
+        return KEPT.trusting, KEPT.covers, version_of(directory)
+
+
+def entries_covered(covers, root: str) -> bool:
+    """Whether the view holds a listing of ``root`` and ``covers`` takes the directory and every name in it:
+    a change to any of them then reaches the view as a mark."""
+    with KEPT._lock:
+        names = KEPT.listings.get(root)
+    if names is None:
+        return False
+    return covers is None or (bool(covers(root)) and all(covers(os.path.join(root, name)) for name, _ in names))
+
+
+def keep_read(root, version: tuple, covers, held, build, kind: str | None = None) -> KeptRead | None:
+    """Keep an event-path pass of a reader over ``root`` that read ``version`` before it, for as long as nothing
+    moves it: the directory and every name in it are covered, no file of ``kind`` was unsettled (a file that
+    crossed the settle boundary after the pass began has no mark behind it yet) and the view still trusts with
+    the cover test the pass ran under. ``build()`` makes the private copy of the result and runs only then;
+    None when the pass is not to be kept."""
+    root = str(root)
+    if not entries_covered(covers, root) or (kind is not None and not listing_settled(kind)):
+        return None
+    kept = KeptRead(version, covers, held, build(), None if kind is None else OBSERVED.capture(kind))
+    with KEPT._lock:
+        return kept if trust_holds(KEPT, covers) else None
+
+
 def _driven(path) -> list[str]:
     return list(dict.fromkeys(entry["session"] for entry in engine_session_binding._read(Path(path))))
 
@@ -842,6 +889,25 @@ def binding_reusable(kept: KeptResult | None, key, presumption) -> bool:
     """Whether the kept binding index is what a pass would make now: the directory's key is the one it was
     read under, and so is the presumption (the very object, as a presumed index answers by its cover)."""
     return kept is not None and key is not None and kept.key == key and kept.held is presumption
+
+
+def binding_version(directory) -> tuple[int, int]:
+    return KEPT.version_of(directory)
+
+
+def binding_event_reusable(kept: KeptRead | None, version: tuple, covers, presumption) -> bool:
+    """Whether the kept event-path binding result is what a pass would make now: the directory's version and
+    the cover test are those it was read under, and so is the presumption (the very object)."""
+    return view_unchanged(kept, version, covers) and kept.held is presumption
+
+
+def copy_binding(result: tuple) -> tuple:
+    """A private copy of ``(index, driven)``, a presumed index still presumed."""
+    index, driven = result
+    copied = {engine: list(stems) for engine, stems in index.items()}
+    if isinstance(index, PresumedIndex):
+        copied = PresumedIndex(copied, index.covered)
+    return copied, {stem: list(engines) for stem, engines in driven.items()}
 
 
 def shared_this_cycle(shared, generation: int, presumption):
@@ -861,6 +927,7 @@ class BindingScan:
         self.memo: tuple | None = None
         self.presumption: tuple[frozenset[str], Recorded] | None = None
         self.kept: KeptResult | None = None
+        self.event_kept: KeptRead | None = None
         self.cycle: tuple | None = None
         self._lock = threading.RLock()
 
@@ -879,7 +946,7 @@ class BindingScan:
         presumption = self.presumption
         generation = stat_cycle_generation()
         if generation is None:
-            return self._pass(presumption)
+            return self._event_read(presumption)
         with self._lock:
             shared = shared_this_cycle(self.cycle, generation, presumption)
             if shared is not None:
@@ -897,6 +964,23 @@ class BindingScan:
                     self.kept = KeptResult(key, presumption, result, OBSERVED.capture("binding"))
             self.cycle = (generation, presumption, result)
             return result
+
+    def _event_read(self, presumption) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        """The event path's read: the kept result while the bindings directory's version is the one it was made
+        under (its observation replayed, a private copy returned), else a pass, kept for the next read."""
+        directory = self.directory()
+        trusting, covers, version = event_view(binding_version, directory)
+        with self._lock:
+            kept = self.event_kept
+        if trusting and binding_event_reusable(kept, version, covers, presumption):
+            replay_observation("binding", kept.observed)
+            REUSED.note("binding", kept)
+            return copy_binding(kept.value)
+        result = self._pass(presumption)
+        kept = keep_read(directory, version, covers, presumption, lambda: copy_binding(result), "binding") if trusting else None
+        with self._lock:
+            self.event_kept = kept
+        return result
 
     def _pass(self, presumption) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
         found = listed("binding", self.directory(), ".json", by_directory_time=True)
@@ -931,7 +1015,7 @@ class BindingScan:
             self.files.clear()
             self.memo = None
             self.presumption = None
-            self.kept = self.cycle = None
+            self.kept = self.cycle = self.event_kept = None
 
 
 class PresumedIndex(dict):
