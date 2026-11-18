@@ -29,6 +29,7 @@ from rich.text import Text  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import VerticalScroll  # noqa: E402
+from textual.app import ScreenStackError  # noqa: E402
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane, Tree  # noqa: E402
 
 from plan_dashboard import events, locate, model, tui, watch  # noqa: E402
@@ -64,6 +65,15 @@ def mono_of(clock):
 
 def slice_entries(count: int) -> int:
     return watch.slice_entries(count, TICK_S)
+
+
+def main_table_mounted(app: "DashboardApp") -> bool:
+    """False once the app is closing and the main screen is already popped: a timer callback may still fire
+    in that window, and the table is no longer there to query."""
+    try:
+        return bool(app.screen.query(DataTable))
+    except ScreenStackError:
+        return False
 
 
 def every(app: "DashboardApp", seconds: float, callback) -> None:
@@ -184,7 +194,8 @@ def request_redraw(app: "DashboardApp", cycles: list[int]) -> None:
 
 def fire_held(app: "DashboardApp") -> None:
     app.hold = app.hold_due = None
-    redraw_site(app)
+    if main_table_mounted(app):
+        redraw_site(app)
 
 
 def redraw_site(app: "DashboardApp") -> None:
@@ -278,7 +289,7 @@ def poll_tmux(app: "DashboardApp") -> bool:
 
 
 def light_tick(app: "DashboardApp") -> None:
-    if not app.started or app.path != "event":
+    if not app.started or app.path != "event" or not main_table_mounted(app):
         return
     if yields(app):
         app.owed_poll = app.owed_header = True
@@ -1244,6 +1255,8 @@ class DashboardApp(App):
         return path
 
     def _tick(self) -> None:
+        if not main_table_mounted(self):
+            return
         if self.path == "event":
             if self.started:
                 event_tick(self)

@@ -2813,3 +2813,29 @@ def test_a_sweep_never_delays_an_event_cycle_or_its_redraw(tmp_path, monkeypatch
         assert app.owed == 0
 
     run_fleet(scenario, root, timers, stream, clock=clock)
+
+
+def test_the_tick_after_the_main_screen_is_gone_does_nothing(tmp_path):
+    from textual.css.query import NoMatches
+    from textual.screen import Screen
+
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await pilot.press("a")
+        await settle(app, pilot)
+        app.marked.clear()
+        assert tui_app.marks_due(app)
+        stack = list(app._screen_stack)
+        app._screen_stack[:] = [Screen(id="_default")]
+        app.query_one = lambda selector, *rest: app.screen.query_one(selector, *rest)
+        try:
+            with pytest.raises(NoMatches):
+                app.query_one(DataTable)
+            app.last_collect = app.clock()
+            app.interval = 3600.0
+            app._tick()
+        finally:
+            app._screen_stack.extend(stack)
+
+    run(scenario, root)

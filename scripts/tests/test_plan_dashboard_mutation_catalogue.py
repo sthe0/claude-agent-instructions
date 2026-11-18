@@ -165,6 +165,7 @@ PILOT_RED_TEST = {
     "tui-app-detail-unfocused": "test_the_detail_tree_opens_collapsed_with_focus_on_the_tree_by_enter",
     "tui-app-expand-global": "test_the_tree_state_of_one_task_is_not_carried_to_another",
     "tui-app-jump-unbound": "test_g_on_the_tasks_tab_jumps_to_the_task_under_the_cursor_and_names_the_way_back",
+    "tick-after-teardown": "test_the_tick_after_the_main_screen_is_gone_does_nothing",
     "tui-app-loading-title-overwritten": "test_the_loading_title_survives_a_reload_issued_before_the_toggle",
     "tui-app-mark-unread-blank": "test_all_mode_reads_the_marks_of_the_rows_in_view_only_and_each_once_per_change",
     "tui-app-mode-unshown": "test_tasks_tab_lists_the_live_tasks",

@@ -957,6 +957,7 @@ def _cpu_from_wall(original):
 TUI_MUTATIONS.update({
     "cycle-cpu-from-wall": (TUI_APP, "cycle_cpu_ns", _cpu_from_wall),
     "reuse-census-off": (TUI_APP, "reused_readers", _always([])),
+    "tick-after-teardown": (TUI_APP, "main_table_mounted", _always(True)),
 })
 
 ATTENTION_MUTATIONS["attention-cache-ignores-locator"] = ("plan_dashboard.locate", "inputs_stamp", _always((1,)))
