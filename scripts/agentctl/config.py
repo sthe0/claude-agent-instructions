@@ -210,6 +210,16 @@ def plan_field_inline_limit() -> int:
         return PLAN_FIELD_INLINE_FALLBACK_CHARS
 
 
+def review_history_inline_limit() -> int | None:
+    """`review-history-inline-max-chars`: the longest re-review history section a review
+    prompt prints inline. None — no limit, every history inline as before the row existed —
+    when the row is missing or unreadable."""
+    try:
+        return Thresholds()._optional_int("review-history-inline-max-chars")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 class Thresholds:
     """Typed view over the parsed config.md constants used by the engine."""
 

@@ -734,6 +734,33 @@ ground = "grammar.pattern.match matches a coverage control name against the engi
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/render.py::<module>::re.compile"]
+class = "structural"
+ground = "_FIELD_LINE, _HEADING_LINE, _STAGE_HEADING and _HUNK_HEADER compile the fixed line syntax of the engine's own plan rendering (a bold field label, a markdown heading, a '## Stage N:' heading) and of a unified-diff hunk header; they locate parts of a diff, they decide no meaning."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/render.py::_section_opened_by::pattern.match"]
+class = "structural"
+ground = "_FIELD_LINE.match and _HEADING_LINE.match recognise a line of the engine's own plan rendering that opens a field or a heading, to name the part a diff run belongs to."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/render.py::_slug::re.sub"]
+class = "structural"
+ground = "Replaces every run of characters outside a-z0-9 with a hyphen to build a file-name slug for a diff view file; a character-class rewrite, it decides no meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/render.py::diff_segments::pattern.match"]
+class = "structural"
+ground = "_HUNK_HEADER.match reads the line numbers of a unified-diff hunk header and _STAGE_HEADING.match the stage number of a '## Stage N:' heading of the engine's own plan rendering, to cut the diff into runs per part."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/plan.py::acceptance_requirement_bindings.token::pattern.match"]
 class = "structural"
 ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars, to bind a requirement to the deliverable the control names."
