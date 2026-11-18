@@ -135,9 +135,23 @@ MUTANTS = [
      "tests": [_C + "test_compare_refuses_a_snapshot_with_another_sha256"]},
 
     {"name": "historical_transcript_side_reads_frozen_aggregate", "file": _COMPARE,
-     "anchor": "lines = snapshot_lines(snapshot, {s for _, windows in chosen for s in windows})",
-     "replacement": "lines = {s: _file_lines(p) for s, p in local_transcripts().items()}",
+     "anchor": "calls = snapshot_calls(snapshot, {s for _, windows in chosen for s in windows})",
+     "replacement": "calls = {s: file_calls(p) for s, p in local_transcripts().items()}",
      "tests": [_C + "test_historical_transcript_side_computed_over_the_record_side_task_set"]},
+
+    {"name": "historical_snapshot_holds_parsed_lines", "file": _COMPARE,
+     "anchor": ("            collector = collectors.setdefault(stem, _CallCollector())\n"
+                "            for obj in _parsed(tar.extractfile(member)):\n"
+                "                collector.feed(obj)\n"
+                "    return {stem: collector.calls for stem, collector in collectors.items()}"),
+     "replacement": ("            collectors.setdefault(stem, []).extend(_parsed(tar.extractfile(member)))\n"
+                     "    return {stem: transcript_calls(lines) for stem, lines in collectors.items()}"),
+     "tests": [_C + "test_historical_snapshot_reading_peak_memory_is_bounded_by_calls_not_lines"]},
+
+    {"name": "historical_snapshot_holds_one_member_parsed", "file": _COMPARE,
+     "anchor": "            for obj in _parsed(tar.extractfile(member)):",
+     "replacement": "            for obj in list(_parsed(tar.extractfile(member))):",
+     "tests": [_C + "test_historical_snapshot_reading_peak_memory_is_bounded_by_calls_not_lines"]},
 
     {"name": "historical_missing_task_kept_on_record_side", "file": _COMPARE,
      "anchor": "if any(s not in stems for s in required):",

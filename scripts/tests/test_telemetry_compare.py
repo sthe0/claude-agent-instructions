@@ -169,6 +169,52 @@ def test_historical_transcript_side_computed_over_the_record_side_task_set(world
     assert shares_agree(payload)
 
 
+def _filler(seconds, index):
+    """A non-Bash transcript line of about one kilobyte."""
+    return {"type": "assistant", "timestamp": at(seconds), "uuid": f"f{index}",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "x" * 1000}]}}
+
+
+def _jsonl(lines) -> bytes:
+    return b"".join(json.dumps(o).encode() + b"\n" for o in lines)
+
+
+def test_historical_snapshot_reading_peak_memory_is_bounded_by_calls_not_lines(world):
+    import tracemalloc
+    members, wanted = [], set()
+    for n in range(3):
+        session, offset = f"s-m{n}", 2000 * n
+        calls = transcript_lines(offset)
+        filler = [_filler(offset + 0.5, i) for i in range(16_000)]
+        lines = calls[:2] + filler[:8000] + calls[2:4] + filler[8000:] + calls[4:]
+        members.append((f"p/{session}.jsonl", _jsonl(lines)))
+        wanted.add(session)
+    path = world.tmp / "big.tar.gz"
+    _gz_tar(path, members)
+    expected = {name[2:-6]: compare.transcript_calls(json.loads(row) for row in data.splitlines())
+                for name, data in members}
+    del members
+    tracemalloc.start()
+    try:
+        got = compare.snapshot_calls(path, wanted)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 * 1024 * 1024, peak
+    assert got == expected
+    assert all(len(calls) == len(transcript_lines()) // 2 for calls in got.values())
+
+
+def test_historical_snapshot_pairs_a_call_split_across_two_members_of_one_session(world):
+    lines = transcript_lines()
+    first, second = lines[:3], lines[3:]
+    path = world.tmp / "split.tar.gz"
+    _gz_tar(path, [("p/a/s-t1.jsonl", _jsonl(first)), ("p/b/s-t1.jsonl", _jsonl(second))])
+    got = compare.snapshot_calls(path, {"s-t1"})
+    assert got == {"s-t1": compare.transcript_calls(lines)}
+    assert len(got["s-t1"]) == len(lines) // 2
+
+
 def test_compare_refuses_a_snapshot_with_another_sha256(world):
     historical_task("t1")
     status, payload = run_historical(world, {"s-t1": transcript_lines()}, wrong_sha=True)
@@ -276,7 +322,7 @@ def test_live_task_without_transcript_left_out_of_both_sides(world):
     chosen, counts = chosen_live(conn)
     assert [k for k, _ in chosen] == [kept]
     assert counts["live_tasks_without_transcript"] == 1
-    record, early, late = compare.sides(conn, chosen, lambda s: compare._file_lines(compare.local_transcripts()[s]))
+    record, early, late = compare.sides(conn, chosen, lambda s: compare.file_calls(compare.local_transcripts()[s]))
     assert len(record) == len(early) == len(late) == 1
     assert compare.agreement(record, early, late)["ok"]
 

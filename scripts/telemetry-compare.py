@@ -85,24 +85,35 @@ def record_phase_ms(conn, session: str, window) -> dict:
     return phase_ms(points, landing, window)
 
 
-def transcript_calls(lines) -> list:
-    """(tool_use stamp, tool_result stamp, fields) of each Bash call in a transcript's lines."""
-    pending, calls = {}, []
-    for obj in lines:
+class _CallCollector:
+    """The Bash calls of one session's transcript lines, fed one line at a time: it keeps only
+    the tool_use entries still waiting for their result and the finished calls, never a line."""
+
+    def __init__(self):
+        self.pending, self.calls = {}, []
+
+    def feed(self, obj) -> None:
         message = obj.get("message") if isinstance(obj, dict) else None
         blocks = message.get("content") if isinstance(message, dict) else None
         for block in blocks if isinstance(blocks, list) else []:
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use" and block.get("name") == "Bash":
-                pending[block.get("id")] = (obj.get("timestamp"), (block.get("input") or {}).get("command"))
-            elif block.get("type") == "tool_result" and block.get("tool_use_id") in pending:
-                used, command = pending.pop(block["tool_use_id"])
+                self.pending[block.get("id")] = (obj.get("timestamp"), (block.get("input") or {}).get("command"))
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in self.pending:
+                used, command = self.pending.pop(block["tool_use_id"])
                 fields = importer._bash_fields(command)
                 if fields is not None:
                     fields["exit"] = importer._tool_exit(block)
-                    calls.append((used, obj.get("timestamp"), fields))
-    return calls
+                    self.calls.append((used, obj.get("timestamp"), fields))
+
+
+def transcript_calls(lines) -> list:
+    """(tool_use stamp, tool_result stamp, fields) of each Bash call in a transcript's lines."""
+    collector = _CallCollector()
+    for obj in lines:
+        collector.feed(obj)
+    return collector.calls
 
 
 def transcript_phase_ms(calls, window, at_result: bool = False) -> dict:
@@ -264,13 +275,13 @@ def historical_set(conn, cutoff_ms: int, stems: set) -> "tuple[list, dict]":
 
 # --- the two sides ------------------------------------------------------------------------
 
-def sides(conn, chosen: list, lines_of) -> "tuple[list, list, list]":
+def sides(conn, chosen: list, calls_of) -> "tuple[list, list, list]":
     """Per task: record ms, transcript ms at tool_use and at tool_result, each cut per session."""
     record, early, late = [], [], []
     for _, windows in chosen:
         rec, use, result = {}, {}, {}
         for session, window in windows.items():
-            calls = transcript_calls(lines_of(session))
+            calls = calls_of(session)
             _add(rec, record_phase_ms(conn, session, window))
             _add(use, transcript_phase_ms(calls, window))
             _add(result, transcript_phase_ms(calls, window, at_result=True))
@@ -292,16 +303,24 @@ def snapshot_stems(snapshot: Path) -> set:
     return {PurePosixPath(n).stem for n in profile_check._member_names(snapshot) if n.endswith(".jsonl")}
 
 
-def snapshot_lines(snapshot: Path, wanted: set) -> dict:
-    """stem -> parsed lines of the snapshot members of `wanted`, streamed member by member."""
-    out: dict = {}
+def _parsed(handle):
+    """The parsed lines of an open binary file, one at a time."""
+    return (o for o in map(_parse, handle) if o is not None)
+
+
+def snapshot_calls(snapshot: Path, wanted: set) -> dict:
+    """stem -> Bash calls of the snapshot members of `wanted`; each line is fed to its session's
+    collector as it is read, so a call split across two members of one session is still paired."""
+    collectors: dict = {}
     with tarfile.open(snapshot, "r|*") as tar:
         for member in tar:
             stem = PurePosixPath(member.name).stem
             if not member.isreg() or not member.name.endswith(".jsonl") or stem not in wanted:
                 continue
-            out.setdefault(stem, []).extend(o for o in map(_parse, tar.extractfile(member)) if o is not None)
-    return out
+            collector = collectors.setdefault(stem, _CallCollector())
+            for obj in _parsed(tar.extractfile(member)):
+                collector.feed(obj)
+    return {stem: collector.calls for stem, collector in collectors.items()}
 
 
 def local_transcripts() -> dict:
@@ -313,9 +332,10 @@ def local_transcripts() -> dict:
     return out
 
 
-def _file_lines(path: Path) -> list:
+def file_calls(path: Path) -> list:
+    """Bash calls of one transcript file, read line by line."""
     with open(path, "rb") as handle:
-        return [o for o in map(_parse, handle) if o is not None]
+        return transcript_calls(_parsed(handle))
 
 
 def historical(conn, premises: dict, snapshot: Path, min_tasks: int) -> "tuple[int, dict]":
@@ -325,8 +345,8 @@ def historical(conn, premises: dict, snapshot: Path, min_tasks: int) -> "tuple[i
         return EXIT_PREMISE, {"error": f"snapshot sha256 {actual} is not the premises' {expected}"}
     cutoff = time_profile.epoch_or_iso_ms(premises["analysis_cutoff"])
     chosen, counts = historical_set(conn, cutoff, snapshot_stems(snapshot))
-    lines = snapshot_lines(snapshot, {s for _, windows in chosen for s in windows})
-    result = agreement(*sides(conn, chosen, lambda s: lines.get(s, [])))
+    calls = snapshot_calls(snapshot, {s for _, windows in chosen for s in windows})
+    result = agreement(*sides(conn, chosen, lambda s: calls.get(s, [])))
     payload = {"side": "historical", "tasks": len(chosen), **counts, **result}
     if len(chosen) < min_tasks:
         payload["ok"] = False
@@ -362,7 +382,7 @@ def live(min_tasks: int, synthesize: bool, max_synthetic: int) -> "tuple[int, di
         transcripts = local_transcripts()
         chosen, _ = live_set(conn, transcripts, frozenset(added))
     try:
-        result = agreement(*sides(conn, chosen, lambda s: _file_lines(transcripts[s]) if s in transcripts else []))
+        result = agreement(*sides(conn, chosen, lambda s: file_calls(transcripts[s]) if s in transcripts else []))
     finally:
         conn.close()
     payload = {"side": "live", "tasks": len(chosen), "synthesized": len(added), **counts, **result}
