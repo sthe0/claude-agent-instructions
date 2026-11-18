@@ -103,12 +103,40 @@ _LINES = {
 }
 
 
-def _draft(tmp_path: Path, *, omit=(), replace=None, name="draft.toml") -> Path:
+SIDES = (
+    '\n[meta.order.customer_side]\n'
+    'step = "cutting a release"\n'
+    'missing = "a command that tags the release"\n'
+    'product = "the release command"\n'
+    'criterion_type = "measurable"\n'
+    '\n[[meta.order.customer_side.checks]]\n'
+    'id = "A1"\nkind = "direct"\ntext = "the command tags a release"\n'
+    '\n[meta.order.executor_side]\n'
+    'specifics = "releases here are tagged from the main line only"\n'
+    'type_entry = { kind = "regularity", ref = "a-child-process-reads-its-parents-ambient-root" }\n'
+)
+
+BUDGET = (
+    '\n[meta.order.planning_budget]\n'
+    'active_minutes = 12\nusd = 4.5\nderivation = "one reviewed plan of a few stages"\n'
+)
+
+
+def _draft(tmp_path: Path, *, omit=(), replace=None, name="draft.toml", sides=SIDES,
+           budget=BUDGET) -> Path:
+    """A new-form order draft (its planning estimate is the `budget` table);
+    `omit=("customer_side",)` gives the old form, whose estimate is the planning_estimate line."""
     lines = {**_LINES, **(replace or {})}
+    if "customer_side" in omit:
+        sides = ""
+    else:
+        if "planning_estimate" not in omit:
+            sides += budget
+        omit = (*omit, "planning_estimate")
     body = "\n".join(text for key, text in lines.items() if key not in omit)
     path = tmp_path / name
     path.write_text(
-        '[meta]\ntask_id = "od"\ngoal = "g"\ndone_criterion = "d"\n\n[meta.order]\n' + body + "\n",
+        '[meta]\ntask_id = "od"\ngoal = "g"\ndone_criterion = "d"\n\n[meta.order]\n' + body + "\n" + sides,
         encoding="utf-8",
     )
     return path

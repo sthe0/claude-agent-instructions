@@ -348,7 +348,76 @@ def _adopted_proposal_unfiltered(mp):
                lambda doc, service: list(doc.meta.order.proposals), raising=True)
 
 
+def _no_search_record(mp):
+    """A none type entry is accepted for a search the session never recorded."""
+    mp.setattr("agentctl.cli_order._search_recorded", lambda state, search_id: True, raising=True)
+
+
+def _correction_unrecorded(mp):
+    """order-agree drops the user's correction of the reconstruction."""
+    mp.setattr("agentctl.cli_order._agreed_correction", lambda args: "", raising=True)
+
+
+def _binding_decision_unrecorded(mp):
+    """order-agree drops the user's decisions on the binding conditions."""
+    mp.setattr("agentctl.cli_order._agreed_binding_decisions", lambda decisions: [], raising=True)
+
+
+def _old_form_estimate_unhashed(mp):
+    """An old-form order's digest stops covering its planning_estimate part."""
+    from agentctl import plan
+
+    original = plan.understanding_parts
+    mp.setattr(
+        plan, "understanding_parts",
+        lambda doc: {k: v for k, v in original(doc).items()
+                     if k != "planning_estimate" or plan.is_two_sided(doc.meta.order)},
+        raising=True,
+    )
+
+
+def _executor_side_digested(mp):
+    """The agreed digest also covers the executor side's parts."""
+    from agentctl import plan
+
+    original = plan.understanding_parts
+    mp.setattr(plan, "understanding_parts",
+               lambda doc: {**original(doc), **plan.executor_side_parts(doc)}, raising=True)
+
+
+def _beside_in_digest(mp):
+    """The agreed digest also covers the records beside the order."""
+    import hashlib
+
+    from agentctl import plan
+
+    original = plan.understanding_parts
+
+    def with_beside(doc):
+        parts = original(doc)
+        order = doc.meta.order
+        for b in order.binding_conditions if order is not None else ():
+            parts[f"B:{b.id}"] = hashlib.sha256(repr((b.id, b.text)).encode("utf-8")).hexdigest()
+        for m in order.method_ideas if order is not None else ():
+            parts[f"M:{m.id}"] = hashlib.sha256(repr((m.id, m.text, m.verdict)).encode("utf-8")).hexdigest()
+        return parts
+
+    mp.setattr(plan, "understanding_parts", with_beside, raising=True)
+
+
+def _executor_revision_unguarded(mp):
+    """order-executor-revise accepts a revision that moves what the user agreed."""
+    mp.setattr("agentctl.cli_order._agreed_parts_moved", lambda doc, agreement: [], raising=True)
+
+
 MUTANTS = {
+    "no_search_record": _no_search_record,
+    "correction_unrecorded": _correction_unrecorded,
+    "binding_decision_unrecorded": _binding_decision_unrecorded,
+    "old_form_estimate_unhashed": _old_form_estimate_unhashed,
+    "executor_side_digested": _executor_side_digested,
+    "beside_in_digest": _beside_in_digest,
+    "executor_revision_unguarded": _executor_revision_unguarded,
     "draft_coverage_rendered": _draft_coverage_rendered,
     "exemption_report_unchecked": _exemption_report_unchecked,
     "exemption_asks_children": _exemption_asks_children,

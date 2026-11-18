@@ -67,7 +67,8 @@ from .plan_resources import RESOURCE_REQUEST_KINDS, plan_time_resource_set, unco
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
 from .state import (
-    AGENT_ACTOR, PROPOSAL_VERDICTS, CheckKind, CheckVenue, CriterionType, WeightClass,
+    AGENT_ACTOR, CHECK_KINDS, CHECK_MEDIATED, ORDER_CRITERION_TYPES, PROPOSAL_VERDICTS,
+    TYPE_ENTRY_KINDS, TYPE_ENTRY_NONE, CheckKind, CheckVenue, CriterionType, WeightClass,
     asserts_landing,
 )
 from .text_shape import ELEMENT_NAMES
@@ -694,6 +695,145 @@ def _underived_requirements(order) -> list[str]:
         for r in order.requirements
         if r.id and _normalize_string(r.text) and not _normalize_string(r.derivation)
     ]
+
+
+_SIDES_MALFORMED = (
+    "customer_side", "customer_side.checks", "executor_side", "executor_side.type_entry",
+    "binding_conditions", "method_ideas", "means_conditions", "planning_budget",
+)
+
+
+def order_customer_side_missing(meta) -> list[str]:
+    """The refusal of an order-path draft that has no customer side: an order put to the user
+    is new-form, and an order is new-form exactly when its customer side is present."""
+    order = meta.order
+    if order is None or "customer_side" in order.malformed:
+        return []
+    if order.customer_side is None:
+        return [
+            "[meta.order] missing 'customer_side' (required of an order put to the user): "
+            "write [meta.order.customer_side] with step, missing, product, criterion_type and "
+            "[[meta.order.customer_side.checks]] — the user agrees that side and its acceptance "
+            "checks; the requirements, how-built proposals and conditions on the product are the "
+            "executor side, shown and not agreed"
+        ]
+    return []
+
+
+def _duplicate_ids(ids: list[str]) -> list[str]:
+    return sorted({i for i in ids if i and ids.count(i) > 1})
+
+
+def _customer_side_violations(side) -> list[str]:
+    out: list[str] = []
+    for name in ("step", "missing", "product"):
+        if not _normalize_string(getattr(side, name)):
+            out.append(f"[meta.order.customer_side] missing {name!r}")
+    if side.criterion_type not in ORDER_CRITERION_TYPES:
+        out.append(
+            f"[meta.order.customer_side] criterion_type must be one of "
+            f"{'/'.join(ORDER_CRITERION_TYPES)}, got {side.criterion_type!r}: the order's "
+            f"criterion type decides whether it is accepted by a command or on review"
+        )
+    if not side.checks:
+        out.append("[meta.order.customer_side] states no acceptance check: add "
+                   "[[meta.order.customer_side.checks]] with id, kind and text")
+    for i, c in enumerate(side.checks, start=1):
+        label = c.id or f"#{i}"
+        if not c.id:
+            out.append(f"[meta.order.customer_side] acceptance check at position {i} has no 'id'")
+        if c.kind not in CHECK_KINDS:
+            out.append(f"[meta.order.customer_side] acceptance check {label} has kind "
+                       f"{c.kind!r}, not one of {'/'.join(CHECK_KINDS)}")
+        if not _normalize_string(c.text):
+            out.append(f"[meta.order.customer_side] acceptance check {label} has no 'text'")
+        if c.kind == CHECK_MEDIATED and not _normalize_string(c.reason):
+            out.append(f"[meta.order.customer_side] mediated acceptance check {label} has no "
+                       f"'reason': say why observing the stand-in decides the criterion")
+    dup = _duplicate_ids([c.id for c in side.checks])
+    if dup:
+        out.append(f"[meta.order.customer_side] acceptance check id(s) {', '.join(dup)} repeat")
+    return out
+
+
+def _executor_side_shape_violations(order) -> list[str]:
+    executor = order.executor_side
+    if executor is None:
+        return ["[meta.order] missing 'executor_side' (required of a two-sided order): write "
+                "[meta.order.executor_side] with a specifics entry and a type_entry"]
+    out: list[str] = []
+    if not _normalize_string(executor.specifics):
+        out.append("[meta.order.executor_side] missing 'specifics': the specifics entry says "
+                   "what is particular to this order beside what it has in common with its kind")
+    entry = executor.type_entry
+    if entry is None:
+        out.append("[meta.order.executor_side] missing 'type_entry': name the experience or "
+                   "regularity record the order is of a kind with, or the explicit none entry")
+    elif entry.kind not in TYPE_ENTRY_KINDS:
+        out.append(f"[meta.order.executor_side] type_entry kind {entry.kind!r} is not one of "
+                   f"{'/'.join(TYPE_ENTRY_KINDS)}")
+    elif entry.kind == TYPE_ENTRY_NONE:
+        if not _normalize_string(entry.search_id):
+            out.append("[meta.order.executor_side] a none type_entry names the recorded search "
+                       "that found no record, as search_id (record it with order-search)")
+    elif not _normalize_string(entry.ref):
+        out.append(f"[meta.order.executor_side] a {entry.kind} type_entry names its record as 'ref'")
+    return out
+
+
+def _beside_violations(order) -> list[str]:
+    out: list[str] = []
+    for b in order.binding_conditions:
+        label = b.id or "#?"
+        for name in ("id", "text", "set_by"):
+            if not _normalize_string(getattr(b, name)):
+                out.append(f"[meta.order] binding condition {label} has no {name!r}")
+        if b.objection_text and not b.objection_by:
+            out.append(f"[meta.order] binding condition {label} carries an objection with no "
+                       f"'raised_by'")
+    dup = _duplicate_ids([b.id for b in order.binding_conditions])
+    if dup:
+        out.append(f"[meta.order] binding condition id(s) {', '.join(dup)} repeat")
+    for i, p in enumerate(order.method_ideas, start=1):
+        label = p.id or f"#{i}"
+        if not p.id or not _normalize_string(p.text):
+            out.append(f"[meta.order] method idea {label} needs an 'id' and a 'text'")
+        if p.verdict not in PROPOSAL_VERDICTS:
+            out.append(f"[meta.order] method idea {label} has verdict {p.verdict!r}, not one of "
+                       f"{'/'.join(PROPOSAL_VERDICTS)}")
+    for i, c in enumerate(order.means_conditions, start=1):
+        if not c.id or not _normalize_string(c.text):
+            out.append(f"[meta.order] means condition #{i} needs an 'id' and a 'text'")
+    taken = [r.id for r in order.requirements] + [p.id for p in order.proposals] + [
+        c.id for c in order.constraints]
+    beside = [p.id for p in order.method_ideas] + [c.id for c in order.means_conditions] + [
+        b.id for b in order.binding_conditions]
+    clash = sorted({i for i in beside if i and (i in taken or beside.count(i) > 1)})
+    if clash:
+        out.append(f"[meta.order] id(s) {', '.join(clash)} are used by more than one record of "
+                   f"the order, or by a record beside it and a part of it")
+    return out
+
+
+def order_sides_violations(meta) -> list[str]:
+    """Every way the two-sided parts of `[meta.order]` are ill-formed. [] == clean, and []
+    for an old-form order (no customer side). Pure over `meta`; the checks that need the
+    session's state (a type entry resolving to a record) are `cli_order`'s."""
+    order = meta.order
+    if order is None or "order" in order.malformed:
+        return []
+    out = [_order_malformed_sides(name) for name in _SIDES_MALFORMED if name in order.malformed]
+    if order.customer_side is None:
+        return out
+    out.extend(_customer_side_violations(order.customer_side))
+    out.extend(_executor_side_shape_violations(order))
+    out.extend(_beside_violations(order))
+    return out
+
+
+def _order_malformed_sides(name: str) -> str:
+    return (f"[meta.order] {name!r} is present but not in the shape the two-sided order reads "
+            f"(a table, or a list of tables): fix the shape rather than adding it again")
 
 
 def _names_requirement_id(rid: str, norm: str) -> bool:

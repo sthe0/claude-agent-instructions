@@ -68,7 +68,7 @@ from lib import config_root, hook_wiring
 from order_agreement_mutants import ENV, MUTANTS, apply_active_mutant
 from test_meta_order import _COVERAGE, _FINAL_CHECK, _PLAN
 from test_order_phase import (
-    RENDERING, _LINES, _delivered_transcript, _draft, _present, _review, _submit, run_hook,
+    BUDGET, RENDERING, SIDES, _LINES, _delivered_transcript, _draft, _present, _review, _submit, run_hook,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -205,7 +205,8 @@ def _plan(tmp_path: Path, *, replace=None, name="plan.toml") -> str:
     """A submittable plan whose order carries the draft's understanding (or `replace`d lines)."""
     lines = {**_LINES, **(replace or {})}
     coverage = "".join(f"{k} = {json.dumps(v)}\n" for k, v in _COVERAGE.items())
-    order = "[meta.order]\n" + "\n".join(lines.values()) + "\n\n[meta.order.coverage]\n" + coverage + "\n"
+    order = ("[meta.order]\n" + "\n".join(lines.values()) + "\n" + SIDES + BUDGET
+             + "\n[meta.order.coverage]\n" + coverage + "\n")
     text = _PLAN.format(
         goal=json.dumps("g"), done_criterion=json.dumps("d"),
         weight_class='weight_class = "substantive"\n', order=order, final_check=_FINAL_CHECK)

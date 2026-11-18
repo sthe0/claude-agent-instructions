@@ -28,7 +28,12 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 62  # 62: stage_uids, effort_segments, effort_migrated (per-segment effort)
+SCHEMA_VERSION = 63  # 63: SessionState gains order_searches/order_beside/
+                     # executor_side_revisions (the two-sided order: recorded searches,
+                     # the records beside the order, executor-side revisions);
+                     # OrderAgreement gains the correction, binding decisions, shown
+                     # executor-side digest and planning budget. No-op migration.
+                     # 62: stage_uids, effort_segments, effort_migrated (per-segment effort)
                      # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
@@ -1511,6 +1516,17 @@ class OrderAgreement:
     anchor: str = ORDER_AGREEMENT_ANCHOR_STAMP
     anchor_at: float = 0.0
     rendering_sha256: str = ""
+    # The two-sided order (schema 63). `customer_side_agreed` is true when the agreed digest
+    # covers the customer side and its acceptance checks (a new-form order); the executor-side
+    # digest is the one SHOWN at agreement, not agreed. `correction` is the user's correction
+    # of the reconstruction, `binding_decisions` the decision on each binding condition and
+    # `planning_budget` the budget record the agreement bound.
+    customer_side_agreed: bool = False
+    executor_side_sha256: str = ""
+    executor_side_parts: dict[str, str] = field(default_factory=dict)
+    correction: str = ""
+    binding_decisions: list[dict] = field(default_factory=list)
+    planning_budget: dict | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "OrderAgreement":
@@ -1524,6 +1540,12 @@ class OrderAgreement:
             anchor=d.get("anchor") or ORDER_AGREEMENT_ANCHOR_STAMP,
             anchor_at=d.get("anchor_at") or 0.0,
             rendering_sha256=d.get("rendering_sha256") or "",
+            customer_side_agreed=bool(d.get("customer_side_agreed")),
+            executor_side_sha256=d.get("executor_side_sha256") or "",
+            executor_side_parts=dict(d.get("executor_side_parts") or {}),
+            correction=d.get("correction") or "",
+            binding_decisions=[dict(x) for x in d.get("binding_decisions") or []],
+            planning_budget=dict(d["planning_budget"]) if d.get("planning_budget") else None,
         )
 
 
@@ -2002,6 +2024,107 @@ def _typed_table_list(raw, cls, name: str, malformed: list[str]) -> list:
     return []
 
 
+CHECK_DIRECT = "direct"
+CHECK_MEDIATED = "mediated"
+CHECK_KINDS = (CHECK_DIRECT, CHECK_MEDIATED)
+TYPE_ENTRY_EXPERIENCE = "experience"
+TYPE_ENTRY_REGULARITY = "regularity"
+TYPE_ENTRY_NONE = "none"
+TYPE_ENTRY_KINDS = (TYPE_ENTRY_EXPERIENCE, TYPE_ENTRY_REGULARITY, TYPE_ENTRY_NONE)
+ORDER_CRITERION_TYPES = ("measurable", "acceptance-review")
+
+
+@dataclass
+class AcceptanceCheck:
+    """One acceptance check of the customer side: how the product is accepted. `kind` is
+    direct (the criterion is observed on the product) or mediated (observed through a
+    stand-in, which `reason` must justify). Lenient like every order type; the submission
+    seam refuses a kind outside CHECK_KINDS and a mediated check without a reason."""
+    id: str
+    kind: str = ""
+    text: str = ""
+    reason: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AcceptanceCheck":
+        return cls(id=str(d.get("id", "")), kind=str(d.get("kind", "")),
+                   text=str(d.get("text", "")), reason=str(d.get("reason", "")))
+
+
+@dataclass
+class CustomerSide:
+    """The customer side of a new-form order: the step of the activity the difficulty sits
+    in, the part missing there, the product that supplies it, the criterion type of the
+    order and its acceptance checks. The user agrees it (the agreed digest covers it)."""
+    step: str = ""
+    missing: str = ""
+    product: str = ""
+    criterion_type: str = ""
+    checks: list[AcceptanceCheck] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict, malformed: list[str]) -> "CustomerSide":
+        return cls(
+            step=str(d.get("step", "")), missing=str(d.get("missing", "")),
+            product=str(d.get("product", "")), criterion_type=str(d.get("criterion_type", "")),
+            checks=_typed_table_list(d.get("checks"), AcceptanceCheck, "customer_side.checks", malformed),
+        )
+
+
+@dataclass
+class TypeEntry:
+    """The executor side's type entry: the experience or regularity record the order is of a
+    kind with (`ref`), or the explicit `none` entry naming (`search_id`) the recorded search
+    that found no such record."""
+    kind: str = ""
+    ref: str = ""
+    search_id: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TypeEntry":
+        return cls(kind=str(d.get("kind", "")), ref=str(d.get("ref", "")),
+                   search_id=str(d.get("search_id", "")))
+
+
+@dataclass
+class ExecutorSide:
+    """The executor side of a new-form order that is not already an existing top-level part:
+    the type entry and the specifics entry. Shown at agreement, not agreed."""
+    specifics: str = ""
+    type_entry: TypeEntry | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict, malformed: list[str]) -> "ExecutorSide":
+        raw = d.get("type_entry")
+        entry = None
+        if isinstance(raw, dict):
+            entry = TypeEntry.from_dict(raw)
+        elif raw is not None:
+            malformed.append("executor_side.type_entry")
+        return cls(specifics=str(d.get("specifics", "")), type_entry=entry)
+
+
+@dataclass
+class BindingCondition:
+    """A record beside the order (kind binding_condition): a condition the user or the agent
+    set on the work. While the order is a draft it may carry an objection; order-agree adds
+    the decision."""
+    id: str
+    text: str = ""
+    set_by: str = ""
+    objection_text: str = ""
+    objection_by: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BindingCondition":
+        objection = d.get("objection")
+        objection = objection if isinstance(objection, dict) else {}
+        return cls(id=str(d.get("id", "")), text=str(d.get("text", "")),
+                   set_by=str(d.get("set_by", "")),
+                   objection_text=str(objection.get("text", "")),
+                   objection_by=str(objection.get("raised_by", "")))
+
+
 @dataclass
 class Order:
     """The order a plan serves, typed: the customer it came from, the functional place
@@ -2100,6 +2223,15 @@ class Order:
     # set of parts a plan must state, and an estimate is required only before the first
     # approval, at the seams that check it.
     planning_estimate: ClassVar[PlanningEstimate | None] = None
+    # The two-sided order (schema 63): the customer side (the form mark — an order is new-form
+    # exactly when it is present), the executor side's type and specifics entries, and the
+    # records beside the order. Set per instance by `from_dict`, like `planning_estimate`.
+    customer_side: ClassVar[CustomerSide | None] = None
+    executor_side: ClassVar[ExecutorSide | None] = None
+    binding_conditions: ClassVar[tuple[BindingCondition, ...]] = ()
+    method_ideas: ClassVar[tuple[Proposal, ...]] = ()
+    means_conditions: ClassVar[tuple[Constraint, ...]] = ()
+    planning_budget: ClassVar[PlanningEstimate | None] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
@@ -2151,6 +2283,30 @@ class Order:
         elif raw_estimate is not None:
             malformed.append("planning_estimate")
 
+        raw_budget = d.get("planning_budget")
+        budget: PlanningEstimate | None = None
+        if isinstance(raw_budget, dict):
+            budget = PlanningEstimate.from_dict(raw_budget)
+        elif raw_budget is not None:
+            malformed.append("planning_budget")
+
+        raw_customer = d.get("customer_side")
+        customer_side: CustomerSide | None = None
+        if isinstance(raw_customer, dict):
+            customer_side = CustomerSide.from_dict(raw_customer, malformed)
+        elif raw_customer is not None:
+            malformed.append("customer_side")
+        raw_executor = d.get("executor_side")
+        executor_side: ExecutorSide | None = None
+        if isinstance(raw_executor, dict):
+            executor_side = ExecutorSide.from_dict(raw_executor, malformed)
+        elif raw_executor is not None:
+            malformed.append("executor_side")
+        binding = _typed_table_list(d.get("binding_conditions"), BindingCondition,
+                                    "binding_conditions", malformed)
+        ideas = _typed_table_list(d.get("method_ideas"), Proposal, "method_ideas", malformed)
+        means = _typed_table_list(d.get("means_conditions"), Constraint, "means_conditions", malformed)
+
         order = cls(
             customer_id=str(d.get("customer_id", "")),
             customer=str(d.get("customer", "")),
@@ -2168,6 +2324,12 @@ class Order:
             constraints=constraints,
         )
         order.planning_estimate = estimate
+        order.planning_budget = budget
+        order.customer_side = customer_side
+        order.executor_side = executor_side
+        order.binding_conditions = tuple(binding)
+        order.method_ideas = tuple(ideas)
+        order.means_conditions = tuple(means)
         return order
 
 
@@ -2704,6 +2866,14 @@ class SessionState:
     order_draft_path: str = ""
     order_draft_sha256: str = ""
     order_reviews: list[OrderReview] = field(default_factory=list)
+    # The two-sided order (schema 63), plain JSON records. `order_searches`: the experience
+    # searches `order-search` recorded (id, tier, query, results, at). `order_beside`: the
+    # records beside the submitted order (binding conditions, method ideas, means conditions,
+    # planning budget), replaced at each order-submit. `executor_side_revisions`: one record
+    # per `order-executor-revise`.
+    order_searches: list[dict] = field(default_factory=list)
+    order_beside: dict = field(default_factory=dict)
+    executor_side_revisions: list[dict] = field(default_factory=list)
     # The order agreement (schema 61). `order_agreement_armed` is set by classify alone;
     # `order_agreement_exemption` names why an eligible session was left unarmed.
     order_agreement_armed: bool = False
@@ -3535,5 +3705,6 @@ SESSION_SCOPED_FIELDS = frozenset({
     "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
     "order_draft_path", "order_draft_sha256", "order_reviews",
+    "order_searches", "order_beside", "executor_side_revisions",
     "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
 })

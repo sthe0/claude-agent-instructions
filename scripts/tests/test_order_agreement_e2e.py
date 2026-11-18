@@ -194,7 +194,7 @@ def test_a_spawned_process_is_named_exempt(env, tmp_path):
     assert "spawned" in classified["data"]["order_agreement_exemption"]
 
 
-EDITED_CONSTRAINT = {"constraints": 'constraints = [{ id = "K1", text = "a new dependency is welcome" }]'}
+EDITED_CONSTRAINT = {"difficulty": 'difficulty = "a release takes a week of hand-work"'}
 NO_AGREEMENT = "no agreed order understanding"
 DIVERGES = "diverges from the agreed"
 

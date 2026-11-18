@@ -184,8 +184,8 @@ def table(tmp_path, monkeypatch, **rows):
 
 
 def derived_draft(tmp_path, derivation, name):
-    estimate = f'planning_estimate = {{ active_minutes = 12, usd = 4.5, derivation = "{derivation}" }}'
-    return _draft(tmp_path, replace={ESTIMATE_LINE: estimate}, name=name)
+    budget = f'\n[meta.order.planning_budget]\nactive_minutes = 12\nusd = 4.5\nderivation = "{derivation}"\n'
+    return _draft(tmp_path, budget=budget, name=name)
 
 
 # --- the arming: from classify, at the fallback, until either approval ----------------------
@@ -516,8 +516,11 @@ def test_review_cycle_acts_and_stage_nonpass_streak_routes_are_unchanged():
 # --- the planning estimate in the order ---------------------------------------------------
 
 
+OLD_FORM = ("customer_side",)
+
+
 def test_planning_estimate_table_is_parsed_and_printed_with_its_derivation(tmp_path):
-    doc = load_order_draft(_draft(tmp_path))[0]
+    doc = load_order_draft(_draft(tmp_path, omit=OLD_FORM))[0]
     estimate = doc.meta.order.planning_estimate
     assert (estimate.active_minutes, estimate.usd) == (12, 4.5)
     assert estimate.derivation == "one reviewed plan of a few stages"
@@ -527,28 +530,42 @@ def test_planning_estimate_table_is_parsed_and_printed_with_its_derivation(tmp_p
     assert understanding_parts(doc)["planning_estimate"]
 
 
+def test_planning_budget_of_a_two_sided_order_is_printed_and_stays_out_of_the_agreed_digest(tmp_path):
+    doc = load_order_draft(_draft(tmp_path))[0]
+    budget = doc.meta.order.planning_budget
+    assert (budget.active_minutes, budget.usd) == (12, 4.5)
+    printed = "\n".join(render_order_understanding_md(doc))
+    assert "12 active minutes, 4.50 USD" in printed
+    assert not {"planning_estimate", "planning_budget"} & set(understanding_parts(doc))
+    other = _draft(tmp_path, name="other.toml", budget=(
+        '\n[meta.order.planning_budget]\nactive_minutes = 30\nusd = 9.0\nderivation = "bigger"\n'))
+    assert understanding_digest(load_order_draft(other)[0]) == understanding_digest(doc)
+
+
 def test_understanding_digest_is_unchanged_for_an_order_without_the_table(tmp_path):
-    doc = load_order_draft(_draft(tmp_path, omit=(ESTIMATE_LINE,)))[0]
+    doc = load_order_draft(_draft(tmp_path, omit=(*OLD_FORM, ESTIMATE_LINE)))[0]
     assert "planning_estimate" not in understanding_parts(doc)
     assert doc.meta.order.planning_estimate is None
     assert understanding_digest(doc) == (
         "2b5bbcd8f4d57ce4aa60aa1bf0efa53ef0e3ca25cfad8132a054c46c49eb0659")
-    assert understanding_digest(load_order_draft(_draft(tmp_path, name="with.toml"))[0]) != understanding_digest(doc)
+    with_table = _draft(tmp_path, name="with.toml", omit=OLD_FORM)
+    assert understanding_digest(load_order_draft(with_table)[0]) != understanding_digest(doc)
 
 
 def test_order_draft_without_estimate_or_derivation_is_refused_before_first_approval(ostore, armed_env, tmp_path):
+    head = "\n[meta.order.planning_budget]\n"
     incomplete = {
         "none": None,
-        "no-derivation": "planning_estimate = { active_minutes = 12, usd = 4.5 }",
-        "no-usd": 'planning_estimate = { active_minutes = 12, derivation = "d" }',
-        "no-minutes": 'planning_estimate = { usd = 4.5, derivation = "d" }',
+        "no-derivation": head + "active_minutes = 12\nusd = 4.5\n",
+        "no-usd": head + 'active_minutes = 12\nderivation = "d"\n',
+        "no-minutes": head + 'usd = 4.5\nderivation = "d"\n',
     }
-    for name, line in incomplete.items():
+    for name, table in incomplete.items():
         sid = f"inc-{name}"
         _start(ostore, session=sid)
         assert _classify(ostore, session=sid).ok
-        draft = _draft(tmp_path, omit=(ESTIMATE_LINE,) if line is None else (), replace={ESTIMATE_LINE: line} if line else None,
-                       name=f"{sid}.toml")
+        draft = (_draft(tmp_path, omit=(ESTIMATE_LINE,), name=f"{sid}.toml") if table is None
+                 else _draft(tmp_path, budget=table, name=f"{sid}.toml"))
         assert _submit(ostore, draft, session=sid).ok
         assert _review(ostore, session=sid).ok
         presented = _present(ostore, tmp_path, session=sid)

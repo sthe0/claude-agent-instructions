@@ -2623,7 +2623,49 @@ def _understanding_stated(order) -> bool:
 
 
 def _understanding_empty(order) -> bool:
-    return not (_understanding_stated(order) or order.planning_estimate is not None)
+    return not (_understanding_stated(order) or order.planning_estimate is not None
+                or _sides_member(order))
+
+
+def is_two_sided(order) -> bool:
+    """The form mark: an order is new-form exactly when its customer side is present."""
+    return order is not None and order.customer_side is not None
+
+
+def _customer_side_member(side) -> tuple:
+    return (side.step, side.missing, side.product, side.criterion_type,
+            tuple(sorted((c.id, c.kind, c.text, c.reason) for c in side.checks)))
+
+
+def _executor_side_member(order) -> tuple:
+    executor = order.executor_side
+    entry = executor.type_entry if executor is not None else None
+    return (executor.specifics if executor is not None else "",
+            (entry.kind, entry.ref, entry.search_id) if entry is not None else ())
+
+
+def _beside_member(order) -> tuple:
+    budget = order.planning_budget
+    return (
+        tuple(sorted((b.id, b.text, b.set_by, b.objection_text, b.objection_by)
+                     for b in order.binding_conditions)),
+        tuple(sorted((p.id, p.text, p.verdict, p.critique, tuple(sorted(p.against)))
+                     for p in order.method_ideas)),
+        tuple(sorted((c.id, c.text) for c in order.means_conditions)),
+        (budget.active_minutes, budget.usd, budget.derivation) if budget is not None else (),
+    )
+
+
+def _sides_member(order) -> tuple:
+    """The two-sided parts of the order as ONE member of `order_place`'s key, empty for an
+    order that carries none of them — so an old-form order keeps the key it had."""
+    if order.customer_side is None and order.executor_side is None and not (
+            order.binding_conditions or order.method_ideas or order.means_conditions
+            or order.planning_budget is not None):
+        return ()
+    side = order.customer_side
+    return ((_customer_side_member(side) if side is not None else (),
+             _executor_side_member(order), _beside_member(order)),)
 
 
 def _estimate_member(order) -> tuple:
@@ -2649,6 +2691,7 @@ def _understanding_place(order) -> tuple:
         tuple((p.id, p.text, p.verdict, p.critique, tuple(p.against)) for p in order.proposals),
         tuple((c.id, c.text) for c in order.constraints),
         *_estimate_member(order),
+        *_sides_member(order),
     ),)
 
 
@@ -2657,11 +2700,13 @@ def _understanding_scope(order) -> tuple:
     what became of each, and which constraints bind. Adding, removing or re-verdicting
     either changes what the plan is for; re-wording a proposal, a critique or a constraint
     does not. The planning estimate is wording of the agent's own, not scope."""
-    if not _understanding_stated(order):
+    side = order.customer_side
+    if not _understanding_stated(order) and side is None:
         return ()
     return ((
         tuple(sorted((p.id, p.verdict) for p in order.proposals)),
         tuple(sorted(c.id for c in order.constraints)),
+        *(((side.criterion_type, tuple(sorted(c.id for c in side.checks))),) if side is not None else ()),
     ),)
 
 
@@ -2686,18 +2731,62 @@ def understanding_parts(doc: PlanDoc) -> dict[str, str]:
         "difficulty": order.difficulty,
         "functional_place": order.functional_place,
     }
+    side = order.customer_side
+    if side is not None:
+        values["S:step"] = side.step
+        values["S:missing"] = side.missing
+        values["S:product"] = side.product
+        values["S:criterion_type"] = side.criterion_type
+        for c in side.checks:
+            values[f"C:{c.id}"] = (c.kind, c.text, c.reason)
+    else:
+        values.update(_executor_values(order))
+        if order.planning_estimate is not None:
+            values["planning_estimate"] = _estimate_member(order)[0]
+    return _hash_parts(values)
+
+
+def _hash_parts(values: dict[str, object]) -> dict[str, str]:
+    return {
+        name: hashlib.sha256(repr((name, value)).encode("utf-8")).hexdigest()
+        for name, value in values.items()
+    }
+
+
+def _executor_values(order) -> dict[str, object]:
+    """The requirements, proposals and constraints of `order`, keyed `R:`/`P:`/`K:` — the
+    parts an old-form order counts in the agreed digest and a new-form order counts in the
+    executor-side digest."""
+    values: dict[str, object] = {}
     for r in order.requirements:
         values[f"R:{r.id}"] = (r.text, r.derivation)
     for p in order.proposals:
         values[f"P:{p.id}"] = (p.text, p.verdict, p.critique, tuple(sorted(p.against)))
     for c in order.constraints:
         values[f"K:{c.id}"] = c.text
-    if order.planning_estimate is not None:
-        values["planning_estimate"] = _estimate_member(order)[0]
-    return {
-        name: hashlib.sha256(repr((name, value)).encode("utf-8")).hexdigest()
-        for name, value in values.items()
-    }
+    return values
+
+
+def executor_side_parts(doc: PlanDoc) -> dict[str, str]:
+    """`{part name: digest}` for the executor side of a new-form order, shown at agreement and
+    not agreed: the type and specifics entries and the `R:`/`P:`/`K:` parts. Empty for a doc
+    with no order or an old-form order, whose requirements, proposals and constraints are
+    still parts of the agreed digest. The records beside the order are in neither digest."""
+    order = doc.meta.order
+    if not is_two_sided(order):
+        return {}
+    values: dict[str, object] = {"type_and_specifics": _executor_side_member(order)}
+    values.update(_executor_values(order))
+    return _hash_parts(values)
+
+
+def executor_side_digest(doc: PlanDoc) -> str:
+    """One digest over `executor_side_parts`, or the empty string for an order without an
+    executor side. It moves when the executor side changes and never moves the agreed digest."""
+    parts = executor_side_parts(doc)
+    if not parts:
+        return ""
+    return hashlib.sha256(repr(tuple(sorted(parts.items()))).encode("utf-8")).hexdigest()
 
 
 def understanding_digest(doc: PlanDoc) -> str:

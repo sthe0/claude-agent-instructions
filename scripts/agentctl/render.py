@@ -254,13 +254,54 @@ def render_order_understanding_md(doc: PlanDoc) -> list[str]:
     if order.constraints:
         lines.append("- **Constraints:**")
         lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
+    lines.extend(_two_sided_lines(order))
     estimate = order.planning_estimate
     if estimate is not None:
-        minutes = f"{estimate.active_minutes:g}" if estimate.active_minutes else "*(none)*"
-        usd = f"{estimate.usd:.2f}" if estimate.usd else "*(none)*"
-        lines.append(f"- **Planning estimate:** {minutes} active minutes, {usd} USD")
-        lines.append(f"  - **Derivation:** {estimate.derivation or '*(none)*'}")
+        lines.extend(_estimate_lines("Planning estimate", estimate))
     return ["## Order understanding", "", *lines, ""] if lines else []
+
+
+def _estimate_lines(label: str, estimate) -> list[str]:
+    minutes = f"{estimate.active_minutes:g}" if estimate.active_minutes else "*(none)*"
+    usd = f"{estimate.usd:.2f}" if estimate.usd else "*(none)*"
+    return [f"- **{label}:** {minutes} active minutes, {usd} USD",
+            f"  - **Derivation:** {estimate.derivation or '*(none)*'}"]
+
+
+def _two_sided_lines(order) -> list[str]:
+    """The customer side (what the user agrees), the executor side's type and specifics entries
+    (shown, not agreed) and the records beside the order, for a new-form order; `[]` for an
+    old-form one."""
+    side = order.customer_side
+    if side is None:
+        return []
+    lines = [
+        "- **Customer side (agreed by the user):**",
+        f"  - **Step:** {side.step}",
+        f"  - **Missing:** {side.missing}",
+        f"  - **Product:** {side.product}",
+        f"  - **Criterion type:** {side.criterion_type}",
+        "  - **Acceptance checks:**",
+    ]
+    for c in side.checks:
+        reason = f" — reason: {c.reason}" if c.reason else ""
+        lines.append(f"    - **{c.id}** ({c.kind}): {c.text}{reason}")
+    executor = order.executor_side
+    if executor is not None:
+        entry = executor.type_entry
+        lines.append("- **Executor side (shown, not agreed):**")
+        lines.append(f"  - **Specifics:** {executor.specifics}")
+        if entry is not None:
+            target = entry.ref or entry.search_id
+            lines.append(f"  - **Type entry:** {entry.kind}{': ' + target if target else ''}")
+    if order.binding_conditions:
+        lines.append("- **Binding conditions:**")
+        for b in order.binding_conditions:
+            objection = f" — objection ({b.objection_by}): {b.objection_text}" if b.objection_text else ""
+            lines.append(f"  - **{b.id}** (set by {b.set_by}): {b.text}{objection}")
+    if order.planning_budget is not None:
+        lines.extend(_estimate_lines("Planning budget", order.planning_budget))
+    return lines
 
 
 def render_order_coverage_md(doc: PlanDoc) -> list[str]:
