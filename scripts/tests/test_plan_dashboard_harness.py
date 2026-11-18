@@ -673,9 +673,9 @@ def good_report(tmp_path, tree, old):
     for name in h.REQUIRED_CELLS:
         cells[name] = r6_cell(name) if name in h.R6_CELLS else good_cell(name)
     runs = [r3_rec(arm, path) for arm, path in h.R3_CELLS for _ in range(h.R3_MIN_RUNS)]
-    k1 = {"old": [{"arm": "old", "exec_kinds": ["tmux", "git"], "children_between_cycles": [2], "created_files": []}
+    k1 = {"old": [{"arm": "old", "exec_kinds": ["tmux", "git"], "background_children": 2, "created_files": []}
                   for _ in range(3)],
-          "new": [{"arm": "new", "exec_kinds": ["tmux"], "children_between_cycles": [1], "created_files": []}
+          "new": [{"arm": "new", "exec_kinds": ["tmux"], "background_children": 1, "created_files": []}
                   for _ in range(3)],
           "added_files": ["scripts/plan_dashboard/snapshot.py"]}
     return {"instrument_sha256": h.instrument_sha256(), "new_tree_sha256": h.tree_sha256(tree),
@@ -760,9 +760,9 @@ def test_a_new_start_of_a_command_the_old_code_does_not_start_is_a_miss(tmp_path
     assert acceptance(tmp_path, report, trees) == 1
 
 
-def test_more_child_processes_between_cycles_than_the_old_code_is_a_miss(tmp_path, trees):
+def test_more_background_child_processes_than_the_old_code_is_a_miss(tmp_path, trees):
     report = good_report(tmp_path, *trees)
-    report["k1"]["new"][0]["children_between_cycles"] = [9]
+    report["k1"]["new"][0]["background_children"] = 9
     assert acceptance(tmp_path, report, trees) == 1
 
 
@@ -808,7 +808,7 @@ class Script:
             return run_record(arg["arm"], self.run_changed)
         if what == "r3":
             return r3_rec(arg["arm"], arg["path"])
-        return {"arm": arg["arm"], "exec_kinds": [], "children_between_cycles": [], "created_files": []}
+        return {"arm": arg["arm"], "exec_kinds": [], "background_children": 0, "created_files": []}
 
 
 def campaign(tmp_path, runner, old=None, new=None, until=1e12):
@@ -1388,6 +1388,54 @@ def test_k1_does_not_count_the_light_tick_s_tmux_list_child(monkeypatch):
     assert h.descendants(100) == 4
 
 
+def k1_strace_run(monkeypatch, tmp_path, trace):
+    def run_pty(argv, **kwargs):
+        Path(argv[argv.index("-o") + 1]).write_text("")
+        return trace
+    monkeypatch.setattr(h, "run_pty", run_pty)
+    return h.strace_run(Path("tree"), tmp_path, {"XDG_CACHE_HOME": str(tmp_path)}, new=True, label="k")
+
+
+def test_k1_run_is_counted_on_a_full_window_without_cycles(monkeypatch, tmp_path):
+    trace = window_trace()
+    assert not any(e["ev"] in ("cycle_start", "cycle_end") for e in trace.events)
+    record = k1_strace_run(monkeypatch, tmp_path, trace)
+    assert record["counted"] is True and record["void_reason"] is None and record["background_children"] == 3
+    cut = k1_strace_run(monkeypatch, tmp_path, window_trace(end_s=30.0))
+    assert cut["counted"] is False and cut["void_reason"] == "window cut at 30 s"
+
+
+def test_k1_run_without_rows_is_void(monkeypatch, tmp_path):
+    record = k1_strace_run(monkeypatch, tmp_path, window_trace(rows=False))
+    assert record["counted"] is False and record["void_reason"] == "no rows painted in 120 s"
+    shown = window_trace(rows=False)
+    shown.frames.append((2.0, {"rows": [{"id": "a"}]}))
+    assert k1_strace_run(monkeypatch, tmp_path, shown)["counted"] is True
+
+
+def test_k1_background_children_is_min_over_second_half(tmp_path):
+    half = h.K1_WINDOW_S / 2
+    samples = [(1.0, 5), (half - 1, 5), (half, 3), (half + 10, 4), (h.K1_WINDOW_S, 3)]
+    assert h.background_children(samples) == 3
+    assert h.background_children([(1.0, 5), (half + 5, 4), (h.K1_WINDOW_S, 4)]) == 4
+
+    def report(old, new):
+        arm = lambda name, n: [{"arm": name, "exec_kinds": [], "created_files": [], "background_children": n}] * 3
+        return {"k1": {"old": arm("old", old), "new": arm("new", new), "added_files": []}}
+    assert h.judge_k1(report(3, 3)) == []
+    assert [m for m in h.judge_k1(report(3, 4)) if "background child" in m]
+
+
+def test_k1_shared_exec_kind_passes_but_another_new_kind_fails():
+    def report(new_kinds):
+        run = lambda arm, kinds: {"arm": arm, "exec_kinds": kinds, "created_files": [], "background_children": 3}
+        return {"k1": {"old": [run("old", ["git"])] * 3, "new": [run("new", new_kinds)] * 3, "added_files": []}}
+    assert h.judge_k1(report(["git", "tmux list-windows", "tmux display-message"])) == []
+    misses = h.judge_k1(report(["git", "ldconfig"]))
+    assert len(misses) == 1 and "ldconfig" in misses[0]
+    assert h.unshared_new_kinds({"tmux list-windows", "ldconfig"}, set()) == {"ldconfig"}
+
+
 def test_each_r3_and_k1_measurement_logs_one_line(tmp_path):
     lines = []
     camp = h.Campaign(tmp_path, tmp_path / "old", tmp_path / "new", save_every=3600, until=1e12, watch=[],
@@ -1552,12 +1600,22 @@ def smoke_args(tmp_path, floors=None):
             "--floors", str(floors_path), "--sources", str(sources)]
 
 
+def window_trace(samples=None, rows=True, end_s=None):
+    """A K1 run's trace over a full window: rows painted (or not) and ``samples`` descendant counts, no cycle at all."""
+    trace = FakeTrace()
+    end = h.K1_WINDOW_S if end_s is None else end_s
+    trace.child_samples = [(t, n) for t, n in (samples if samples is not None else [(0.0, 3), (end, 3)])]
+    if rows:
+        trace.events.append(ev("rows_painted", 1.0))
+    return trace
+
+
 class SmokeRunner:
     """Stands in for ``RealRunner``: an R3 record is built by ``r3_rec``, a K1 record by the real ``strace_run`` over a
-    stubbed ``run_pty`` (see ``stub_k1_pty``) that observes no cycle for the void job, so no record here holds a
+    stubbed ``run_pty`` (see ``stub_k1_pty``) that paints no rows for the void job, so no record here holds a
     field the real code does not produce."""
     void, calls, raises = None, [], None
-    k1_cycles = 4
+    k1_rows = True
 
     def __init__(self, state_dir, *args, **kwargs):
         SmokeRunner.state_dir = state_dir
@@ -1569,7 +1627,7 @@ class SmokeRunner:
         bad = SmokeRunner.calls[-1] == SmokeRunner.void
         if what == "r3":
             return r3_rec(job["arm"], job["path"], counted=not bad, void_reason="short" if bad else None)
-        SmokeRunner.k1_cycles = 0 if bad else h.K1_MIN_CYCLES
+        SmokeRunner.k1_rows = not bad
         return h.strace_run(Path("tree"), SmokeRunner.state_dir, {"XDG_CACHE_HOME": str(SmokeRunner.state_dir / "cache")},
                             new=job["arm"] == "new", label=f"{job['arm']}-0")
 
@@ -1577,16 +1635,13 @@ class SmokeRunner:
 def stub_k1_pty(monkeypatch):
     def run_pty(argv, **kwargs):
         Path(argv[argv.index("-o") + 1]).write_text("")
-        trace = FakeTrace()
-        for n in range(1, SmokeRunner.k1_cycles + 1):
-            trace.events += [ev("cycle_start", n * 2.0, cycle=n), ev("cycle_end", n * 2.0 + 0.1, cycle=n)]
-        return trace
+        return window_trace(rows=SmokeRunner.k1_rows)
     monkeypatch.setattr(h, "run_pty", run_pty)
 
 
 @pytest.fixture
 def smoke_runner(monkeypatch):
-    for name, value in (("void", None), ("calls", []), ("raises", None), ("k1_cycles", h.K1_MIN_CYCLES),
+    for name, value in (("void", None), ("calls", []), ("raises", None), ("k1_rows", True),
                         ("state_dir", None)):
         monkeypatch.setattr(SmokeRunner, name, value, raising=False)
     monkeypatch.setattr(h, "RealRunner", SmokeRunner)
@@ -1616,15 +1671,15 @@ def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, smo
     assert h.main(missing) == 2 and SmokeRunner.calls == []
 
 
-def test_a_k1_run_with_no_cycle_is_void_and_the_smoke_exits_1(tmp_path, smoke_runner, capsys):
+def test_a_k1_run_without_rows_is_void_and_the_smoke_exits_1(tmp_path, smoke_runner, capsys):
     SmokeRunner.void = ("k1", "new", None)
     assert h.main(smoke_args(tmp_path)) == 1
-    assert "measured k1 new void 0 of 4 cycles observed" in capsys.readouterr().out
-    SmokeRunner.k1_cycles = 4
+    assert "measured k1 new void no rows painted in 120 s" in capsys.readouterr().out
+    SmokeRunner.k1_rows = True
     good = h.strace_run(Path("tree"), tmp_path, {"XDG_CACHE_HOME": str(tmp_path)}, new=True, label="x")
     assert good["counted"] is True and good["void_reason"] is None
-    voids = [{"arm": "new", "counted": False, "void_reason": "0 of 4 cycles observed", "exec_kinds": ["git"]}] * 3
-    ok = [{"arm": "old", "exec_kinds": [], "created_files": [], "children_between_cycles": []}] * 3
+    voids = [{"arm": "new", "counted": False, "void_reason": "no rows painted in 120 s", "exec_kinds": ["git"]}] * 3
+    ok = [{"arm": "old", "exec_kinds": [], "created_files": [], "background_children": 0}] * 3
     assert h.judge_k1({"k1": {"old": ok, "new": voids}}) == [f"K1: fewer than {h.K1_MIN_RUNS} strace runs of the old or the new code"]
 
 

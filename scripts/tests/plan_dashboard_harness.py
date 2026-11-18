@@ -55,7 +55,9 @@ DEFAULT_LIMITS = {"R1": 1.5, "R2": 0.95, "R3": 0.25, "R6": 1.1, "R3_latency": 2.
 STREAM_SCREEN_MAX_MS = 20.0
 MIN_RUNS, MAX_RUNS, SPREAD_TARGET = 5, 30, 0.05
 R3_CYCLES, R3_MIN_RUNS, K1_MIN_RUNS = 20, 5, 3
-K1_MIN_CYCLES = 4
+K1_WINDOW_S = 120.0
+K1_WINDOW_SLACK_S = 1.0
+K1_SHARED_EXEC = ("tmux",)
 R3_RUN_CAP_S = 660
 STAT_SWEEP_EVERY = 4
 WATCH_ENV = "PLAN_DASHBOARD_WATCH"
@@ -1365,6 +1367,13 @@ def judge_r3(report: dict, limits: dict, report_only=frozenset()) -> list[str]:
     return misses
 
 
+def unshared_new_kinds(new_kinds: set, old_kinds: set) -> set:
+    """The command kinds only the new code starts, bar those K1_SHARED_EXEC names: tmux is run only by the
+    locator plugins both trees load from one plugin directory, so its presence in one arm says when that arm
+    reached the plugins, not what the tree under test does. Tested on the command name, as a kind is "tmux <sub>"."""
+    return {k for k in new_kinds - old_kinds if k.split()[0] not in K1_SHARED_EXEC}
+
+
 def judge_k1(report: dict) -> list[str]:
     k1 = report.get("k1") or {}
     old = [r for r in k1.get("old", []) if r.get("counted", True)]
@@ -1374,12 +1383,13 @@ def judge_k1(report: dict) -> list[str]:
     misses = []
     old_kinds = {k for r in old for k in r.get("exec_kinds", [])}
     new_kinds = {k for r in new for k in r.get("exec_kinds", [])}
-    if new_kinds - old_kinds:
-        misses.append(f"K1: the new code starts commands the old code does not: {sorted(new_kinds - old_kinds)}")
-    old_children = max((c for r in old for c in r.get("children_between_cycles", [])), default=0)
-    new_children = max((c for r in new for c in r.get("children_between_cycles", [])), default=0)
+    unshared = unshared_new_kinds(new_kinds, old_kinds)
+    if unshared:
+        misses.append(f"K1: the new code starts commands the old code does not: {sorted(unshared)}")
+    old_children = max((r.get("background_children", 0) for r in old), default=0)
+    new_children = max((r.get("background_children", 0) for r in new), default=0)
     if new_children > old_children:
-        misses.append(f"K1: {new_children} child processes between cycles against the old code's {old_children}")
+        misses.append(f"K1: {new_children} background child processes against the old code's {old_children}")
     old_created = {f for r in old for f in r.get("created_files", [])}
     stray = sorted({f for r in new for f in r.get("created_files", [])} - old_created)
     if stray:
@@ -1703,29 +1713,38 @@ def old_code_runs(base: Path, env: dict, *, events: bool, runs: int) -> dict:
     return out
 
 
-def strace_run(tree: Path, state_dir: Path, env: dict, *, new: bool, label: str, max_s: float = 25.0) -> dict:
-    """One K1 run under strace: command kinds, files created, child processes between cycles."""
+def background_children(samples: list[tuple[float, int]]) -> int:
+    """The fewest descendants sampled in the window's second half: the steady population, blind to a tick's
+    short-lived child."""
+    return min((n for t, n in samples if t >= K1_WINDOW_S / 2), default=0)
+
+
+def k1_void_reason(trace) -> str | None:
+    """Why a K1 run does not count: the window was cut short, or the dashboard painted no rows in it."""
+    reached = trace.child_samples[-1][0] if trace.child_samples else 0.0
+    if reached < K1_WINDOW_S - K1_WINDOW_SLACK_S:
+        return f"window cut at {reached:.0f} s"
+    painted = any(e.get("ev") == "rows_painted" for e in trace.events) \
+        or any(frame and frame["rows"] for _, frame in trace.frames)
+    return None if painted else f"no rows painted in {K1_WINDOW_S:.0f} s"
+
+
+def strace_run(tree: Path, state_dir: Path, env: dict, *, new: bool, label: str) -> dict:
+    """One K1 run under strace over a fixed window: command kinds, files created, background child processes."""
     out_file = state_dir / f"k1-{label}.strace"
-    argv = ["strace", "-f", "-e", "trace=openat,execve,stat,newfstatat,statx", "-ttt", "-s", "400", "-o",
+    argv = ["strace", "-f", "--seccomp-bpf", "-e", "trace=openat,execve", "-ttt", "-s", "400", "-o",
             str(out_file), *dashboard_argv(tree, events=True, interval=2.0)]
     snapshot_dir = Path(env["XDG_CACHE_HOME"]) / "plan-dashboard"
-    trace = run_pty(argv, cwd=tree, env=env, events=True, max_s=max_s, sample_children=True,
-                    stop=lambda t: len(cycle_records(t.events, t.t0_ns)) >= K1_MIN_CYCLES)
+    trace = run_pty(argv, cwd=tree, env=env, events=True, max_s=K1_WINDOW_S, terminate=True, sample_children=True)
     calls = parse_strace(out_file.read_text(errors="replace"))
     out_file.unlink(missing_ok=True)
     execs = sorted({exec_kind(c["argv"]) for c in calls if c["call"] == "execve" and c["ok"]})
     created = sorted({c["path"] for c in calls if c["creates"] and not c["path"].startswith(("/dev", "/proc", "/tmp"))
                       and "__pycache__" not in c["path"] and "/uv/" not in c["path"]
                       and not c["path"].startswith(str(snapshot_dir))})
-    cycles = cycle_records(trace.events, trace.t0_ns)
-    between = []
-    for a, b in zip(cycles, cycles[1:]):
-        gap = [n for t, n in trace.child_samples if a["start_s"] + a["duration_s"] < t < b["start_s"]]
-        if gap:
-            between.append(max(gap))
-    void = None if len(cycles) >= K1_MIN_CYCLES else f"{len(cycles)} of {K1_MIN_CYCLES} cycles observed"
+    void = k1_void_reason(trace)
     return {"exec_kinds": execs, "created_files": [placeholder(p) for p in created],
-            "children_between_cycles": between, "arm": "new" if new else "old",
+            "background_children": background_children(trace.child_samples), "arm": "new" if new else "old",
             "counted": void is None, "void_reason": void}
 
 

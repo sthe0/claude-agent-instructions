@@ -1554,6 +1554,14 @@ def _void_k1_runs_counted(original):
     return lambda r3, k1: original(r3, [dict(r, counted=True) for r in k1])
 
 
+def _children_are_the_max_over_the_window(original):
+    return lambda samples: max((n for _, n in samples), default=0)
+
+
+def _every_new_exec_kind_is_shared(original):
+    return lambda new_kinds, old_kinds: set()
+
+
 def _children_read_aborts_on_a_missing_thread(original):
     def mutated(root_pid, proc_root="/proc", children_files=True):
         ticks, frontier = {}, [root_pid]
@@ -1623,6 +1631,9 @@ SCRIPT_MODULE_MUTATIONS = {
     "cpu-walk-no-ppid-fallback": (HARNESS, "proc_children_by_ppid", lambda _original: (lambda proc_root="/proc": ({}, {}))),
     "children-read-aborts-on-first-missing-thread": (HARNESS, "proc_tree_ticks", _children_read_aborts_on_a_missing_thread),
     "next-measurement-counts-void-k1": (HARNESS, "next_measurement", _void_k1_runs_counted),
+    "k1-children-max-over-window": (HARNESS, "background_children", _children_are_the_max_over_the_window),
+    "k1-shared-exec-any-kind": (HARNESS, "unshared_new_kinds", _every_new_exec_kind_is_shared),
+    "k1-rowless-run-counted": (HARNESS, "k1_void_reason", _always(None)),
     "cpu-walk-rereads-scanned-stat": (HARNESS, "proc_children_by_ppid",
                                       lambda original: (lambda proc_root="/proc": (original(proc_root)[0], {}))),
 }

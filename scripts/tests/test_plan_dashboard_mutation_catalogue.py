@@ -108,6 +108,9 @@ HARNESS_MUTATIONS = (
     "r1-from-wall",
     "cpu-walk-no-ppid-fallback",
     "next-measurement-counts-void-k1",
+    "k1-children-max-over-window",
+    "k1-shared-exec-any-kind",
+    "k1-rowless-run-counted",
     "children-read-aborts-on-first-missing-thread",
     "cpu-walk-rereads-scanned-stat",
 )

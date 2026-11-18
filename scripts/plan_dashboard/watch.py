@@ -10,7 +10,6 @@ check of every source or to the stat path.
 from __future__ import annotations
 
 import ctypes
-import ctypes.util
 import errno
 import math
 import os
@@ -93,8 +92,7 @@ def sources_for(state_root, binding_dir, transcript_roots, cost_log, listing_fil
 
 
 def _libc():
-    path = ctypes.util.find_library("c")
-    libc = ctypes.CDLL(path, use_errno=True)
+    libc = ctypes.CDLL(None, use_errno=True)
     libc.inotify_init1.argtypes = [ctypes.c_int]
     libc.inotify_add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
     libc.inotify_rm_watch.argtypes = [ctypes.c_int, ctypes.c_int]
