@@ -58,6 +58,16 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     return Directive(True, state.node, "classify", "session registered; run classify next")
 
 
+def _reset_criterion_type(prior, args) -> str:
+    """The criterion type of the session a reset builds: the type the user agreed in the prior
+    session's order when it is the same task being re-entered, the argument's (default measurable)
+    otherwise — an order agreed for one task says nothing about another."""
+    agreement = prior.order_agreement if prior is not None else None
+    if agreement is not None and agreement.criterion_type and prior.task_id == args.task:
+        return agreement.criterion_type
+    return getattr(args, "criterion_type", CriterionType.MEASURABLE.value)
+
+
 def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Re-arm a session for a NEW task once its prior task is closed. Refuses to
     discard a live prior task (not RESOLVED/ROUTED/BLOCKED) unless --force, so a
@@ -111,7 +121,7 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         task_id=args.task,
         goal=getattr(args, "goal", "") or "",
         overall_done_criterion=getattr(args, "done_criterion", "") or "",
-        overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
+        overall_criterion_type=_reset_criterion_type(prior, args),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
     )
     runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)

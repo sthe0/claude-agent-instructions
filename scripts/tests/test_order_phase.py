@@ -31,8 +31,16 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, delivery, gates
-from agentctl.plan import load_order_draft, understanding_digest
+from agentctl import cli, delivery, gates, plugins
+from agentctl.plan import (
+    ORDER_COST_MARKER,
+    ORDER_CUSTOMER_MARKER,
+    ORDER_EXECUTOR_MARKER,
+    PLANNING_COST_LABEL,
+    load_order_draft,
+    planning_cost_line,
+    understanding_digest,
+)
 from agentctl.state import (
     PLAN_PRESENTATION_KIND_ORDER,
     SCHEMA_VERSION,
@@ -163,14 +171,50 @@ def _review(store, verdict="pass", *, reviewer="thinker", target=None, note="", 
            customer_questions=customer_questions, transcript=transcript), store=store)
 
 
-RENDERING = (
+OLD_RENDERING = (
     "The order, as I understand it.\n\n"
     "[R1] releases are tagged by a command.\n[R2] a tag names its commit.\n"
     "[P1] tag releases automatically (adopted).\n[K1] no new dependency.\n"
 )
 
+COST_LINE = planning_cost_line(PLANNING_COST_LABEL, 12, 4.5)
 
-def _present(store, tmp_path: Path, text=RENDERING, *, session=SESSION, **kw):
+RENDERING = (
+    "The order, as I understand it.\n\n"
+    f"{ORDER_CUSTOMER_MARKER}\n\ncutting a release needs a command that tags it.\n\n"
+    f"{ORDER_EXECUTOR_MARKER}\n\n"
+    "[R1] releases are tagged by a command.\n[R2] a tag names its commit.\n"
+    "[P1] tag releases automatically (adopted).\n[K1] no new dependency.\n"
+    f"\n{ORDER_COST_MARKER}\n\n{COST_LINE}\n"
+)
+
+
+def _bind_question(store, *, session=SESSION, answer=None, path=None):
+    """Raise the binding-conditions question of the session's order draft through the verb and
+    dispose it with the user's answer — by default the one the draft's records make true."""
+    state = store.load(session)
+    if "premise" not in state.plugins:
+        plugins.activate(state, "premise")
+        store.save(state)
+    doc, _ = load_order_draft(path or state.order_draft_path)
+    answer = answer or (gates.BINDING_CONDITIONS_YES if doc.meta.order.binding_conditions
+                        else gates.BINDING_CONDITIONS_NONE)
+    raised = cli.cmd_question_raise(
+        ns(session=session, id="BC", target="plan.goal", question="", control=None, plan=None,
+           kind=gates.QUESTION_KIND_BINDING_CONDITIONS), store=store)
+    assert raised.ok, raised.detail
+    cli.cmd_question_research(ns(session=session, id="BC", attempted="asked the user"), store=store)
+    disposed = cli.cmd_question_dispose(
+        ns(session=session, id="BC", to="escalated", answer=answer, source="", derivation="",
+           basis="", risk="", plan=None), store=store)
+    assert disposed.ok, disposed.detail
+
+
+def _present(store, tmp_path: Path, text=RENDERING, *, session=SESSION, bind=True, **kw):
+    """Put the order draft to the user. A new-form order's binding-conditions question is
+    answered in agreement with the draft first, unless `bind=False`."""
+    if bind and store.load(session).order_draft_path:
+        _bind_question(store, session=session)
     rendering = tmp_path / "order-rendering.txt"
     rendering.write_text(text, encoding="utf-8")
     return cli.cmd_present_plan(

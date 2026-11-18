@@ -172,6 +172,10 @@ class Question:
     # so the mismatch is visible without waiting for the approve gate. Cleared when
     # the key is again valid (e.g. the edit was reverted on a later replan).
     stale_note: str = ""
+    # The question's kind, "" for a plain one. A kind names a question the engine itself
+    # words and reads (see gates.QUESTION_KIND_BINDING_CONDITIONS); a record saved before
+    # kinds existed loads as a plain question.
+    kind: str = ""
 
 
 def questions_from_dicts(raw: list[dict]) -> list[Question]:
@@ -191,6 +195,7 @@ def questions_from_dicts(raw: list[dict]) -> list[Question]:
             "disposed_at_key": d.get("disposed_at_key", ""),
             "control": d.get("control", ""),
             "stale_note": d.get("stale_note", ""),
+            "kind": d.get("kind", ""),
         })
         for d in raw
     ]
@@ -213,6 +218,7 @@ def questions_to_dicts(questions: list[Question]) -> list[dict]:
             "disposed_at_key": q.disposed_at_key,
             "control": q.control,
             "stale_note": q.stale_note,
+            "kind": q.kind,
         }
         for q in questions
     ]

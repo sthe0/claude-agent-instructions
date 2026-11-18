@@ -453,7 +453,20 @@ def _executor_revision_unguarded(mp):
     mp.setattr("agentctl.cli_order._agreed_parts_moved", lambda doc, agreement: [], raising=True)
 
 
+def _order_criterion_type_not_adopted(mp):
+    """order-agree stops copying the agreed customer side's criterion type into the session."""
+    mp.setattr("agentctl.cli_order._adopt_order_criterion_type", lambda state, doc: None, raising=True)
+
+
+def _order_review_type_from_session(mp):
+    """The order review judges the order under the session's criterion type, not the draft's."""
+    mp.setattr("agentctl.cli_review._order_review_criterion_type",
+               lambda state, doc: state.overall_criterion_type, raising=True)
+
+
 MUTANTS = {
+    "order_criterion_type_not_adopted": _order_criterion_type_not_adopted,
+    "order_review_type_from_session": _order_review_type_from_session,
     "no_search_record": _no_search_record,
     "correction_unrecorded": _correction_unrecorded,
     "binding_decision_unrecorded": _binding_decision_unrecorded,

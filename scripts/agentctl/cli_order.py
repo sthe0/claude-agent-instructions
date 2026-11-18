@@ -145,10 +145,7 @@ def _agreed_before_migration(state: SessionState, doc) -> bool:
     """Whether the draft is the very understanding the user agreed before this session's
     migration instant: such an order predates the estimate table and is never asked for it again
     just to be presented."""
-    agreed = state.order_agreement
-    migrated = state.effort_migrated
-    return (agreed is not None and bool(migrated) and agreed.at < migrated["instant"]
-            and agreed.understanding_sha256 == understanding_digest(doc))
+    return gates.agreed_before_migration(state, understanding_digest(doc))
 
 
 def _planning_terms(order):
@@ -349,6 +346,8 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         agreement.binding_decisions = _agreed_binding_decisions(decisions)
         agreement.binding_conditions = beside["binding_conditions"]
         agreement.planning_budget = beside["planning_budget"]
+        agreement.criterion_type = order.customer_side.criterion_type
+        _adopt_order_criterion_type(state, doc)
     state.order_agreement = agreement
     state.order_agreement_history.append(agreement)
     _record_agreed_estimate(state, doc)
@@ -365,6 +364,12 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         "next: author the plan and submit-plan",
         data={"understanding_sha256": digest, "anchor": anchor},
     )
+
+
+def _adopt_order_criterion_type(state: SessionState, doc) -> None:
+    """The agreed customer side's criterion type becomes the session's, which the closing ask and
+    `verify-final` read. An old-form order never reaches here and keeps the session's own."""
+    state.overall_criterion_type = doc.meta.order.customer_side.criterion_type
 
 
 def _old_form_unadmitted(state: SessionState, doc) -> bool:

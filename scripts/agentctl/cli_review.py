@@ -1049,6 +1049,13 @@ def _attested_digest_refusal(state: SessionState, target: str, attested: str) ->
     return None
 
 
+def _order_review_criterion_type(state: SessionState, doc) -> str:
+    """The criterion type an order review judges the order under: the draft's own, because the
+    user has not yet agreed it into the session's field. Kept as its own function so a test can
+    plant the defect of reading the session instead."""
+    return gates.order_criterion_type(state, doc)
+
+
 def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Directive:
     """`plan-review --scope order`: record a review of an order draft's UNDERSTANDING.
 
@@ -1103,6 +1110,7 @@ def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Direct
         verdict=args.verdict,
         reviewer=reviewer,
         target=target,
+        criterion_type=_order_review_criterion_type(state, doc),
         understanding_sha256=understanding_digest(doc),
         concerns=[pc.body for pc in parsed],
         customer_questions=question_texts,

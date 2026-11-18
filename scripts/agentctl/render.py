@@ -40,6 +40,10 @@ from .plan import (
     CUSTOMER_QUESTION_MARKER,
     CUSTOMER_QUESTIONS_MARKER,
     CUSTOMER_QUESTIONS_NONE,
+    ORDER_COST_MARKER,
+    ORDER_CUSTOMER_MARKER,
+    ORDER_EXECUTOR_MARKER,
+    PLANNING_COST_LABEL,
     PLAN_DIGEST_MARKER,
     RESTATES_PREFIX,
     REVIEW_MARKER,
@@ -57,8 +61,10 @@ from .plan import (
     consumers,
     grants_sha256,
     interface_empty,
+    is_two_sided,
     is_unit_id,
     load_order_draft,
+    planning_cost_line,
     load_plan,
     parse_pair,
     parse_plan,
@@ -202,9 +208,13 @@ def render_order_md(doc: PlanDoc) -> list[str]:
     """The `## Order` block (customer / functional_place / requirements
     only — NOT `coverage`/`requires_traceability`; see
     `render_order_coverage_md`), as raw lines. `[]` when the plan declares
-    no order. Factored verbatim out of `render_plan_md`."""
+    no order. Factored verbatim out of `render_plan_md`. A new-form order (one with a customer
+    side) is rendered by `_two_sided_order_md` instead: the customer side first, the executor
+    side second, the planning cost beside them."""
     m = doc.meta
     lines: list[str] = []
+    if is_two_sided(m.order):
+        return _two_sided_order_md(m.order)
     if m.order is not None:
         o = m.order
         lines.append("## Order")
@@ -234,14 +244,73 @@ def _proposal_lines(proposals, indent: str = "  ") -> list[str]:
     return lines
 
 
+def _two_sided_order_md(order) -> list[str]:
+    """A new-form order as the user reads it: who and where, then the customer side (the agent's
+    reconstruction, with its acceptance checks and the binding conditions), then the executor side
+    (the agent's professional understanding, shown and not put to agreement), then the planning
+    cost beside the order. The records beside the order that no one agrees — method ideas with
+    their verdicts and conditions on means — are not rendered."""
+    lines = ["## Order", ""]
+    if order.customer_id or order.customer:
+        lines.append(f"- **Customer:** {order.customer} (`{order.customer_id}`)")
+    if order.functional_place:
+        lines.append(f"- **Functional place:** {order.functional_place}")
+    side = order.customer_side
+    lines += ["", ORDER_CUSTOMER_MARKER, "",
+              f"- **Step:** {side.step}",
+              f"- **Missing:** {side.missing}",
+              f"- **Product:** {side.product}",
+              f"- **Criterion type:** {side.criterion_type}",
+              "- **Acceptance checks:**"]
+    for c in side.checks:
+        reason = f" — reason: {c.reason}" if c.reason else ""
+        lines.append(f"  - **{c.id}** ({c.kind}): {c.text}{reason}")
+    if order.binding_conditions:
+        lines.append("- **Binding conditions:**")
+        for b in order.binding_conditions:
+            objection = f" — objection ({b.objection_by}): {b.objection_text}" if b.objection_text else ""
+            lines.append(f"  - **{b.id}** (set by {b.set_by}): {b.text}{objection}")
+    lines += ["", ORDER_EXECUTOR_MARKER, ""]
+    if order.requirements:
+        lines.append("- **Requirements:**")
+        for r in order.requirements:
+            label = f"**{r.id}**" if r.id else "*(no id)*"
+            lines.append(f"  - {label}: {r.text}")
+            lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
+    if order.activity:
+        lines.append(f"- **Activity:** {order.activity}")
+    if order.difficulty:
+        lines.append(f"- **Difficulty:** {order.difficulty}")
+    if order.proposals:
+        lines.append("- **Proposals:**")
+        lines.extend(_proposal_lines(order.proposals))
+    if order.constraints:
+        lines.append("- **Constraints:**")
+        lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
+    executor = order.executor_side
+    if executor is not None:
+        lines.append(f"- **Specifics:** {executor.specifics}")
+        entry = executor.type_entry
+        if entry is not None:
+            target = entry.ref or entry.search_id
+            lines.append(f"- **Type entry:** {entry.kind}{': ' + target if target else ''}")
+    budget = order.planning_budget
+    lines += ["", ORDER_COST_MARKER, ""]
+    lines += (_estimate_lines(PLANNING_COST_LABEL, budget) if budget is not None
+              else [planning_cost_line(PLANNING_COST_LABEL, 0, 0)])
+    lines.append("")
+    return lines
+
+
 def render_order_understanding_md(doc: PlanDoc) -> list[str]:
     """The order's activity, difficulty, proposals, constraints and planning estimate (with its
     derivation) — the part of the understanding `render_order_md` leaves out (it already prints
     the customer, the functional place and the requirements with derivations) — as raw lines.
     Each field appears only when the order states it, so an order without them renders as
-    before; `[]` when it states none."""
+    before; `[]` when it states none, and for a new-form order, whose whole understanding
+    `render_order_md` already prints."""
     order = doc.meta.order
-    if order is None:
+    if order is None or is_two_sided(order):
         return []
     lines: list[str] = []
     if order.activity:
@@ -254,7 +323,6 @@ def render_order_understanding_md(doc: PlanDoc) -> list[str]:
     if order.constraints:
         lines.append("- **Constraints:**")
         lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
-    lines.extend(_two_sided_lines(order))
     estimate = order.planning_estimate
     if estimate is not None:
         lines.extend(_estimate_lines("Planning estimate", estimate))
@@ -262,46 +330,8 @@ def render_order_understanding_md(doc: PlanDoc) -> list[str]:
 
 
 def _estimate_lines(label: str, estimate) -> list[str]:
-    minutes = f"{estimate.active_minutes:g}" if estimate.active_minutes else "*(none)*"
-    usd = f"{estimate.usd:.2f}" if estimate.usd else "*(none)*"
-    return [f"- **{label}:** {minutes} active minutes, {usd} USD",
+    return [planning_cost_line(label, estimate.active_minutes, estimate.usd),
             f"  - **Derivation:** {estimate.derivation or '*(none)*'}"]
-
-
-def _two_sided_lines(order) -> list[str]:
-    """The customer side (what the user agrees), the executor side's type and specifics entries
-    (shown, not agreed) and the records beside the order, for a new-form order; `[]` for an
-    old-form one."""
-    side = order.customer_side
-    if side is None:
-        return []
-    lines = [
-        "- **Customer side (agreed by the user):**",
-        f"  - **Step:** {side.step}",
-        f"  - **Missing:** {side.missing}",
-        f"  - **Product:** {side.product}",
-        f"  - **Criterion type:** {side.criterion_type}",
-        "  - **Acceptance checks:**",
-    ]
-    for c in side.checks:
-        reason = f" — reason: {c.reason}" if c.reason else ""
-        lines.append(f"    - **{c.id}** ({c.kind}): {c.text}{reason}")
-    executor = order.executor_side
-    if executor is not None:
-        entry = executor.type_entry
-        lines.append("- **Executor side (shown, not agreed):**")
-        lines.append(f"  - **Specifics:** {executor.specifics}")
-        if entry is not None:
-            target = entry.ref or entry.search_id
-            lines.append(f"  - **Type entry:** {entry.kind}{': ' + target if target else ''}")
-    if order.binding_conditions:
-        lines.append("- **Binding conditions:**")
-        for b in order.binding_conditions:
-            objection = f" — objection ({b.objection_by}): {b.objection_text}" if b.objection_text else ""
-            lines.append(f"  - **{b.id}** (set by {b.set_by}): {b.text}{objection}")
-    if order.planning_budget is not None:
-        lines.extend(_estimate_lines("Planning budget", order.planning_budget))
-    return lines
 
 
 def render_order_coverage_md(doc: PlanDoc) -> list[str]:

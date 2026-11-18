@@ -54,8 +54,14 @@ from . import effort_segments
 from . import resources as _resources
 from .config import Thresholds
 from .plan import (
+    ORDER_COST_MARKER,
+    ORDER_CUSTOMER_MARKER,
+    ORDER_EXECUTOR_MARKER,
+    PLANNING_COST_LABEL,
     PlanError,
     SEVERITY_BLOCKING,
+    is_two_sided,
+    planning_cost_line,
     acceptance_requirement_bindings,
     changed_parts,
     consumers,
@@ -3007,10 +3013,122 @@ def _plan_presentation_for(state: SessionState, kind: str):
     return match[-1] if match else None
 
 
+QUESTION_KIND_BINDING_CONDITIONS = "binding_conditions"
+BINDING_CONDITIONS_QUESTION = (
+    "Does the user bind this order with any conditions of their own? "
+    "Answer 'has conditions' or 'none'."
+)
+BINDING_CONDITIONS_YES = "has conditions"
+BINDING_CONDITIONS_NONE = "none"
+QUESTION_KIND_TEXTS = {QUESTION_KIND_BINDING_CONDITIONS: BINDING_CONDITIONS_QUESTION}
+
+
+def order_criterion_type(state: SessionState, doc) -> str:
+    """The criterion type of the order in `doc`: the customer side's own for a new-form order,
+    the session's field for an old-form one."""
+    order = doc.meta.order if doc is not None else None
+    if is_two_sided(order):
+        return order.customer_side.criterion_type
+    return state.overall_criterion_type
+
+
+def _binding_conditions_problems(state: SessionState, order) -> list[str]:
+    """The binding-conditions question of a new-form order: recorded under its kind with the
+    engine's fixed text (compared by exact equality, so a re-worded question is not the one),
+    disposed with an answer that is `has conditions` exactly when the draft carries at least one
+    binding_condition record — whatever that record's decision part says — and `none` otherwise."""
+    bag = state.plugins.get("premise") or {}
+    asked = [q for q in bag.get("questions", [])
+             if q.get("kind", "") == QUESTION_KIND_BINDING_CONDITIONS]
+    if not asked:
+        return ["the binding-conditions question is not recorded: question-raise --kind "
+                "binding_conditions, put it to the user and dispose it with their answer"]
+    question = asked[-1]
+    if question.get("question", "") != BINDING_CONDITIONS_QUESTION:
+        return ["the recorded binding-conditions question is not the engine's text"]
+    if question.get("disposition", "open") == "open" or not (question.get("answer") or "").strip():
+        return ["the binding-conditions question is not answered: question-dispose it with the "
+                "user's answer"]
+    expected = BINDING_CONDITIONS_YES if order.binding_conditions else BINDING_CONDITIONS_NONE
+    if question["answer"].strip() != expected:
+        return [f"the binding-conditions answer {question['answer'].strip()!r} disagrees with the "
+                f"draft, which carries {len(order.binding_conditions)} binding_condition record(s): "
+                f"the answer is {expected!r}"]
+    return []
+
+
+def agreed_before_migration(state: SessionState, digest: str) -> bool:
+    """Whether `digest` is the very understanding the user agreed before this session's migration
+    instant: such an order predates the planning estimate and budget and is never asked for one
+    again just to be put to the user."""
+    agreed = state.order_agreement
+    migrated = state.effort_migrated
+    return (agreed is not None and bool(migrated) and agreed.at < migrated["instant"]
+            and agreed.understanding_sha256 == digest)
+
+
+def _expected_planning_budget(state: SessionState, doc, digest: str):
+    """The planning budget a new-form order's rendering must show, or None when there is none:
+    the figure the agreement bound once the draft is exactly what was agreed; otherwise the
+    draft's own record; for a draft carrying no record, the figure a standing agreement bound
+    (an order renewed after the plan's first approval carries none), else nothing."""
+    agreement = state.order_agreement
+    bound = agreement.planning_budget if agreement is not None else None
+    budget = doc.meta.order.planning_budget
+    if bound is not None and (agreement.understanding_sha256 == digest or budget is None):
+        return bound.get("active_minutes"), bound.get("usd")
+    return (budget.active_minutes, budget.usd) if budget is not None else None
+
+
+def order_rendering_problems(state: SessionState, doc, text: str) -> list[str]:
+    """Why the registered rendering `text` of a new-form order may not be put to the user ([] ==
+    it may): both side markers present as whole lines with the customer side first, the planning
+    cost under its own marker after both sides with the figure of the budget record (and not in
+    the order's text), and the binding-conditions question recorded and answered consistently
+    with the draft's records. Structure only — what the sides say is the reviewer's. An old-form
+    order has none of this."""
+    order = doc.meta.order if doc is not None else None
+    if not is_two_sided(order):
+        return []
+    lines = [line.strip() for line in text.splitlines()]
+    positions = {name: lines.index(marker) if marker in lines else -1
+                 for name, marker in (("customer", ORDER_CUSTOMER_MARKER),
+                                      ("executor", ORDER_EXECUTOR_MARKER),
+                                      ("cost", ORDER_COST_MARKER))}
+    problems = []
+    if positions["customer"] < 0:
+        problems.append("the rendering carries no customer-side reconstruction marker")
+    if positions["executor"] < 0:
+        problems.append("the rendering carries no executor-side marker (the agent's professional "
+                        "understanding, shown and not agreed)")
+    if (positions["customer"] >= 0 and positions["executor"] >= 0
+            and positions["customer"] > positions["executor"]):
+        problems.append("the customer side must come before the executor side")
+    digest = understanding_digest(doc)
+    expected = _expected_planning_budget(state, doc, digest)
+    if expected is None:
+        if not agreed_before_migration(state, digest):
+            problems.append("the order draft carries no planning budget record: the cost shown "
+                            "beside the order has no figure to equal")
+    elif positions["cost"] < 0:
+        problems.append("the rendering carries no planning-cost section beside the order")
+    else:
+        figure = planning_cost_line(PLANNING_COST_LABEL, *expected)
+        if positions["cost"] < max(positions["customer"], positions["executor"]):
+            problems.append("the planning cost must come after both sides, outside the order's text")
+        if figure in lines[:positions["cost"]]:
+            problems.append("the planning cost figure is inside the order's text")
+        if figure not in lines[positions["cost"]:]:
+            problems.append(f"the planning cost figure does not equal the budget record: expected {figure!r}")
+    problems += _binding_conditions_problems(state, order)
+    return problems
+
+
 def order_presentation_stale_reason(state: SessionState, receipt) -> str | None:
     """Why an order receipt no longer stands for the submitted understanding (None ==
     it does): it must name the submitted draft, its bytes, and carry the understanding
-    digest that order-submit recorded and the draft still has."""
+    digest that order-submit recorded and the draft still has; for a new-form order the
+    structure of the registered rendering must still hold against the draft and the session."""
     stale = _receipt_binding_blocker(receipt, state.order_draft_path, "order presentation", state)
     if stale is not None:
         return stale
@@ -3025,6 +3143,10 @@ def order_presentation_stale_reason(state: SessionState, receipt) -> str | None:
             "draft's current understanding are not the same digest; re-run order-submit "
             "and present-plan --kind order"
         )
+    problems = order_rendering_problems(state, doc, receipt.rendering_text or "")
+    if problems:
+        return ("order presentation is stale — its rendering no longer satisfies the order "
+                "presentation checks: " + "; ".join(problems))
     return None
 
 

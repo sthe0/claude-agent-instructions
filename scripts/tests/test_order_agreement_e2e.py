@@ -133,6 +133,12 @@ def _present_draft(cli: Cli, tmp_path: Path, draft: Path) -> str:
     cli.ok("order-submit", "--session", SESSION, "--plan", str(draft))
     cli.ok("plan-review", "--session", SESSION, "--scope", "order", "--verdict", "pass",
            "--reviewer", "thinker")
+    cli.ok("question-raise", "--session", SESSION, "--id", "BC", "--target", "plan.goal",
+           "--kind", "binding_conditions", "--control", "order requirement R1")
+    cli.ok("question-research", "--session", SESSION, "--id", "BC", "--attempted", "asked the user")
+    answer = "has conditions" if "binding_conditions" in draft.read_text(encoding="utf-8") else "none"
+    cli.ok("question-dispose", "--session", SESSION, "--id", "BC", "--to", "escalated",
+           "--answer", answer)
     rendering = tmp_path / "order-rendering.txt"
     rendering.write_text(RENDERING, encoding="utf-8")
     presented = cli.ok("present-plan", "--session", SESSION, "--kind", "order",

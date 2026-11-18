@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from . import controls, plugins_premise, premise, advisor
+from . import controls, gates, plugins_premise, premise, advisor
 from .directive import Directive
 from .dispatch import Runner
 from .plan import (
@@ -185,8 +185,11 @@ def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None)
             )
     questions = premise.questions_from_dicts(bag.get("questions", []))
     questions = [q for q in questions if q.id != args.id]
-    questions.append(premise.Question(id=args.id, target=args.target,
-                                      question=args.question or "", control=control or ""))
+    kind = getattr(args, "kind", None) or ""
+    questions.append(premise.Question(
+        id=args.id, target=args.target,
+        question=gates.QUESTION_KIND_TEXTS.get(kind, args.question or ""),
+        control=control or "", kind=kind))
     bag["questions"] = premise.questions_to_dicts(questions)
     state.log("question_raise", question=args.id, target=args.target)
     store.save(state)
@@ -848,6 +851,9 @@ def register(sub, add):
     sp.add_argument("--plan", default=None,
                     help="resolve --control against this plan instead of the session's "
                          "current plan_path (use when raising against a CORRECTED plan)")
+    sp.add_argument("--kind", choices=tuple(gates.QUESTION_KIND_TEXTS), default=None,
+                    help="raise a question the engine words itself: the text is the engine's "
+                         "fixed one and --question is ignored")
 
     sp = add("question-research"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="question id to attach the research attempt to")

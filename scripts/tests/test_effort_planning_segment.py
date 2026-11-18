@@ -14,7 +14,8 @@ from agentctl import cli, cli_common, cli_dispatch, config, cost, effort, gates
 from agentctl import effort_segments as seg
 from agentctl.config import Thresholds
 from agentctl.plan import load_order_draft, understanding_digest, understanding_parts
-from agentctl.render import render_order_understanding_md, render_plan_grants
+from agentctl.plan import ORDER_COST_MARKER
+from agentctl.render import render_order_md, render_order_understanding_md, render_plan_grants
 from agentctl.plan import load_plan
 from agentctl.state import SessionState
 from agentctl.store import FileStateStore
@@ -534,8 +535,8 @@ def test_planning_budget_of_a_two_sided_order_is_printed_and_stays_out_of_the_ag
     doc = load_order_draft(_draft(tmp_path))[0]
     budget = doc.meta.order.planning_budget
     assert (budget.active_minutes, budget.usd) == (12, 4.5)
-    printed = "\n".join(render_order_understanding_md(doc))
-    assert "12 active minutes, 4.50 USD" in printed
+    printed = "\n".join(render_order_md(doc))
+    assert "12 active minutes, 4.50 USD" in printed.split(ORDER_COST_MARKER)[1]
     assert not {"planning_estimate", "planning_budget"} & set(understanding_parts(doc))
     other = _draft(tmp_path, name="other.toml", budget=(
         '\n[meta.order.planning_budget]\nactive_minutes = 30\nusd = 9.0\nderivation = "bigger"\n'))

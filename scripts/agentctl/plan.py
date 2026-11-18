@@ -2632,6 +2632,27 @@ def is_two_sided(order) -> bool:
     return order is not None and order.customer_side is not None
 
 
+# The three section markers of a new-form order's rendering: `render.py` emits them and the
+# order presentation gate reads them (a whole line each), so what is checked is the structure
+# of the registered rendering and never its wording.
+ORDER_CUSTOMER_MARKER = "## Customer side — the agent's reconstruction, for you to confirm or correct"
+ORDER_EXECUTOR_MARKER = ("## Executor side — the agent's professional understanding, "
+                         "shown and not put to agreement")
+ORDER_COST_MARKER = "## Planning cost — beside the order, outside its text"
+PLANNING_COST_LABEL = "Planning budget"
+
+
+def planning_cost_figure(active_minutes, usd) -> tuple[str, str]:
+    """The two printed numbers of a planning cost, as the rendering shows them."""
+    return (f"{active_minutes:g}" if active_minutes else "*(none)*",
+            f"{usd:.2f}" if usd else "*(none)*")
+
+
+def planning_cost_line(label: str, active_minutes, usd) -> str:
+    minutes, dollars = planning_cost_figure(active_minutes, usd)
+    return f"- **{label}:** {minutes} active minutes, {dollars} USD"
+
+
 def _customer_side_member(side) -> tuple:
     return (side.step, side.missing, side.product, side.criterion_type,
             tuple(sorted((c.id, c.kind, c.text, c.reason) for c in side.checks)))

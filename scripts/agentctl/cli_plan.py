@@ -401,6 +401,14 @@ def _present_order(args, state: SessionState, *, store: StateStore) -> Directive
             + "; ".join(found),
             data={"missing": missing, "extra": extra},
         )
+    sides = gates.order_rendering_problems(state, doc, text)
+    if sides:
+        return Directive(
+            False, state.node, "noop",
+            "order rendering does not meet the new-form order's presentation checks; stamping "
+            "nothing — " + "; ".join(sides),
+            data={"problems": sides},
+        )
     writer_gate, refusal = _present_writer_gate(state, text, PLAN_PRESENTATION_KIND_ORDER)
     if refusal is not None:
         return refusal

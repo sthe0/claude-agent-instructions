@@ -1461,6 +1461,9 @@ class OrderReview:
     transcript: str = ""
     at: float = 0.0
     scope: str = ORDER_REVIEW_SCOPE
+    # The criterion type the review judged the order under: the draft's own for a new-form
+    # order, the session's for an old-form one; "" on a record saved before it was kept.
+    criterion_type: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "OrderReview":
@@ -1476,6 +1479,7 @@ class OrderReview:
             transcript=d.get("transcript") or "",
             at=d.get("at") or 0.0,
             scope=d.get("scope") or ORDER_REVIEW_SCOPE,
+            criterion_type=d.get("criterion_type") or "",
         )
 
 
@@ -1524,6 +1528,8 @@ class OrderAgreement:
     binding_decisions: list[dict] = field(default_factory=list)
     binding_conditions: list[dict] = field(default_factory=list)
     planning_budget: dict | None = None
+    # The customer side's criterion type as agreed; "" for an old-form agreement.
+    criterion_type: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "OrderAgreement":
@@ -1544,6 +1550,7 @@ class OrderAgreement:
             binding_decisions=[dict(x) for x in d.get("binding_decisions") or []],
             binding_conditions=[dict(x) for x in d.get("binding_conditions") or []],
             planning_budget=dict(d["planning_budget"]) if d.get("planning_budget") else None,
+            criterion_type=d.get("criterion_type") or "",
         )
 
 
