@@ -3120,7 +3120,7 @@ def _planning_budget_problems(state: SessionState, doc, lines: list[str], cost_a
     record, `*(none)*` where it has none (whether a record is required is `order-submit`'s and
     `present-plan`'s own rule, which an order renewed after the plan's first approval is exempt
     from). The budget lies outside the understanding digest, so a draft of the very understanding
-    already agreed may not carry another figure than the agreed one."""
+    already agreed may neither carry another figure than the agreed one nor drop its record."""
     digest = understanding_digest(doc)
     budget = doc.meta.order.planning_budget
     problems = []

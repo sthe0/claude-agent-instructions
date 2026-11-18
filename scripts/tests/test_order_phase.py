@@ -214,10 +214,20 @@ def _bind_question(store, *, session=SESSION, answer=None, path=None):
     assert disposed.ok, disposed.detail
 
 
-def _present(store, tmp_path: Path, text=RENDERING, *, session=SESSION, bind=True, **kw):
+def _rendering_naming(doc, text=RENDERING) -> str:
+    """`text` with each of the draft's binding conditions named in its customer section."""
+    named = "".join(f"{b.id} {b.text}.\n" for b in doc.meta.order.binding_conditions)
+    return text.replace(f"\n{ORDER_EXECUTOR_MARKER}", f"{named}\n{ORDER_EXECUTOR_MARKER}", 1) if named else text
+
+
+def _present(store, tmp_path: Path, text=None, *, session=SESSION, bind=True, **kw):
     """Put the order draft to the user. A new-form order's binding-conditions question is
-    answered in agreement with the draft first, unless `bind=False`."""
-    if bind and store.load(session).order_draft_path:
+    answered in agreement with the draft first, unless `bind=False`. The default rendering
+    names the draft's binding conditions in its customer section."""
+    draft_path = store.load(session).order_draft_path
+    if text is None:
+        text = _rendering_naming(load_order_draft(draft_path)[0]) if draft_path else RENDERING
+    if bind and draft_path:
         _bind_question(store, session=session)
     rendering = tmp_path / "order-rendering.txt"
     rendering.write_text(text, encoding="utf-8")
