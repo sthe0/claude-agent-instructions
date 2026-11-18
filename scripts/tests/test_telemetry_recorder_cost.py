@@ -174,6 +174,11 @@ def test_session_end_hook_starts_detached_sync_and_returns(monkeypatch):
 
 def test_session_end_hook_process_returns_while_its_detached_sync_delivers():
     live.emit_event("s-real", "note", "telemetry:test", {})
+    # The detached sync is another process and keeps the production 250 ms: bootstrap the
+    # record here, so its first write is not the cold create-and-migrate a loaded suite defers.
+    conn = store.open_record()
+    assert conn is not None
+    conn.close()
     began = time.monotonic()
     done = subprocess.run([sys.executable, str(SCRIPTS / "hook-telemetry-session-end.py")],
                           input=json.dumps({"session_id": "s-real"}), capture_output=True, text=True, timeout=60)
@@ -184,7 +189,10 @@ def test_session_end_hook_process_returns_while_its_detached_sync_delivers():
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline and not _committed("s-real"):
         time.sleep(0.3)
-    assert [t["fields"]["session"] for t in triggers()] == ["s-real"]
+    # A trigger.start that missed the 250 ms is kept, by design, in the reserved spool for the
+    # next sync to replay: either place proves the sync started for this session.
+    kept = [e for e in spool_events(sync.SYNC_SESSION) if e["kind"] == sync.TRIGGER_START]
+    assert [t["fields"]["session"] for t in triggers() + kept] == ["s-real"]
     assert len(commits("s-real")) == 1 and len(events("s-real", kind="note")) == 1
 
 
