@@ -1488,8 +1488,8 @@ def _isolation_command(args: argparse.Namespace) -> int:
 # ── reuse-scenario, k3-negative: the result store on real gate runs ───────
 
 EXIT_REUSE_MISMATCH, EXIT_REUSE_ERROR = 1, 2
-NAMED_TEST = "scripts/tests/test_check_org_neutral.py::test_without_commit_msg_mode_the_whole_file_is_scanned"
-NAMED_SCRIPT = "scripts/check-org-neutral.py"
+NAMED_TEST = "scripts/tests/test_hook_guard_agent_specialist_stand_in.py::test_denies_top_level_skill_path_in_description"
+NAMED_SCRIPT = "scripts/hook-guard-agent-specialist-stand-in.py"
 LIB_CANDIDATES = ("scripts/lib/argv_text.py", "scripts/lib/shell_tokens.py", "scripts/lib/bm25f.py")
 DATA_CANDIDATES = ("scripts/canon_writers.toml", "scripts/external-sources.toml")
 NAMED_ASSERTION = "named-subprocess-reused"
@@ -1692,10 +1692,20 @@ def reuse_scenario(repo: Path, out: Path, *, mutate: bool, disk_max_mb: float, c
                              f"{len(state['ids'])} collected ids have one, {len(state['always_rerun'])} are always-rerun)")
         if NAMED_TEST not in dependents.get(NAMED_SCRIPT, ()):
             raise SystemExit(f"the stored dependencies of {NAMED_TEST} do not list {NAMED_SCRIPT}")
-        lib = min((p for p in LIB_CANDIDATES if dependents.get(p)), key=lambda p: len(dependents[p]), default=None)
-        data = min((p for p in DATA_CANDIDATES if dependents.get(p)), key=lambda p: len(dependents[p]), default=None)
+        # Every file is picked outside every registered catalogue's narrowed set, so the measured run
+        # reuses each fresh catalogue instead of rerunning one the edit legitimately reaches.
+        in_catalogue = set().union(*(s.paths for s in state["registry"].subjects))
+        if NAMED_SCRIPT in in_catalogue:
+            raise SystemExit(f"{NAMED_SCRIPT} is in a registered catalogue's set")
+
+        def pick(candidates: tuple[str, ...]) -> str | None:
+            return min((p for p in candidates if dependents.get(p) and p not in in_catalogue),
+                       key=lambda p: len(dependents[p]), default=None)
+
+        lib, data = pick(LIB_CANDIDATES), pick(DATA_CANDIDATES)
         if lib is None or data is None:
-            raise SystemExit(f"no stored test depends on any of {LIB_CANDIDATES if lib is None else DATA_CANDIDATES}")
+            raise SystemExit("no stored test depends on a file outside every catalogue set among "
+                             f"{LIB_CANDIDATES if lib is None else DATA_CANDIDATES}")
         touched = [NAMED_SCRIPT, lib, data]
         _say(f"touched: {', '.join(touched)}")
         candidate = exp.candidate(edited_tree(repo, {p: with_nonce_comment(_head_text(repo, p), nonce)
