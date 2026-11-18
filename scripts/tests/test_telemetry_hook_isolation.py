@@ -7,7 +7,7 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 FORBIDDEN = ("sqlite3", "lib.telemetry.store")
-RESULT_STORE_MODULES = {"lib/result_store.py", "lib/suite_gate.py"}
+RESULT_STORE_MODULES = {"lib/result_store.py"}
 ALLOWED_RECORD_PATH_USERS = {
     "lib/telemetry/store.py", "telemetry.py", "lib/config_root.py"}
 
