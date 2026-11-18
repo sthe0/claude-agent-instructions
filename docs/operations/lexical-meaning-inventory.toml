@@ -3338,6 +3338,20 @@ hits = 1
 hit_classes = ["structural"]
 reviewed_by = "developer"
 
+[sites."scripts/lib/telemetry/report.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles _FRACTIONAL_SECOND, the ':SS.f' / ':SS,f' seconds-with-fraction shape of an ISO time; fixed time syntax, not prose."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/telemetry/report.py::outage_end_from_landing::pattern.search"]
+class = "structural"
+ground = "_FRACTIONAL_SECOND.search tells whether a landing record's landed_at ISO time carries a fractional second, which picks exact or truncated-to-the-second comparison; fixed time syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "coordinator"
+
 [sites."scripts/lib/telemetry/store.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles _MIGRATION_FILE, the 'NNN_name.sql' file-name shape of the record's schema migrations; fixed file-name syntax."
