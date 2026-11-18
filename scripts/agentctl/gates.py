@@ -61,6 +61,8 @@ from .plan import (
     PlanError,
     SEVERITY_BLOCKING,
     is_two_sided,
+    names_check,
+    order_anchor_ids,
     planning_cost_line,
     acceptance_requirement_bindings,
     changed_parts,
@@ -2915,6 +2917,13 @@ def order_review_blockers(state: SessionState, path: str | None) -> list[str]:
             f"{path!r}; run plan-review --scope order --target {path} --verdict pass|revise"
         ]
     last = bound[-1]
+    judged_as = (last.criterion_type or "").strip()
+    now = order_criterion_type(state, doc)
+    if judged_as and judged_as != now:
+        return [
+            f"the order review judged the order as a {judged_as!r} criterion, but its criterion "
+            f"type is now {now!r}: review the draft again"
+        ]
     if last.verdict == _PLAN_REVIEW_PASS:
         return []
     if last.verdict == _PLAN_REVIEW_OVERRIDE:
@@ -3018,6 +3027,7 @@ BINDING_CONDITIONS_QUESTION = (
     "Does the user bind this order with any conditions of their own? "
     "Answer 'has conditions' or 'none'."
 )
+QUESTION_DISPOSITION_ESCALATED = "escalated"
 BINDING_CONDITIONS_YES = "has conditions"
 BINDING_CONDITIONS_NONE = "none"
 QUESTION_KIND_TEXTS = {QUESTION_KIND_BINDING_CONDITIONS: BINDING_CONDITIONS_QUESTION}
@@ -3046,9 +3056,11 @@ def _binding_conditions_problems(state: SessionState, order) -> list[str]:
     question = asked[-1]
     if question.get("question", "") != BINDING_CONDITIONS_QUESTION:
         return ["the recorded binding-conditions question is not the engine's text"]
-    if question.get("disposition", "open") == "open" or not (question.get("answer") or "").strip():
-        return ["the binding-conditions question is not answered: question-dispose it with the "
-                "user's answer"]
+    if (question.get("disposition", "open") != QUESTION_DISPOSITION_ESCALATED
+            or not (question.get("answer") or "").strip()):
+        return ["the binding-conditions question is not answered by the user: put it to them and "
+                f"question-dispose it as {QUESTION_DISPOSITION_ESCALATED!r} with their answer "
+                "(only the user's answer closes it)"]
     expected = BINDING_CONDITIONS_YES if order.binding_conditions else BINDING_CONDITIONS_NONE
     if question["answer"].strip() != expected:
         return [f"the binding-conditions answer {question['answer'].strip()!r} disagrees with the "
@@ -3067,59 +3079,94 @@ def agreed_before_migration(state: SessionState, digest: str) -> bool:
             and agreed.understanding_sha256 == digest)
 
 
-def _expected_planning_budget(state: SessionState, doc, digest: str):
-    """The planning budget a new-form order's rendering must show, or None when there is none:
-    the figure the agreement bound once the draft is exactly what was agreed; otherwise the
-    draft's own record; for a draft carrying no record, the figure a standing agreement bound
-    (an order renewed after the plan's first approval carries none), else nothing."""
+def _section(lines: list[str], start: int, starts: list[int]) -> list[str]:
+    """The lines from the marker at `start` up to the next marker line in `starts` (or the end)."""
+    later = [i for i in starts if i > start]
+    return lines[start + 1:min(later) if later else len(lines)]
+
+
+def _sides_placement_problems(order, lines: list[str], at: dict[str, int]) -> list[str]:
+    """Where each side's content sits: the customer section is not empty and names every
+    acceptance check of the customer side; the executor section carries every `[R1]` / `[P1]` /
+    `[K1]` anchor of the order, and no anchor sits in the customer or the cost section."""
+    starts = sorted(i for i in at.values() if i >= 0)
+    customer = _section(lines, at["customer"], starts)
+    executor = _section(lines, at["executor"], starts)
+    cost = _section(lines, at["cost"], starts) if at["cost"] >= 0 else []
+    problems = []
+    if not any(customer):
+        problems.append("the customer section is empty")
+    unnamed = [c.id for c in order.customer_side.checks
+               if not any(names_check(line, c.id) for line in customer)]
+    if unnamed:
+        problems.append("the customer section does not name its acceptance check(s): " + ", ".join(unnamed))
+    misplaced = order_anchor_ids("\n".join(customer + cost))
+    if misplaced:
+        problems.append("the executor side's anchors sit outside the executor section: "
+                        + ", ".join(sorted(misplaced)))
+    expected = {item.id for items in (order.requirements, order.proposals, order.constraints)
+                for item in items}
+    absent = expected - order_anchor_ids("\n".join(executor))
+    if absent:
+        problems.append("the executor section does not carry the anchor(s): " + ", ".join(sorted(absent)))
+    return problems
+
+
+def _planning_budget_problems(state: SessionState, doc, lines: list[str], cost_at: int) -> list[str]:
+    """The planning cost beside a new-form order: the figure shown is the draft's own budget
+    record, `*(none)*` where it has none (whether a record is required is `order-submit`'s and
+    `present-plan`'s own rule, which an order renewed after the plan's first approval is exempt
+    from). The budget lies outside the understanding digest, so a draft of the very understanding
+    already agreed may not carry another figure than the agreed one."""
+    digest = understanding_digest(doc)
+    budget = doc.meta.order.planning_budget
+    problems = []
     agreement = state.order_agreement
     bound = agreement.planning_budget if agreement is not None else None
-    budget = doc.meta.order.planning_budget
-    if bound is not None and (agreement.understanding_sha256 == digest or budget is None):
-        return bound.get("active_minutes"), bound.get("usd")
-    return (budget.active_minutes, budget.usd) if budget is not None else None
+    if (bound is not None and budget is not None and agreement.understanding_sha256 == digest
+            and (bound.get("active_minutes"), bound.get("usd")) != (budget.active_minutes, budget.usd)):
+        problems.append("the draft's planning budget differs from the one agreed for this very "
+                        "understanding: restore it, or change the understanding and agree it anew")
+    if cost_at < 0:
+        return problems + ["the rendering carries no planning-cost section beside the order"]
+    shown = (budget.active_minutes, budget.usd) if budget is not None else (0, 0)
+    figure = planning_cost_line(PLANNING_COST_LABEL, *shown)
+    if figure in lines[:cost_at]:
+        problems.append("the planning cost figure is inside the order's text")
+    if figure not in lines[cost_at:]:
+        problems.append(f"the planning cost figure does not equal the budget record: expected {figure!r}")
+    return problems
 
 
 def order_rendering_problems(state: SessionState, doc, text: str) -> list[str]:
     """Why the registered rendering `text` of a new-form order may not be put to the user ([] ==
-    it may): both side markers present as whole lines with the customer side first, the planning
-    cost under its own marker after both sides with the figure of the budget record (and not in
-    the order's text), and the binding-conditions question recorded and answered consistently
-    with the draft's records. Structure only — what the sides say is the reviewer's. An old-form
-    order has none of this."""
+    it may): each marker a whole line occurring once, the customer side first and the cost after
+    both sides; each side's content under its own marker; the planning cost with the figure of the
+    budget record; and the binding-conditions question recorded and answered consistently with the
+    draft's records. Structure only — what the sides say is the reviewer's. An old-form order has
+    none of this."""
     order = doc.meta.order if doc is not None else None
     if not is_two_sided(order):
         return []
     lines = [line.strip() for line in text.splitlines()]
-    positions = {name: lines.index(marker) if marker in lines else -1
-                 for name, marker in (("customer", ORDER_CUSTOMER_MARKER),
-                                      ("executor", ORDER_EXECUTOR_MARKER),
-                                      ("cost", ORDER_COST_MARKER))}
-    problems = []
-    if positions["customer"] < 0:
+    markers = {"customer": ORDER_CUSTOMER_MARKER, "executor": ORDER_EXECUTOR_MARKER,
+               "cost": ORDER_COST_MARKER}
+    at = {name: lines.index(marker) if marker in lines else -1 for name, marker in markers.items()}
+    problems = [f"the {name} marker occurs {lines.count(marker)} times: it must occur once"
+                for name, marker in markers.items() if lines.count(marker) > 1]
+    if at["customer"] < 0:
         problems.append("the rendering carries no customer-side reconstruction marker")
-    if positions["executor"] < 0:
+    if at["executor"] < 0:
         problems.append("the rendering carries no executor-side marker (the agent's professional "
                         "understanding, shown and not agreed)")
-    if (positions["customer"] >= 0 and positions["executor"] >= 0
-            and positions["customer"] > positions["executor"]):
-        problems.append("the customer side must come before the executor side")
-    digest = understanding_digest(doc)
-    expected = _expected_planning_budget(state, doc, digest)
-    if expected is None:
-        if not agreed_before_migration(state, digest):
-            problems.append("the order draft carries no planning budget record: the cost shown "
-                            "beside the order has no figure to equal")
-    elif positions["cost"] < 0:
-        problems.append("the rendering carries no planning-cost section beside the order")
-    else:
-        figure = planning_cost_line(PLANNING_COST_LABEL, *expected)
-        if positions["cost"] < max(positions["customer"], positions["executor"]):
-            problems.append("the planning cost must come after both sides, outside the order's text")
-        if figure in lines[:positions["cost"]]:
-            problems.append("the planning cost figure is inside the order's text")
-        if figure not in lines[positions["cost"]:]:
-            problems.append(f"the planning cost figure does not equal the budget record: expected {figure!r}")
+    if at["customer"] >= 0 and at["executor"] >= 0:
+        if at["customer"] > at["executor"]:
+            problems.append("the customer side must come before the executor side")
+        elif not problems:
+            problems += _sides_placement_problems(order, lines, at)
+    if 0 <= at["cost"] < max(at["customer"], at["executor"]):
+        problems.append("the planning cost must come after both sides, outside the order's text")
+    problems += _planning_budget_problems(state, doc, lines, at["cost"])
     problems += _binding_conditions_problems(state, order)
     return problems
 

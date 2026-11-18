@@ -216,20 +216,44 @@ def render_order_md(doc: PlanDoc) -> list[str]:
     if is_two_sided(m.order):
         return _two_sided_order_md(m.order)
     if m.order is not None:
-        o = m.order
-        lines.append("## Order")
-        lines.append("")
-        if o.customer_id or o.customer:
-            lines.append(f"- **Customer:** {o.customer} (`{o.customer_id}`)")
-        if o.functional_place:
-            lines.append(f"- **Functional place:** {o.functional_place}")
-        if o.requirements:
-            lines.append("- **Requirements:**")
-            for r in o.requirements:
-                label = f"**{r.id}**" if r.id else "*(no id)*"
-                lines.append(f"  - {label}: {r.text}")
-                lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
-        lines.append("")
+        lines += [*_order_header_lines(m.order), *_requirement_lines(m.order), ""]
+    return lines
+
+
+def _order_header_lines(order) -> list[str]:
+    """The `## Order` heading with who the order is for and where."""
+    lines = ["## Order", ""]
+    if order.customer_id or order.customer:
+        lines.append(f"- **Customer:** {order.customer} (`{order.customer_id}`)")
+    if order.functional_place:
+        lines.append(f"- **Functional place:** {order.functional_place}")
+    return lines
+
+
+def _requirement_lines(order) -> list[str]:
+    if not order.requirements:
+        return []
+    lines = ["- **Requirements:**"]
+    for r in order.requirements:
+        label = f"**{r.id}**" if r.id else "*(no id)*"
+        lines.append(f"  - {label}: {r.text}")
+        lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
+    return lines
+
+
+def _understanding_lines(order) -> list[str]:
+    """The activity, difficulty, proposals and constraints the order states; each only when stated."""
+    lines: list[str] = []
+    if order.activity:
+        lines.append(f"- **Activity:** {order.activity}")
+    if order.difficulty:
+        lines.append(f"- **Difficulty:** {order.difficulty}")
+    if order.proposals:
+        lines.append("- **Proposals:**")
+        lines.extend(_proposal_lines(order.proposals))
+    if order.constraints:
+        lines.append("- **Constraints:**")
+        lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
     return lines
 
 
@@ -250,11 +274,7 @@ def _two_sided_order_md(order) -> list[str]:
     (the agent's professional understanding, shown and not put to agreement), then the planning
     cost beside the order. The records beside the order that no one agrees — method ideas with
     their verdicts and conditions on means — are not rendered."""
-    lines = ["## Order", ""]
-    if order.customer_id or order.customer:
-        lines.append(f"- **Customer:** {order.customer} (`{order.customer_id}`)")
-    if order.functional_place:
-        lines.append(f"- **Functional place:** {order.functional_place}")
+    lines = _order_header_lines(order)
     side = order.customer_side
     lines += ["", ORDER_CUSTOMER_MARKER, "",
               f"- **Step:** {side.step}",
@@ -270,23 +290,7 @@ def _two_sided_order_md(order) -> list[str]:
         for b in order.binding_conditions:
             objection = f" — objection ({b.objection_by}): {b.objection_text}" if b.objection_text else ""
             lines.append(f"  - **{b.id}** (set by {b.set_by}): {b.text}{objection}")
-    lines += ["", ORDER_EXECUTOR_MARKER, ""]
-    if order.requirements:
-        lines.append("- **Requirements:**")
-        for r in order.requirements:
-            label = f"**{r.id}**" if r.id else "*(no id)*"
-            lines.append(f"  - {label}: {r.text}")
-            lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
-    if order.activity:
-        lines.append(f"- **Activity:** {order.activity}")
-    if order.difficulty:
-        lines.append(f"- **Difficulty:** {order.difficulty}")
-    if order.proposals:
-        lines.append("- **Proposals:**")
-        lines.extend(_proposal_lines(order.proposals))
-    if order.constraints:
-        lines.append("- **Constraints:**")
-        lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
+    lines += ["", ORDER_EXECUTOR_MARKER, "", *_requirement_lines(order), *_understanding_lines(order)]
     executor = order.executor_side
     if executor is not None:
         lines.append(f"- **Specifics:** {executor.specifics}")
@@ -312,17 +316,7 @@ def render_order_understanding_md(doc: PlanDoc) -> list[str]:
     order = doc.meta.order
     if order is None or is_two_sided(order):
         return []
-    lines: list[str] = []
-    if order.activity:
-        lines.append(f"- **Activity:** {order.activity}")
-    if order.difficulty:
-        lines.append(f"- **Difficulty:** {order.difficulty}")
-    if order.proposals:
-        lines.append("- **Proposals:**")
-        lines.extend(_proposal_lines(order.proposals))
-    if order.constraints:
-        lines.append("- **Constraints:**")
-        lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
+    lines = _understanding_lines(order)
     estimate = order.planning_estimate
     if estimate is not None:
         lines.extend(_estimate_lines("Planning estimate", estimate))

@@ -181,12 +181,16 @@ COST_LINE = planning_cost_line(PLANNING_COST_LABEL, 12, 4.5)
 
 RENDERING = (
     "The order, as I understand it.\n\n"
-    f"{ORDER_CUSTOMER_MARKER}\n\ncutting a release needs a command that tags it.\n\n"
+    f"{ORDER_CUSTOMER_MARKER}\n\ncutting a release needs a command that tags it (check A1).\n\n"
     f"{ORDER_EXECUTOR_MARKER}\n\n"
     "[R1] releases are tagged by a command.\n[R2] a tag names its commit.\n"
     "[P1] tag releases automatically (adopted).\n[K1] no new dependency.\n"
     f"\n{ORDER_COST_MARKER}\n\n{COST_LINE}\n"
 )
+
+
+NO_BUDGET_LINE = planning_cost_line(PLANNING_COST_LABEL, 0, 0)
+RENDERING_NO_BUDGET = RENDERING.replace(COST_LINE, NO_BUDGET_LINE)
 
 
 def _bind_question(store, *, session=SESSION, answer=None, path=None):

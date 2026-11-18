@@ -2642,15 +2642,25 @@ ORDER_COST_MARKER = "## Planning cost — beside the order, outside its text"
 PLANNING_COST_LABEL = "Planning budget"
 
 
-def planning_cost_figure(active_minutes, usd) -> tuple[str, str]:
-    """The two printed numbers of a planning cost, as the rendering shows them."""
-    return (f"{active_minutes:g}" if active_minutes else "*(none)*",
-            f"{usd:.2f}" if usd else "*(none)*")
-
-
 def planning_cost_line(label: str, active_minutes, usd) -> str:
-    minutes, dollars = planning_cost_figure(active_minutes, usd)
+    """One planning-cost line as the rendering prints it; a missing figure prints as `*(none)*`."""
+    minutes = f"{active_minutes:g}" if active_minutes else "*(none)*"
+    dollars = f"{usd:.2f}" if usd else "*(none)*"
     return f"- **{label}:** {minutes} active minutes, {dollars} USD"
+
+
+_ORDER_ANCHOR_RE = re.compile(r"\[([RPK]\d+)\]")
+
+
+def order_anchor_ids(text: str) -> set[str]:
+    """The `[R1]` / `[P1]` / `[K1]` anchors a rendering carries (exactly a match of
+    `\\[[RPK]\\d+\\]`: other bracketed text and the text of a markdown link are not anchors)."""
+    return set(_ORDER_ANCHOR_RE.findall(text))
+
+
+def names_check(section: str, check_id: str) -> bool:
+    """Whether `section` names the acceptance check `check_id` as a whole token."""
+    return re.search(rf"(?<![\w-]){re.escape(check_id)}(?![\w-])", section) is not None
 
 
 def _customer_side_member(side) -> tuple:

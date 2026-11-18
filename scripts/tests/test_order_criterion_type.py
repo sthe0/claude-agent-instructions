@@ -61,6 +61,17 @@ def test_review_reads_draft_type(ostore, tmp_path):
     assert state.order_reviews[-1].criterion_type == "acceptance-review"
 
 
+def test_a_review_judged_under_another_type_stands_for_nothing(ostore, tmp_path):
+    _reviewed(ostore, tmp_path)
+    assert _present(ostore, tmp_path).ok
+    state = ostore.load(SESSION)
+    state.order_reviews[-1].criterion_type = "measurable"
+    ostore.save(state)
+    refused = _present(ostore, tmp_path, bind=False)
+    assert refused.ok is False
+    assert any("judged the order as a 'measurable' criterion" in b for b in refused.data["blockers"])
+
+
 def test_review_of_a_measurable_draft_in_an_acceptance_session(ostore, tmp_path):
     _reviewed(ostore, tmp_path, sides=SIDES, session_type="acceptance-review")
     assert ostore.load(SESSION).order_reviews[-1].criterion_type == "measurable"

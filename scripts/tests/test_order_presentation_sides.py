@@ -7,20 +7,22 @@ Claims, each pinned in the direction that could fail:
   marker, the executor side second under a marker that names it the agent's professional
   understanding, shown and not put to agreement, and the planning cost last, outside both;
   method ideas and conditions on means are not printed;
-* `present-plan --kind order` stamps a new-form order's rendering only when both markers are
-  present with the customer side first, the cost lies outside the order's text and equals the
-  budget record (the bound figure once the draft is what the user agreed), and the
-  binding-conditions question is recorded under its kind with the engine's own text and answered
-  consistently with the draft's binding_condition records;
+* `present-plan --kind order` stamps a new-form order's rendering only when each marker occurs
+  once with the customer side first, each side's content sits under its own marker, the cost lies
+  outside the order's text and equals the budget record (a draft of the understanding already
+  agreed may not carry another figure than the agreed one), and the binding-conditions question
+  is recorded under its kind with the engine's own text, answered by the user and consistently
+  with the draft's binding_condition records;
 * the same structure is re-checked at `order-agree`, so a verb sequence that changes the
   question, the figure or the rendering after the stamp does not slip past the stamp;
 * an old-form order is presented as before.
 """
 from __future__ import annotations
 
+import time
 from argparse import Namespace
 
-from agentctl import cli, gates, plugins, premise
+from agentctl import cli, cli_order, effort_segments, gates, plugins, premise
 from agentctl.plan import (
     ORDER_COST_MARKER,
     ORDER_CUSTOMER_MARKER,
@@ -32,10 +34,12 @@ from agentctl.plan import (
 from agentctl.render import render_order_md, render_order_understanding_md
 from order_agreement_mutants import mutant  # noqa: F401  (autouse fixture)
 from test_order_agreement import (  # noqa: F401  (home and ostore are fixtures)
-    SESSION, _agree, _classify, _confirm_delivery, _marker_of, _presented, _user_answers, armed_env, home, ostore,
+    SESSION, _agree, _agreed, _classify, _confirm_delivery, _marker_of, _presented, _start,
+    _user_answers, armed_env, home, ostore,
 )
 from test_order_phase import (
-    COST_LINE, OLD_RENDERING, RENDERING, SIDES, _draft, _present, _ready, _submit,
+    COST_LINE, NO_BUDGET_LINE, OLD_RENDERING, RENDERING, RENDERING_NO_BUDGET, SIDES, _draft, _present,
+    _ready, _review, _submit,
 )
 from test_order_form_migration import _agreed_earlier
 from test_order_two_sides import BESIDE
@@ -98,6 +102,54 @@ def test_executor_side_shown_not_agreed(ostore, tmp_path):
     assert refused.ok is False and "executor-side marker" in refused.detail
 
 
+CUSTOMER_TEXT = "cutting a release needs a command that tags it (check A1).\n"
+EXECUTOR_TEXT = ("[R1] releases are tagged by a command.\n[R2] a tag names its commit.\n"
+                 "[P1] tag releases automatically (adopted).\n[K1] no new dependency.\n")
+
+
+def _sections(customer: str, executor: str) -> str:
+    return ("The order, as I understand it.\n\n"
+            f"{ORDER_CUSTOMER_MARKER}\n\n{customer}\n"
+            f"{ORDER_EXECUTOR_MARKER}\n\n{executor}\n"
+            f"{ORDER_COST_MARKER}\n\n{COST_LINE}\n")
+
+
+def test_each_side_carries_its_own_content(ostore, tmp_path):
+    _ready(ostore, tmp_path)
+    cases = {
+        "the executor's anchors under the customer marker":
+            (CUSTOMER_TEXT + EXECUTOR_TEXT, "executor text with no anchor",
+             "anchors sit outside the executor section"),
+        "an anchor repeated under the customer marker":
+            (CUSTOMER_TEXT + "[R1] again.\n", EXECUTOR_TEXT, "anchors sit outside the executor section"),
+        "an empty customer section": ("", EXECUTOR_TEXT, "the customer section is empty"),
+        "a customer section that names no acceptance check":
+            ("cutting a release needs a command.\n", EXECUTOR_TEXT, "does not name its acceptance check(s): A1"),
+    }
+    for name, (customer, executor, expected) in cases.items():
+        refused = _present(ostore, tmp_path, _sections(customer, executor), bind=False)
+        assert refused.ok is False and expected in refused.detail, (name, refused.detail)
+    in_the_preamble = _sections(CUSTOMER_TEXT, EXECUTOR_TEXT.replace("[K1] no new dependency.\n", "")).replace(
+        "as I understand it.", "as I understand it. [K1]", 1)
+    refused = _present(ostore, tmp_path, in_the_preamble, bind=False)
+    assert refused.ok is False and "does not carry the anchor(s): K1" in refused.detail
+    assert _present(ostore, tmp_path, _sections(CUSTOMER_TEXT, EXECUTOR_TEXT)).ok
+
+
+def test_a_check_id_is_a_whole_token_in_the_customer_section(ostore, tmp_path):
+    _ready(ostore, tmp_path)
+    refused = _present(ostore, tmp_path, _sections("cutting a release (check A10).\n", EXECUTOR_TEXT), bind=False)
+    assert refused.ok is False and "does not name its acceptance check(s): A1" in refused.detail
+
+
+def test_a_repeated_marker_is_refused(ostore, tmp_path):
+    _ready(ostore, tmp_path)
+    for marker in (ORDER_CUSTOMER_MARKER, ORDER_EXECUTOR_MARKER, ORDER_COST_MARKER):
+        twice = RENDERING.replace(f"{marker}\n", f"{marker}\n\nmore.\n\n{marker}\n", 1)
+        refused = _present(ostore, tmp_path, twice, bind=False)
+        assert refused.ok is False and "occurs 2 times" in refused.detail, marker
+
+
 def test_cost_figure_outside_and_kept(ostore, tmp_path):
     lines = _rendered(tmp_path)
     cost = _line_index(lines, ORDER_COST_MARKER)
@@ -125,22 +177,100 @@ def _edit_budget(path):
                     encoding="utf-8")
 
 
-def test_cost_figure_after_agreement_is_the_bound_one(ostore, home, armed_env, tmp_path):
+def _bound_budget(store):
+    return store.load(SESSION).order_agreement.planning_budget
+
+
+def test_a_budget_edited_after_agreement_is_never_bound_unseen(ostore, home, armed_env, tmp_path):
+    """Agree with one budget, edit the draft's budget (it lies outside the digest), put the same
+    understanding again: whichever figure the user is shown is the one that stays bound."""
     path = _presented(ostore, tmp_path)
     assert _user_answers(_marker_of(path)) == 1
     assert _agree(ostore).ok
+    agreed = _bound_budget(ostore)
     _edit_budget(path)
     assert _submit(ostore, path).ok
-    refused = _present(ostore, tmp_path, RENDERING.replace(COST_LINE, BIGGER_BUDGET), bind=False)
-    assert refused.ok is False and "does not equal the budget record" in refused.detail
+    assert _review(ostore).ok
+
+    for shown in (RENDERING, RENDERING.replace(COST_LINE, BIGGER_BUDGET)):
+        refused = _present(ostore, tmp_path, shown, bind=False)
+        assert refused.ok is False and "differs from the one agreed" in refused.detail
+    assert _user_answers(_marker_of(path)) == 1
+    assert _agree(ostore).ok is False
+    assert _bound_budget(ostore) == agreed
+    assert ostore.load(SESSION).effort_segments["agreed_estimate"]["usd"] == 4.5
+
+    path.write_text(path.read_text(encoding="utf-8").replace("active_minutes = 30\nusd = 9.0",
+                                                            "active_minutes = 12\nusd = 4.5"), encoding="utf-8")
+    assert _submit(ostore, path).ok
+    assert _review(ostore).ok
     assert _present(ostore, tmp_path, bind=False).ok
+    _confirm_delivery(ostore)
+    assert _user_answers(_marker_of(path)) == 1
+    assert _agree(ostore).ok
+    assert _bound_budget(ostore) == agreed
 
 
-def test_no_budget_record_refused(ostore, tmp_path):
-    _ready(ostore, tmp_path, budget="")
+def test_no_budget_record_refused(ostore, home, armed_env, tmp_path):
+    _start(ostore)
+    assert _classify(ostore).ok
+    path = _draft(tmp_path, budget="")
+    assert _submit(ostore, path).ok and _review(ostore).ok
     refused = _present(ostore, tmp_path)
-    assert refused.ok is False and "no planning budget record" in refused.detail
+    assert refused.ok is False and "no usable planning estimate" in refused.detail
     assert ostore.load(SESSION).plan_presentations == []
+
+
+def _close_planning(store):
+    state = store.load(SESSION)
+    arming = effort_segments.open_arming_of(state.effort_segments, effort_segments.PLANNING)
+    effort_segments.close_arming(state.effort_segments, arming["arming_id"], "approve-by-user", time.time(), 5.0)
+    store.save(state)
+    assert cli_order._planning_open(store.load(SESSION)) is False
+
+
+def _renew(store, tmp_path, difficulty: str, *, shown=RENDERING_NO_BUDGET):
+    """Put and agree, with no budget record, an order whose understanding differs from the
+    standing agreement's."""
+    path = _draft(tmp_path, budget="", replace={"difficulty": f'difficulty = "{difficulty}"'},
+                  name=f"{difficulty.replace(' ', '-')}.toml")
+    assert _submit(store, path).ok and _review(store).ok
+    presented = _present(store, tmp_path, shown, bind=False)
+    if not presented.ok:
+        return presented
+    _confirm_delivery(store)
+    assert _user_answers(_marker_of(path)) == 1
+    return _agree(store)
+
+
+def test_renewals_after_the_first_approval_carry_no_budget(ostore, home, armed_env, tmp_path):
+    _agreed(ostore, home, tmp_path)
+    assert _bound_budget(ostore) is not None
+    _close_planning(ostore)
+    first = _renew(ostore, tmp_path, "release by hand")
+    assert first.ok, first.detail
+    assert _bound_budget(ostore) is None
+    second = _renew(ostore, tmp_path, "release by hand twice")
+    assert second.ok, second.detail
+    assert _bound_budget(ostore) is None
+
+
+def test_a_standing_agreement_without_a_budget_renews_after_the_first_approval(ostore, home, armed_env, tmp_path):
+    _agreed(ostore, home, tmp_path)
+    state = ostore.load(SESSION)
+    state.order_agreement.planning_budget = None
+    ostore.save(state)
+    _close_planning(ostore)
+    renewed = _renew(ostore, tmp_path, "release by hand")
+    assert renewed.ok, renewed.detail
+
+
+def test_a_renewal_shows_what_the_engine_renders_for_it(ostore, home, armed_env, tmp_path):
+    _agreed(ostore, home, tmp_path)
+    _close_planning(ostore)
+    refused = _renew(ostore, tmp_path, "release by hand", shown=RENDERING)
+    assert refused.ok is False and "does not equal the budget record" in refused.detail
+    assert NO_BUDGET_LINE in render_order_md(load_order_draft(tmp_path / "release-by-hand.toml")[0])
 
 
 # --- the binding-conditions question -----------------------------------------------------
@@ -223,6 +353,28 @@ def test_a_record_counts_whatever_its_decision_says(ostore, tmp_path):
     assert _present(ostore, tmp_path, bind=False).ok
 
 
+def test_only_the_users_answer_closes_the_question(ostore, tmp_path):
+    _ready(ostore, tmp_path)
+    _raise_kind(ostore, "Q1")
+    cli.cmd_question_research(ns(session=SESSION, id="Q1", attempted="read the draft"), store=ostore)
+    answered = cli.cmd_question_dispose(
+        ns(session=SESSION, id="Q1", to="researched", answer=gates.BINDING_CONDITIONS_NONE,
+           source="the draft", derivation="it states none", basis="", risk="", plan=None), store=ostore)
+    assert answered.ok, answered.detail
+    refused = _present(ostore, tmp_path, bind=False)
+    assert refused.ok is False and "not answered by the user" in refused.detail
+    _raise_kind(ostore, "Q2")
+    assumed = cli.cmd_question_dispose(
+        ns(session=SESSION, id="Q2", to="assumed", answer=gates.BINDING_CONDITIONS_NONE, source="",
+           derivation="", basis="no condition was stated", risk="a condition is missed", plan=None), store=ostore)
+    assert assumed.ok, assumed.detail
+    refused = _present(ostore, tmp_path, bind=False)
+    assert refused.ok is False and "not answered by the user" in refused.detail
+    _raise_kind(ostore, "Q3")
+    _dispose(ostore, gates.BINDING_CONDITIONS_NONE, "Q3")
+    assert _present(ostore, tmp_path, bind=False).ok
+
+
 def test_neutral_question_exact_text(ostore, tmp_path):
     _ready(ostore, tmp_path)
     _raise_kind(ostore, question="Do you want a 'no' answer?")
@@ -286,9 +438,9 @@ def test_old_form_presented_as_today(ostore, tmp_path):
 # --- a verb sequence around the stamp ----------------------------------------------------
 
 
-def test_nothing_after_the_stamp_slips_past_order_agree(ostore, home, armed_env, tmp_path):
-    """Present a conforming rendering, then take every verb a user could take to change what the
-    presentation checks stand on; each must leave order-agree refused."""
+def test_a_question_changed_after_the_stamp_is_caught_by_order_agree(ostore, home, armed_env, tmp_path):
+    """The binding-conditions question lives in the session, not in the stamped bytes: put a
+    conforming rendering, then change the question; only the re-check at order-agree sees it."""
     path = _presented(ostore, tmp_path)
     assert _user_answers(_marker_of(path)) == 1
 
@@ -297,14 +449,18 @@ def test_nothing_after_the_stamp_slips_past_order_agree(ostore, home, armed_env,
     refused = _agree(ostore)
     assert refused.ok is False and "disagrees with the draft" in refused.detail
 
-    _raise_kind(ostore, "LATEST")
-    _dispose(ostore, gates.BINDING_CONDITIONS_NONE, "LATEST")
+
+def test_a_draft_edited_after_the_stamp_is_stale_at_order_agree(ostore, home, armed_env, tmp_path):
+    """The receipt binds the draft's bytes, so an edit outside the digest (the budget) is caught
+    as a stale presentation, by the byte binding rather than by the re-check of the structure."""
+    path = _presented(ostore, tmp_path)
+    assert _user_answers(_marker_of(path)) == 1
     _edit_budget(path)
     refused = _agree(ostore)
     assert refused.ok is False and "stale" in refused.detail.lower()
 
 
-# --- the criterion type the presentation shows no longer comes from the session ---------
+# --- the receipt ------------------------------------------------------------------------
 
 
 def test_a_receipt_keeps_its_rendering(ostore, tmp_path):

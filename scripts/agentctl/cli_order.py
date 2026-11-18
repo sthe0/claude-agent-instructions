@@ -105,7 +105,7 @@ def _order_draft_violations(doc, state: SessionState) -> list[str]:
     completeness findings (which already contain the understanding tables' own) and
     the understanding findings once more, each reported once. Re-run on the CURRENT
     draft wherever the draft is acted on, never trusted from an earlier submission.
-    Also refuses an id the rendering cannot show as an anchor (see `_ORDER_ANCHOR_RE`),
+    Also refuses an id the rendering cannot show as an anchor (see `plan.order_anchor_ids`),
     so the author learns at submit what no presentation could ever satisfy.
 
     An old-form draft (no customer side) is refused unless the user already agreed exactly

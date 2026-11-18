@@ -24,7 +24,7 @@ from test_order_agreement import (
     SESSION, _agree, _agreed, _classify, _confirm_delivery, _marker_of, _presented, _start, _state_file, _user_answers,
     armed_env, home, ostore,
 )
-from test_order_phase import _LINES, _draft, _present, _review, _submit
+from test_order_phase import _LINES, RENDERING_NO_BUDGET, _draft, _present, _review, _submit
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TWO_STAGE = (FIXTURES / "plan_two_stage.toml").read_text(encoding="utf-8")
@@ -700,7 +700,7 @@ def test_order_agreement_after_the_first_approval_is_accepted_without_an_estimat
     bare = _draft(tmp_path, omit=(ESTIMATE_LINE,), replace={"difficulty": 'difficulty = "release by hand"'},
                   name="bare.toml")
     assert _submit(ostore, bare).ok and _review(ostore).ok
-    assert _present(ostore, tmp_path).ok
+    assert _present(ostore, tmp_path, RENDERING_NO_BUDGET).ok
     _confirm_delivery(ostore)
     assert _user_answers(_marker_of(bare)) == 1
     agreed = _agree(ostore)
@@ -739,7 +739,7 @@ def agreed_bare_before_migration(ostore, home, tmp_path):
     bare = _draft(tmp_path, omit=(ESTIMATE_LINE,), replace={"difficulty": 'difficulty = "release by hand"'},
                   name="bare.toml")
     assert _submit(ostore, bare).ok and _review(ostore).ok
-    assert _present(ostore, tmp_path).ok
+    assert _present(ostore, tmp_path, RENDERING_NO_BUDGET).ok
     _confirm_delivery(ostore)
     assert _user_answers(_marker_of(bare)) == 1
     assert _agree(ostore).ok
@@ -754,7 +754,7 @@ def test_order_agreed_before_migration_loads_keeps_its_digest_and_is_not_refused
     state = ostore.load(SESSION)
     assert state.order_agreement.understanding_sha256 == understanding_digest(load_order_draft(bare)[0])
     assert state.effort_migrated["instant"] > state.order_agreement.at
-    presented = _present(ostore, tmp_path)
+    presented = _present(ostore, tmp_path, RENDERING_NO_BUDGET)
     assert presented.ok, presented.detail
 
 
@@ -771,7 +771,7 @@ def test_order_agreed_before_migration_is_refused_when_its_understanding_changed
 def test_re_agreeing_an_order_agreed_before_migration_without_the_table_is_refused(
         ostore, home, armed_env, tmp_path):
     agreed_bare_before_migration(ostore, home, tmp_path)
-    assert _present(ostore, tmp_path).ok
+    assert _present(ostore, tmp_path, RENDERING_NO_BUDGET).ok
     history = len(ostore.load(SESSION).order_agreement_history)
     refused = _agree(ostore)
     assert refused.ok is False and "planning estimate" in refused.detail

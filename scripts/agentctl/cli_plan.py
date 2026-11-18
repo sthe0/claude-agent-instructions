@@ -42,6 +42,7 @@ from .plan import (
     load_order_draft,
     load_plan,
     load_plan_with_digest,
+    order_anchor_ids,
     understanding_digest,
     plan_has_any_grants,
     verify_command_reachability_blockers,
@@ -307,9 +308,6 @@ def _attach_writer_gate(directive: Directive, writer_gate: dict) -> Directive:
     return directive
 
 
-_ORDER_ANCHOR_RE = re.compile(r"\[([RPK]\d+)\]")
-
-
 def _order_anchor_problems(doc: PlanDoc, text: str) -> tuple[list[str], list[str]]:
     """`(missing, extra)` anchor ids of an order rendering. Every requirement, proposal
     and constraint id must appear in `text` as its own `[R1]` / `[P1]` / `[K1]` anchor
@@ -319,7 +317,7 @@ def _order_anchor_problems(doc: PlanDoc, text: str) -> tuple[list[str], list[str
     order = doc.meta.order
     expected = {item.id for items in (order.requirements, order.proposals, order.constraints)
                 for item in items}
-    found = set(_ORDER_ANCHOR_RE.findall(text))
+    found = order_anchor_ids(text)
     return sorted(expected - found), sorted(found - expected)
 
 
