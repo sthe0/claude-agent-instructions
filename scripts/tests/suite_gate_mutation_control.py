@@ -249,7 +249,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     "suite-env-scrub": Mutant(
         LIB,
         '        if (name in scrub or name.startswith("AGENTCTL_")\n'
-        '                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV)):',
+        '                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV, EXTRA_PYTHONPATH_ENV,\n'
+        '                            result_store.STORE_ENV)):',
         "        if False:",
         _ids(
             "test_suite_env_drops_scrubbed_agent_and_pytest_names",
@@ -556,6 +557,16 @@ def run_control() -> int:
             print("control: not green on the unmutated tree: " + ", ".join(red), file=sys.stderr)
             return CONTROL_RED
         return 0
+
+
+def rewritten_files() -> "list[str]":
+    """Repository-relative files the catalogue rewrites."""
+    return sorted({m.relpath for m in CATALOGUE.values()})
+
+
+def named_tests() -> "list[str]":
+    """Repository-relative ids of the tests that must kill a mutant."""
+    return sorted({f"scripts/{i}" for m in CATALOGUE.values() for i in m.ids})
 
 
 def main(argv: "list[str] | None" = None) -> int:

@@ -45,6 +45,7 @@ to be exactly that set.
 | `scripts/agentctl/render.py`:`non_plan_brief_text` | not a plan | Reads a `--plan` file that already failed to load as a typed plan — a plain brief — and returns its text, refusing one past `NON_PLAN_BRIEF_MAX_CHARS`. |
 | `scripts/check-exception-set-enumeration.py`:`_field_sentences` | index-only | A report-only line scanner over the index text (it needs line numbers); it never changes an exit code. A field held in a referenced file is not scanned. |
 | `scripts/hook-state-gate.py`:`diagnosing_plan_write_ok` | not a plan | Reads the session state (JSON) to decide whether a plan write is allowed. |
+| `scripts/lib/suite_gate.py`:`settle_reuse` | not a plan | Reads the pytest report and the tracer's per-test files of a suite run; the `plan` it takes is the run's reuse plan (which stored results to leave out), not a plan file. |
 | `scripts/lib/telemetry/sync.py`:`_artifact_texts` | index-only | Copies the session's plan file text, as written, into the telemetry record next to the stored renderings; a record of what the file held, never parsed or compared. A field held in a referenced file is not copied. |
 | `scripts/plan-review-topological.py`:`Driver.launch` | index-only | Recomputes the root digest the reviewer attests: the sha256 of the index bytes. |
 | `scripts/plan-review-topological.py`:`view_dir_for` | not a plan | Reads the re-review history file (JSON) of a pair or unit to tell whether its history is printed as an index; the plan itself is loaded by `build_site_prompt`. |

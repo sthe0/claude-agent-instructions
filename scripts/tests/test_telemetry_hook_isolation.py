@@ -7,6 +7,7 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 FORBIDDEN = ("sqlite3", "lib.telemetry.store")
+RESULT_STORE_MODULES = {"lib/result_store.py"}
 ALLOWED_RECORD_PATH_USERS = {
     "lib/telemetry/store.py", "telemetry.py", "lib/config_root.py"}
 
@@ -101,5 +102,5 @@ def test_only_store_module_opens_the_record():
                 importers.append(relative)
             if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) == "telemetry_db":
                 opening.append(relative)
-    assert set(importers) == {"lib/telemetry/store.py"}
+    assert set(importers) == {"lib/telemetry/store.py"} | RESULT_STORE_MODULES
     assert set(opening) <= ALLOWED_RECORD_PATH_USERS

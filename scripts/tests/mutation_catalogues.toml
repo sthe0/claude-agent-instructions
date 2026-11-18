@@ -1,0 +1,45 @@
+# Mutation catalogues the suite gate reuses by a narrowed key (scripts/lib/catalogue_key.py).
+#
+# Difficulty removed: a catalogue test copies the whole scripts/ tree into a scratch directory, so its
+# recorded dependencies are every file there and any edit reruns it, ~3500 test-seconds a landing, although
+# its verdict depends on far less. For a registered catalogue the stored pass is keyed on a declared set only:
+#   - every file the catalogue rewrites (module.rewritten_files());
+#   - the catalogue module and its static import closure;
+#   - the in-suite test files and the files of the tests that must kill the mutants (module.named_tests()),
+#     with their static import closure;
+#   - the repository files any of those files names by a literal path.
+# An unregistered catalogue always runs, and a catalogue pass is reused for at most 24 hours.
+#
+# Adding a catalogue: give its module `rewritten_files()` and `named_tests()` (repository-relative; the gate
+# reads them from the candidate's own module, so the set can never be narrower than what the module rewrites)
+# and list the in-suite tests that run it here as `file::name` ids (a parametrized test is covered by its
+# bracketed ids). test_mutation_catalogue_registry.py checks each entry against its module.
+
+[[catalogue]]
+name = "mandate"
+module = "scripts/tests/mandate_mutation_control.py"
+tests = [
+  "scripts/tests/test_mandate_mutation_catalogue.py::test_the_catalogue_names_exactly_the_expected_bounds",
+  "scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed",
+  "scripts/tests/test_mandate_mutation_catalogue.py::test_the_control_is_green_on_the_unmutated_copy",
+]
+
+[[catalogue]]
+name = "rx"
+module = "scripts/tests/rx_mutation_control.py"
+tests = ["scripts/tests/test_review_exhaustion_reflection.py::test_rx_mutation_catalogue_kills_every_mutant"]
+
+[[catalogue]]
+name = "smoke-gate"
+module = "scripts/tests/smoke_gate_mutation_control.py"
+tests = ["scripts/tests/test_instruction_smoke_gate.py::test_every_catalogue_mutant_is_killed_and_the_control_is_green"]
+
+[[catalogue]]
+name = "suite-gate"
+module = "scripts/tests/suite_gate_mutation_control.py"
+tests = ["scripts/tests/test_suite_gate.py::test_the_catalogue_control_is_green_and_every_anchor_matches_once"]
+
+[[catalogue]]
+name = "reaper"
+module = "scripts/tests/reaper_mutation_control.py"
+tests = ["scripts/tests/test_reaper_runner.py::test_every_catalogue_mutant_is_killed_and_the_control_is_green"]

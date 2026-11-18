@@ -17,6 +17,7 @@ paths from FILE, one per line (/dev/null: nothing changed).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import os
 import subprocess
@@ -189,6 +190,12 @@ def pytest_addoption(parser, pluginmanager):
 _session_selection: "dict[bool, Selection]" = {}
 
 
+def _untraced():
+    """The dependency tracer's pause when it is loaded: the git diff only picks which slow tests run."""
+    tracer = sys.modules.get("dep_tracer")
+    return tracer.untraced() if tracer is not None else contextlib.nullcontext()
+
+
 def pytest_collection_modifyitems(config, items):
     import pytest
 
@@ -200,7 +207,8 @@ def pytest_collection_modifyitems(config, items):
             continue
         item.add_marker(pytest.mark.slow)
         if run_all not in _session_selection:
-            _session_selection[run_all] = compute_selection(run_all=run_all)
+            with _untraced():
+                _session_selection[run_all] = compute_selection(run_all=run_all)
         selection = _session_selection[run_all]
         if not selection.runs(entry):
             item.add_marker(pytest.mark.skip(reason=selection.skip_reason))

@@ -643,6 +643,34 @@ def test_a_candidate_that_does_not_contain_the_tip_is_refused_before_any_run(wor
     assert err.value.refused and runner.calls == []
 
 
+@pytest.mark.parametrize("store", ["unset", "live"])
+def test_the_key_exclusion_refuses_the_run_unless_the_store_is_a_private_copy(world, monkeypatch, store):
+    from lib import catalogue_key
+    from lib import result_store
+
+    monkeypatch.setenv(catalogue_key.EXCLUDE_ENV, "scripts/lib/target.py")
+    if store == "unset":
+        monkeypatch.delenv(result_store.STORE_ENV, raising=False)
+    else:
+        live = result_store.results_dir(Path(world.common)) / result_store.STORE_ENTRY / result_store.DB_NAME
+        monkeypatch.setenv(result_store.STORE_ENV, str(live.parent / ".." / live.parent.name / live.name))
+    cand = world.code_commit()
+    runner = FakeRunner({cand: ()})
+    with pytest.raises(shared.GateError) as err:
+        world.run(runner)
+    assert err.value.refused and runner.calls == []
+
+
+def test_the_key_exclusion_does_not_refuse_a_private_store(world, monkeypatch, tmp_path):
+    from lib import catalogue_key
+    from lib import result_store
+
+    monkeypatch.setenv(catalogue_key.EXCLUDE_ENV, "scripts/lib/target.py")
+    monkeypatch.setenv(result_store.STORE_ENV, str(tmp_path / "private" / "results.sqlite"))
+    cand = world.code_commit()
+    world.run(FakeRunner({cand: (FAILED_A,), world.base: ()}))
+
+
 def test_the_sandbox_is_removed_after_a_run(world):
     cand = world.code_commit()
     world.run(FakeRunner({cand: (FAILED_A,), world.base: ()}))
@@ -1023,6 +1051,39 @@ def test_run_group_escalates_to_kill_when_term_is_ignored():
     rc, out, timed_out = gate.run_group([sys.executable, "-c", code], cwd=None, env=dict(os.environ),
                                         timeout_s=1.0, grace_s=0.5)
     assert timed_out and rc == -signal.SIGKILL and time.monotonic() - started < 20
+
+
+RUN_GROUP_UNDER_SIGTERM = """\
+import os, sys
+sys.path.insert(0, {scripts!r})
+from lib import suite_gate as gate
+gate.run_group(["sh", "-c", "sleep 300 & echo $! > " + {pidfile!r} + "; wait"], cwd=None,
+               env=dict(os.environ), timeout_s=600, grace_s=2)
+"""
+
+
+def test_run_group_kills_the_whole_group_when_the_gate_gets_sigterm(tmp_path):
+    pidfile = tmp_path / "grandchild.pid"
+    proc = subprocess.Popen([sys.executable, "-c", RUN_GROUP_UNDER_SIGTERM.format(
+        scripts=str(SCRIPTS_DIR), pidfile=str(pidfile))])
+    try:
+        deadline = time.monotonic() + 30
+        while not (pidfile.exists() and pidfile.read_text().strip()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        grandchild = int(pidfile.read_text())
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=30) == 128 + signal.SIGTERM
+        deadline = time.monotonic() + 10
+        alive = True
+        while alive and time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                alive = False
+        assert not alive
+    finally:
+        proc.kill()
 
 
 def test_run_group_reports_a_missing_binary_as_a_gate_error(tmp_path):

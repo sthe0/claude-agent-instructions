@@ -9,6 +9,7 @@ from __future__ import annotations
 import collections
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -509,3 +510,556 @@ def test_a_journal_state_tells_absent_from_present_and_changed(tmp_path):
     first = control.journal_state(path)
     path.write_text("b\n", encoding="utf-8")
     assert first["present"] and first != control.journal_state(path)
+
+
+# ── reuse-scenario and k3-negative: the judgements and helpers ────────────
+
+K3_BAD = json.loads((TESTS_DIR / "fixtures" / "k3_bad_outcomes.json").read_text(encoding="utf-8"))["bad"]
+
+
+def good_outcomes() -> dict:
+    """The first bad outcome with its one defect (a regression that passed) put right."""
+    outcomes = json.loads(json.dumps(K3_BAD[0]["outcomes"]))
+    outcomes["regression"]["verdict"] = "FAIL"
+    return outcomes
+
+
+def test_the_judgement_accepts_a_good_outcome():
+    assert control.judge_k3(good_outcomes()) == []
+
+
+@pytest.mark.parametrize("bad", K3_BAD, ids=[b["expect"] for b in K3_BAD])
+def test_the_judgement_refuses_each_recorded_bad_outcome_with_its_own_code(bad):
+    assert control.judge_k3(bad["outcomes"]) == [bad["expect"]]
+
+
+def test_there_are_six_bad_outcomes_with_six_different_codes():
+    assert len({b["expect"] for b in K3_BAD}) == len(K3_BAD) == 6
+
+
+def test_a_missing_case_is_refused_not_skipped():
+    outcomes = good_outcomes()
+    del outcomes["partial_sets"]
+    assert control.judge_k3(outcomes) == ["missing-partial-sets"]
+
+
+@pytest.mark.parametrize("change,code", [
+    (("regression", "reused", 0), "regression-not-exercised"),
+    (("regression", "failed_rounds", [1]), "regression-not-exercised"),
+    (("partial_sets", "cross_candidate_join", "joined"), "partial-sets-combined"),
+    (("partial_sets", "moved_tip_check_exit", 0), "partial-sets-combined"),
+    (("partial_sets", "same_binding_join", "refused"), "same-binding-refused"),
+    (("key_coverage", "narrow_source", "ran"), "narrow-not-reused"),
+])
+def test_each_positive_expectation_of_a_good_outcome_is_judged_too(change, code):
+    outcomes = good_outcomes()
+    section, field, value = change
+    outcomes[section][field] = value
+    assert control.judge_k3(outcomes) == [code]
+
+
+def test_a_dist_control_that_reused_nothing_the_second_time_is_inert():
+    outcomes = good_outcomes()
+    outcomes["key_coverage"]["dist_runs"]["1.0-again"]["reused"] = 0
+    assert control.judge_k3(outcomes) == ["dist-control-inert"]
+
+
+def test_judge_only_exits_zero_for_a_good_outcome_and_one_for_a_bad_one(tmp_path):
+    good, bad = tmp_path / "good.json", tmp_path / "bad.json"
+    good.write_text(json.dumps({"outcomes": good_outcomes()}), encoding="utf-8")
+    bad.write_text(json.dumps(K3_BAD[0]["outcomes"]), encoding="utf-8")
+    assert control.main(["k3-negative", "--judge-only", str(good)]) == 0
+    assert control.main(["k3-negative", "--judge-only", str(bad)]) == 1
+
+
+def test_k3_negative_without_out_or_judge_only_is_a_usage_error():
+    assert control.main(["k3-negative"]) == control.EXIT_REUSE_ERROR
+
+
+def assertion_inputs(**overrides):
+    ids = [f"t::{n}" for n in range(6)]
+    touched, named = {ids[0], ids[1]}, ids[0]
+    record = {"status": "PASS", "cpu_s": 10.0,
+              "test_sources": {ids[0]: "ran", ids[1]: "ran", **{i: "reused" for i in ids[2:]}}}
+    inputs = {"named": named, "touched_ids": touched, "hit_ids": set(ids), "collected": ids,
+              "disk_mb": 5.0, "disk_max_mb": 10.0}
+    return record, inputs | overrides
+
+
+def failed(found):
+    return [name for name, offenders in found.items() if offenders]
+
+
+def test_reuse_assertions_hold_when_dependents_ran_and_the_rest_were_reused():
+    record, inputs = assertion_inputs()
+    assert failed(control.reuse_assertions(record, **inputs)) == []
+
+
+def test_a_store_that_never_saw_the_script_fails_only_the_named_assertion():
+    record, inputs = assertion_inputs()
+    record["test_sources"]["t::0"] = "reused"
+    assert failed(control.reuse_assertions(record, **inputs)) == [control.NAMED_ASSERTION]
+
+
+def test_a_reused_dependent_a_rerun_bystander_and_a_bad_verdict_are_each_named():
+    record, inputs = assertion_inputs()
+    record["test_sources"]["t::1"] = "reused"
+    record["test_sources"]["t::4"] = "ran"
+    record["status"] = "FAIL"
+    assert failed(control.reuse_assertions(record, **inputs)) == [
+        "touched-dependents-ran", "others-reused", "verdict-pass"]
+
+
+def test_the_disk_bound_and_the_optional_cpu_and_wall_bounds_are_assertions():
+    record, inputs = assertion_inputs(disk_mb=11.0)
+    assert failed(control.reuse_assertions(record, **inputs)) == ["disk-bound"]
+    record, inputs = assertion_inputs()
+    found = control.reuse_assertions(record, **inputs, cpu_max_s=5.0, wall_max_s=1.0, wall_s=2.0)
+    assert failed(found) == ["cpu-bound", "wall-bound"]
+    assert "cpu-bound" not in control.reuse_assertions(record, **inputs)
+
+
+def test_an_id_the_record_does_not_list_fails_the_every_id_assertion():
+    record, inputs = assertion_inputs()
+    del record["test_sources"]["t::5"]
+    assert failed(control.reuse_assertions(record, **inputs)) == ["others-reused", "record-lists-every-id"]
+
+
+def test_the_warm_up_is_needed_only_for_a_missing_id_the_store_could_hold():
+    state = {"ids": ["a", "b", "c"], "hits": {"a": 1}, "always_rerun": ["b"], "failed": ["c"]}
+    assert not control.needs_warm_up(state)
+    assert control.needs_warm_up({**state, "failed": []})
+
+
+def test_a_nonce_comment_ends_the_file_after_a_newline():
+    assert control.with_nonce_comment("x = 1\n", "n1") == "x = 1\n# n1\n"
+    assert control.with_nonce_comment("x = 1", "n1") == "x = 1\n# n1\n"
+
+
+def test_the_dummy_distribution_is_one_installed_distribution_of_the_given_version(tmp_path):
+    directory = control.dummy_distribution(tmp_path / "d", "1.1")
+    proc = subprocess.run([sys.executable, "-P", "-c",
+                           "from importlib.metadata import version; print(version('core-control-dummy'))"],
+                          env={**os.environ, "PYTHONPATH": directory}, capture_output=True, text=True)
+    assert proc.stdout.strip() == "1.1"
+
+
+def test_two_interpreter_versions_give_two_keys():
+    first, second = control.interpreter_keys()
+    assert first != second
+
+
+def test_spied_joins_record_each_pair_and_restore_the_gate_function():
+    original = gate.join_partial_sets
+    ids = frozenset({"t::a"})
+    one = gate.PartialSet("c" * 40, "a" * 40, ids, frozenset())
+    other_tip = gate.PartialSet("c" * 40, "b" * 40, ids, frozenset())
+    with control.joins_spied() as seen:
+        with pytest.raises(gate.JoinRefused):
+            gate.join_partial_sets(one, other_tip)
+        gate.join_partial_sets(one, gate.PartialSet("c" * 40, "a" * 40, ids, ids))
+    assert [s["result"] for s in seen] == ["refused", "joined"]
+    assert gate.join_partial_sets is original
+    assert control.join_result(one, other_tip) == "refused"
+
+
+def test_a_run_that_joined_several_sets_is_judged_by_its_last_and_none_is_an_error():
+    seen = [{"result": "joined", "n": 1}, {"result": "refused", "n": 2}]
+    assert control._last_join(seen, "A")["n"] == 2
+    with pytest.raises(SystemExit, match="joined no partial sets"):
+        control._last_join([], "A")
+
+
+def test_edited_tree_keeps_the_test_files_that_reduced_tree_drops(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "scripts" / "tests").mkdir(parents=True)
+    (repo / "scripts" / "tests" / "test_x.py").write_text("def test_x():\n    pass\n")
+    (repo / "scripts" / "tests" / "helper.py").write_text("H = 1\n")
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i"],
+                   check=True)
+
+    def names(tree):
+        return control._git(repo, "ls-tree", "-r", "--name-only", tree).splitlines()
+
+    kept = names(control.edited_tree(repo, {"a.txt": "b\n", "new.txt": "n\n"}))
+    assert "scripts/tests/test_x.py" in kept and "new.txt" in kept
+    reduced = control.reduced_tree(repo, {"new.txt": "n\n"})
+    assert "scripts/tests/test_x.py" not in names(reduced) and "scripts/tests/helper.py" in names(reduced)
+    changed = control.edited_tree(repo, {"a.txt": "b\n"})
+    assert control._git(repo, "show", f"{changed}:a.txt") == "b"
+
+
+def test_an_edited_tree_keeps_the_executable_bit_of_an_edited_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "run.sh").write_text("echo a\n")
+    (repo / "run.sh").chmod(0o755)
+    (repo / "data.txt").write_text("a\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i"],
+                   check=True)
+    tree = control.edited_tree(repo, {"run.sh": "echo b\n", "data.txt": "b\n", "new.txt": "n\n"})
+    modes = {line.split()[-1]: line.split()[0] for line in control._git(repo, "ls-tree", tree).splitlines()}
+    assert modes == {"run.sh": "100755", "data.txt": "100644", "new.txt": "100644"}
+
+
+def test_the_planted_k3_sources_compile():
+    for source in (control.K3_REGRESSION, control.K3_WIDE_SOURCE, control.K3_NARROW_SOURCE, control.K3_ANCHOR):
+        compile(source, "test_planted.py", "exec")
+
+
+def test_dependents_count_readers_and_probers_of_a_path_but_not_listers():
+    deps = {"t::read": [("file", "lib/a.py", "d")], "t::probe": [("probe", "lib/a.py", "d")],
+            "t::list": [("listing", "lib", "d")]}
+    assert control.dependents_by_path(deps) == {"lib/a.py": {"t::read", "t::probe"}}
+
+
+@pytest.fixture
+def small_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i"],
+                   check=True)
+    return repo
+
+
+def _worktrees(repo: Path) -> str:
+    return subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True,
+                          check=True).stdout
+
+
+def _remove_control_dir(path: Path) -> None:
+    if path.name.startswith("cls-control-"):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_an_experiment_whose_setup_raises_leaves_no_directory_and_restores_the_environment(small_repo, monkeypatch):
+    names = ("CORE_RESULT_STORE", "SUITE_GATE_FLAKY_JOURNAL")
+    before = {name: os.environ.get(name) for name in names}
+    experiment = control.Experiment(small_repo, "setup-fails")
+
+    def failing_commit(*_args, **_kw):
+        raise RuntimeError("planted setup failure")
+
+    monkeypatch.setattr(control, "_commit", failing_commit)
+    try:
+        with pytest.raises(RuntimeError, match="planted setup failure"):
+            experiment.__enter__()
+        assert not experiment.base.exists()
+        assert {name: os.environ.get(name) for name in names} == before
+    finally:
+        _remove_control_dir(experiment.base)
+
+
+SIGTERM_RUN = """\
+import sys, time
+sys.path.insert(0, {tests!r})
+import gate_speedup_control as control
+control.exit_on_sigterm()
+from pathlib import Path
+with control.Experiment(Path({repo!r}), "sigterm") as exp:
+    exp.candidate(exp.head_tree, "x")
+    print(exp.base, flush=True)
+    time.sleep(120)
+"""
+
+
+def test_a_run_killed_with_sigterm_leaves_no_directory_worktree_or_registration(small_repo):
+    proc = subprocess.Popen([sys.executable, "-c", SIGTERM_RUN.format(tests=str(TESTS_DIR), repo=str(small_repo))],
+                            stdout=subprocess.PIPE, text=True)
+    base = Path(proc.stdout.readline().strip())
+    try:
+        assert base.is_dir() and str(base / "work") in _worktrees(small_repo)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=60) == 128 + signal.SIGTERM
+        assert not base.exists()
+        assert str(base) not in _worktrees(small_repo)
+    finally:
+        proc.kill()
+        proc.wait()
+        _remove_control_dir(base)
+
+
+SCENARIO_RUN = """\
+import sys, time
+sys.path.insert(0, {tests!r})
+import gate_speedup_control as control
+{hold}
+sys.exit(control.main({argv!r}))
+"""
+HOLD_IN_THE_GATE = """\
+def hold(*_args, **_kw):
+    print("held", flush=True)
+    time.sleep(120)
+control.gate.run_suite = hold"""
+HOLD_IN_PREPARE = """\
+def hold(self):
+    print("held", flush=True)
+    time.sleep(120)
+control.Experiment.prepare = hold"""
+
+
+@pytest.mark.parametrize("command, hold", [
+    (["verdict-scenario", "--case", "additive"], HOLD_IN_THE_GATE),
+    (["reuse-scenario", "--disk-max-mb", "1"], HOLD_IN_PREPARE),
+])
+def test_a_scenario_killed_with_sigterm_leaves_nothing_under_tmp_and_no_worktree(small_repo, tmp_path, command, hold):
+    argv = [*command, "--out", str(tmp_path / "out.json"), "-C", str(small_repo)]
+    proc = subprocess.Popen([sys.executable, "-c", SCENARIO_RUN.format(tests=str(TESTS_DIR), hold=hold, argv=argv)],
+                            stdout=subprocess.PIPE, text=True)
+    mine = f"cls-control-{proc.pid}-*"
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if line.strip() == "held" or not line:
+                break
+        assert list(Path("/tmp").glob(mine))
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=60)
+        assert not list(Path("/tmp").glob(mine))
+        assert "cls-control-" not in _worktrees(small_repo)
+    finally:
+        proc.kill()
+        proc.wait()
+        for leftover in Path("/tmp").glob(mine):
+            _remove_control_dir(leftover)
+
+
+def test_the_sweep_skips_what_it_cannot_judge_and_never_crashes(small_repo, tmp_path):
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    huge = scratch / f"cls-control-{10 ** 30}-reuse"
+    huge.mkdir()
+    foreign = scratch / "cls-control-999999-reuse"
+    foreign.mkdir()
+    real_getuid = os.getuid
+    try:
+        os.getuid = lambda: real_getuid() + 1
+        assert control.sweep_dead_control_dirs(small_repo, scratch) == []
+    finally:
+        os.getuid = real_getuid
+    assert huge.exists() and foreign.exists()
+    assert control.sweep_dead_control_dirs(small_repo, tmp_path / "missing") == []
+
+
+def test_the_sweep_removes_the_entries_of_dead_pids_only(small_repo, tmp_path):
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        dead_dir = scratch / f"cls-control-{dead.pid}-reuse"
+        (dead_dir / "work").mkdir(parents=True)
+        (dead_dir / "work" / "big.bin").write_bytes(b"x" * 1000)
+        dead_journal = scratch / f"cls-control-{dead.pid}-journal.jsonl"
+        dead_journal.write_text("{}\n")
+        live_dir = scratch / f"cls-control-{live.pid}-reuse"
+        live_dir.mkdir()
+        scratch_dir = scratch / "cls-control-index-abc"
+        scratch_dir.mkdir()
+        removed = control.sweep_dead_control_dirs(small_repo, scratch)
+        assert sorted(removed) == sorted([dead_dir.name, dead_journal.name])
+        assert not dead_dir.exists() and not dead_journal.exists()
+        assert live_dir.exists() and scratch_dir.exists()
+    finally:
+        live.kill()
+        live.wait()
+
+
+def test_the_sweep_unregisters_the_worktree_of_a_dead_run(small_repo, tmp_path):
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    work = scratch / f"cls-control-{dead.pid}-reuse" / "work"
+    work.parent.mkdir()
+    subprocess.run(["git", "-C", str(small_repo), "worktree", "add", "--detach", str(work)], check=True,
+                   capture_output=True)
+    assert str(work) in _worktrees(small_repo)
+    control.sweep_dead_control_dirs(small_repo, scratch)
+    assert not work.parent.exists() and str(work) not in _worktrees(small_repo)
+
+
+def mutation_outcomes(**changes) -> dict:
+    names = ["mandate", "rx", "reaper"]
+    base = {"subjects": names, "unstored": [], "a": {"rerun": [], "reused_s": 3000.0}, "b": {"rerun": ["mandate"]},
+            "c": {"rerun": names},
+            "d": {"subject": "rx", "rerun": ["rx"], "holders": ["rx"], "untouched_reused": ["reaper"]},
+            "e": {"subject": "reaper", "rerun": ["reaper"], "holders": ["reaper"], "untouched_reused": ["rx"]},
+            "f": {"missed": []}}
+    return {**base, **changes}
+
+
+def test_every_case_holding_fails_none():
+    assert control.judge_mutation(mutation_outcomes()) == []
+
+
+@pytest.mark.parametrize("case, change", [
+    ("a", {"a": {"rerun": ["rx"], "reused_s": 3000.0}}),
+    ("a", {"a": {"rerun": [], "reused_s": 0.0}}),
+    ("a", {"unstored": ["reaper"]}),
+    ("b", {"b": {"rerun": []}}),
+    ("b", {"b": {"rerun": ["mandate", "rx"]}}),
+    ("c", {"c": {"rerun": ["mandate"]}}),
+    ("d", {"d": {"subject": "rx", "rerun": [], "holders": ["rx"], "untouched_reused": ["reaper"]}}),
+    ("d", {"d": {"subject": "rx", "rerun": ["rx", "reaper"], "holders": ["rx"], "untouched_reused": ["reaper"]}}),
+    ("d", {"d": {"subject": "rx", "rerun": ["rx"], "holders": ["rx"], "untouched_reused": []}}),
+    ("e", {"e": {"subject": "reaper", "rerun": ["mandate"], "holders": ["reaper"], "untouched_reused": ["rx"]}}),
+    ("f", {"f": {"missed": ["rx"]}}),
+])
+def test_a_case_that_does_not_hold_is_named_alone(case, change):
+    assert control.judge_mutation(mutation_outcomes(**change)) == [case]
+
+
+def test_a_catalogue_that_dropped_a_rewritten_file_from_its_key_fails_case_b_alone():
+    assert control.judge_mutation(mutation_outcomes(b={"rerun": []})) == ["b"]
+
+
+def test_the_mutation_scenario_restores_the_key_exclusion_when_it_stops_early(monkeypatch):
+    class Failing:
+        def __init__(self, *_a):
+            pass
+
+        def __enter__(self):
+            assert control.catalogue_key.EXCLUDE_ENV not in os.environ
+            raise RuntimeError("stop")
+
+        def __exit__(self, *_exc):
+            pass
+
+    monkeypatch.setenv(control.catalogue_key.EXCLUDE_ENV, "scripts/kept.py")
+    monkeypatch.setattr(control, "Experiment", Failing)
+    with pytest.raises(RuntimeError):
+        control.mutation_scenario(control.REPO_DIR, Path("/nonexistent/out.json"), drop_from_key=True,
+                                  warm_store=Path("/nonexistent/warm.sqlite"))
+    assert os.environ[control.catalogue_key.EXCLUDE_ENV] == "scripts/kept.py"
+
+
+def test_the_mutation_drop_control_without_a_warm_store_saves_its_own_copy_and_removes_it(monkeypatch):
+    saved = []
+
+    class FakeExperiment:
+        store = Path("/nonexistent/store.sqlite")
+
+        def __init__(self, *_args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def prepare(self):
+            return {"registry": None, "deps": {}}
+
+    def fake_copy(_source, target):
+        Path(target).write_text("copy")
+        saved.append(Path(target))
+
+    monkeypatch.setattr(control, "Experiment", FakeExperiment)
+    monkeypatch.setattr(control.result_store, "copy_store", fake_copy)
+    with pytest.raises(Exception):
+        control.mutation_scenario(control.REPO_DIR, Path("/nonexistent/out.json"), drop_from_key=True)
+    assert len(saved) == 1 and saved[0].name.startswith("cls-control-") and not saved[0].exists()
+
+
+def test_a_failing_run_deletes_the_stored_passes_of_the_catalogue_it_failed_and_keeps_the_others(tmp_path):
+    from lib import catalogue_key, result_store
+    failing, kept = "t::cat_fails", "t::cat_kept"
+    registry = catalogue_key.Registry((
+        catalogue_key.Subject("fails", (failing,), frozenset({"lib/a.py"}), ("t::n",)),
+        catalogue_key.Subject("kept", (kept,), frozenset({"lib/a.py"}), ("t::n",))))
+    core = tmp_path / "core"
+    (core / "lib").mkdir(parents=True)
+    (core / "lib/a.py").write_text("A = 1\n")
+    environment = result_store.current_environment({"dists": [], "git": "g"})
+    store_path = tmp_path / "db" / "r.sqlite"
+    with result_store.ResultStore(store_path) as opened:
+        old = [(result_store.FILE, "lib/a.py", "a" * 64)]
+        opened.put("b" * 40, environment, {failing: old, kept: old})
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    lines = [{"kind": "file", "id": 0, "path": "lib/a.py", "digest": "sha256:aa"}]
+    lines += [{"kind": "test", "id": i, "files": [0], "listings": {}, "probes": {}, "always_rerun": []}
+              for i in (failing, kept)]
+    (trace / "main.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+    report = tmp_path / "tests.jsonl"
+    records = [{"kind": "collected", "nodeid": i} for i in (failing, kept)]
+    records += [{"kind": "report", "nodeid": failing, "when": "call", "outcome": "failed"},
+                {"kind": "report", "nodeid": kept, "when": "call", "outcome": "passed"}]
+    report.write_text("".join(json.dumps(line) + "\n" for line in records))
+    sha = "c" * 40
+    plan = gate.ReusePlan(store_path, environment, trace, tmp_path / "out", {}, registry, core)
+    gate.settle_reuse(plan, sha, gate.SuiteRun(1, (failing,), sha, report_path=str(report), hermetic=True))
+    with result_store.ResultStore(store_path) as opened:
+        assert opened.rows_of(failing) == []
+        assert opened.rows_of(kept)
+
+
+def test_a_timed_out_run_keeps_the_stored_pass_of_a_catalogue_it_never_finished(tmp_path):
+    from lib import catalogue_key, result_store
+    failing, unfinished = "t::cat_fails", "t::cat_unfinished"
+    registry = catalogue_key.Registry((
+        catalogue_key.Subject("fails", (failing,), frozenset({"lib/a.py"}), ("t::n",)),
+        catalogue_key.Subject("unfinished", (unfinished,), frozenset({"lib/a.py"}), ("t::n",))))
+    core = tmp_path / "core"
+    (core / "lib").mkdir(parents=True)
+    (core / "lib/a.py").write_text("A = 1\n")
+    environment = result_store.current_environment({"dists": [], "git": "g"})
+    store_path = tmp_path / "db" / "r.sqlite"
+    with result_store.ResultStore(store_path) as opened:
+        old = [(result_store.FILE, "lib/a.py", "a" * 64)]
+        opened.put("b" * 40, environment, {failing: old, unfinished: old})
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    report = tmp_path / "tests.jsonl"
+    records = [{"kind": "collected", "nodeid": i} for i in (failing, unfinished)]
+    records += [{"kind": "report", "nodeid": failing, "when": "call", "outcome": "failed"}]
+    report.write_text("".join(json.dumps(line) + "\n" for line in records))
+    sha = "c" * 40
+    plan = gate.ReusePlan(store_path, environment, trace, tmp_path / "out", {}, registry, core)
+    gate.settle_reuse(plan, sha, gate.SuiteRun(1, (failing,), sha, timed_out=True, report_path=str(report),
+                                               hermetic=True))
+    with result_store.ResultStore(store_path) as opened:
+        assert opened.rows_of(failing) == []
+        assert opened.rows_of(unfinished)
+
+
+def test_a_catalogue_pass_is_stored_despite_always_rerun_reasons_an_ordinary_test_is_not(tmp_path):
+    from lib import catalogue_key, result_store
+    catalogue, ordinary = "t::cat_spawns", "t::plain_spawns"
+    registry = catalogue_key.Registry((catalogue_key.Subject("spawns", (catalogue,), frozenset({"lib/a.py"}), ("t::n",)),))
+    core = tmp_path / "core"
+    (core / "lib").mkdir(parents=True)
+    (core / "lib/a.py").write_text("A = 1\n")
+    environment = result_store.current_environment({"dists": [], "git": "g"})
+    store_path = tmp_path / "db" / "r.sqlite"
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    lines = [{"kind": "file", "id": 0, "path": "lib/a.py", "digest": "sha256:aa"}]
+    lines += [{"kind": "test", "id": i, "files": [0], "listings": {}, "probes": {}, "always_rerun": ["subprocess"]}
+              for i in (catalogue, ordinary)]
+    (trace / "main.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+    report = tmp_path / "tests.jsonl"
+    records = [{"kind": "collected", "nodeid": i} for i in (catalogue, ordinary)]
+    records += [{"kind": "report", "nodeid": i, "when": "call", "outcome": "passed"} for i in (catalogue, ordinary)]
+    report.write_text("".join(json.dumps(line) + "\n" for line in records))
+    sha = "c" * 40
+    digests = {(catalogue_key.FILE, "lib/a.py"): result_store.tree_resolver(core)(catalogue_key.FILE, "lib/a.py")}
+    plan = gate.ReusePlan(store_path, environment, trace, tmp_path / "out", {}, registry, core, digests)
+    settled = gate.settle_reuse(plan, sha, gate.SuiteRun(0, (), sha, report_path=str(report), hermetic=True))
+    with result_store.ResultStore(store_path) as opened:
+        assert opened.rows_of(catalogue)
+        assert opened.rows_of(ordinary) == []
+        assert json.loads(opened.get_meta(result_store.ALWAYS_RERUN_META)) == [ordinary]
+    assert settled.always_rerun_tests == 1

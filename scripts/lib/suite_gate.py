@@ -24,11 +24,13 @@ git error are refusals, never admissions.
 """
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import fcntl
 import functools
 import importlib.util
+import json
 import os
 import re
 import resource
@@ -39,15 +41,18 @@ import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Protocol, Sequence
+from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
+from . import catalogue_key
 from . import config_root
 from . import flake_list
 from . import gate_retention
 from . import hermetic_run
 from . import landing_gate as shared
+from . import result_store
 from . import test_slots
 from .landing_gate import ADMITTED, NOT_REQUIRED, REFUSED, Decision, GateError, PrePushResult, defuse, one_line, short
 
@@ -71,6 +76,7 @@ DEFAULT_TIMEOUT_S = 7200  # config.md: suite-gate-timeout-s (a test keeps the tw
 BUILD_TIMEOUT_S = 600
 KILL_GRACE_S = 10
 LOG_TAIL_LINES = 400
+NO_TESTS_COLLECTED_EXIT = 5
 CAP_RUN_SLACK_S = 30
 CAP_RUN_EXTRA_KEY = "fanout-cap-extra-tasks"
 CAP_RUN_EXTRA_TASKS = 512  # config.md: fanout-cap-extra-tasks
@@ -93,6 +99,13 @@ RUN_COMMAND = "python3 scripts/suite-gate.py run"
 
 FAILURES_ENV = "SUITE_GATE_FAILURES"
 REPORT_ENV = "CORE_TEST_REPORT"  # scripts/tests/_test_report.py
+TRACER_ENV = "CORE_DEP_TRACER"  # scripts/tests/dep_tracer.py
+TRACER_DIR_ENV = "CORE_DEP_TRACER_DIR"
+TRACER_DIR_NAME = "dep-tracer"
+REUSE_PLUGIN_MODULE = "result_reuse_plugin"  # scripts/tests/result_reuse_plugin.py
+REUSE_IDS_NAME = "reuse-ids.txt"
+REUSE_OUT_NAME = "reuse-out"
+EXTRA_PYTHONPATH_ENV = "SUITE_GATE_EXTRA_PYTHONPATH"
 XDIST_WORKERS_ENV = "PYTEST_XDIST_AUTO_NUM_WORKERS"
 PLUGIN_MODULE = "suite_gate_plugin"
 PLUGIN_SOURCE = '''\
@@ -216,6 +229,15 @@ class SuiteRun:
     report_path: str = ""
     hermetic: bool = False
     hermetic_reason: str = ""
+    reuse_active: bool = False
+    reused: Mapping[str, str] = dataclasses.field(default_factory=dict)  # id -> candidate sha of the stored pass
+    stored_results: int = 0
+    always_rerun_tests: int = 0
+    always_rerun_reasons: Mapping[str, int] = dataclasses.field(default_factory=dict)
+    ran_tests: tuple[str, ...] = ()  # read from the report while the sandbox still exists
+    store_note: str = ""
+    catalogue_reused_s: Mapping[str, float] = dataclasses.field(default_factory=dict)  # reused catalogue id -> test-seconds it took
+    catalogue_ran: tuple[str, ...] = ()  # registered catalogue tests this run ran
 
 
 class Runner(Protocol):
@@ -309,6 +331,8 @@ def observe(run: SuiteRun, expected_sha: str) -> Observation:
         return Observation(reason=f"the per-test report is unreadable: {one_line(str(exc), 160)}")
     report = _test_report()
     if not report.collected_ids(lines):
+        if run.reused and run.pytest_exit == 0 and not run.failures:
+            return Observation()  # every test was left out as reused: nothing ran, nothing failed
         return Observation(reason="the run died before collection finished (its report has no collected test)")
     outcome = report.outcomes(lines)
     failed = tuple(sorted({*run.failures, *(i for i, o in outcome.items() if o == "failed")}))
@@ -617,6 +641,7 @@ def run_group(argv: Sequence[str], *, cwd: str | Path | None, env: dict[str, str
         )
     except OSError as exc:
         raise GateError(f"cannot run {Path(argv[0]).name}: {exc}") from exc
+    previous = _exit_on_sigterm()
     try:
         out, _ = proc.communicate(timeout=timeout_s)
         return proc.returncode, out or "", False
@@ -628,6 +653,30 @@ def run_group(argv: Sequence[str], *, cwd: str | Path | None, env: dict[str, str
             _signal_group(proc, signal.SIGKILL)
             out, _ = proc.communicate()
         return proc.returncode, out or "", True
+    except BaseException:
+        _signal_group(proc, signal.SIGTERM)
+        try:
+            proc.wait(timeout=grace_s)
+        except subprocess.TimeoutExpired:
+            pass
+        _signal_group(proc, signal.SIGKILL)
+        proc.wait()
+        raise
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+
+
+def _exit_on_sigterm():
+    """Make SIGTERM raise ``SystemExit`` while a run waits on its group, so the group is not orphaned.
+
+    Returns the handler to restore, or None where handlers cannot be set (not the main thread)."""
+    if threading.current_thread() is not threading.main_thread():
+        return None
+
+    def handler(signum, _frame):
+        raise SystemExit(128 + signum)
+    return signal.signal(signal.SIGTERM, handler)
 
 
 def sandbox_scrub_names(script: str | Path) -> list[str]:
@@ -643,9 +692,11 @@ def suite_env(root: Path, userbase: str, failures_file: Path, scrub: Sequence[st
               base_env: dict[str, str] | None = None) -> dict[str, str]:
     """The environment of the sandboxed pytest: scrubbed, rooted in the sandbox, same user site."""
     env = dict(base_env if base_env is not None else shared.clean_env())
+    extra_path = env.get(EXTRA_PYTHONPATH_ENV, "")
     for name in list(env):
         if (name in scrub or name.startswith("AGENTCTL_")
-                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV)):
+                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV, EXTRA_PYTHONPATH_ENV,
+                            result_store.STORE_ENV)):
             del env[name]
     home = root / "home"
     env.update(
@@ -655,7 +706,7 @@ def suite_env(root: Path, userbase: str, failures_file: Path, scrub: Sequence[st
         CLAUDE_INSTRUCTIONS_REPO=str(root / "core"),
         PYTHONUSERBASE=userbase,
         TMPDIR=str(root / "tmp"),
-        PYTHONPATH=str(root / "plugin"),
+        PYTHONPATH=os.pathsep.join(filter(None, (str(root / "plugin"), extra_path))),
         **{FAILURES_ENV: str(failures_file)},
         **GIT_IDENTITY,
     )
@@ -779,6 +830,14 @@ def hermetic_unavailable() -> str:
     return one_line(proc.stderr.strip() or f"hermetic_run.py --check exited {proc.returncode}", 160)
 
 
+def _store_is_private(repo: Path) -> bool:
+    """``CORE_RESULT_STORE`` is set and names a database other than the live store under the git common dir."""
+    if not os.environ.get(result_store.STORE_ENV):
+        return False
+    live = result_store.results_dir(Path(_common_dir(repo))) / result_store.STORE_ENTRY / result_store.DB_NAME
+    return result_store.store_path(Path(_common_dir(repo))).resolve() != live.resolve()
+
+
 def _common_dir(repo: Path) -> str:
     proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                           capture_output=True, text=True, env=shared.clean_env())
@@ -841,13 +900,186 @@ def build_sandbox(repo: Path, sha: str, root: Path) -> SuiteRun | None:
                     detail="timed out" if timed_out else f"exit {code}: {one_line(out[-400:], 240)}")
 
 
+@dataclass(frozen=True)
+class ReusePlan:
+    """What a full run decided before it starts: the stored passes that still hold, and where its traces go."""
+    store: Path
+    environment: result_store.Environment
+    tracer_dir: Path
+    out_prefix: Path
+    hits: Mapping[str, result_store.Hit]
+    registry: catalogue_key.Registry = catalogue_key.Registry()
+    core: Path = Path()
+    digests: Mapping[tuple[str, str], str] = dataclasses.field(default_factory=dict)  # (kind, path) -> digest at the lookup
+
+
+def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tuple[ReusePlan | None, str]:
+    """Switch the tracer on for a full run and look up its stored passes in the candidate's sandbox.
+
+    (plan, note). A store that cannot be read costs the reuse, never the verdict: the run then runs every
+    test, untraced, and the note says why."""
+    tracer_dir = root / TRACER_DIR_NAME
+    out_prefix = root / REUSE_OUT_NAME
+    try:
+        path = result_store.store_path(Path(_common_dir(repo)))
+        environment = result_store.current_environment(env=env)
+        registry = catalogue_key.load(root / "core")
+        resolver = result_store.tree_resolver(root / "core")
+        digests: dict[tuple[str, str], str] = {}
+
+        def recording(kind: str, file: str) -> str:
+            digests[(kind, file)] = resolver(kind, file)
+            return digests[(kind, file)]
+
+        for subject in registry.subjects:
+            for file in subject.paths:
+                recording(catalogue_key.FILE, file)
+        with result_store.ResultStore(path) as store:
+            hits = store.lookup(store.test_ids(), environment, recording, registry, catalogue_key.max_age_s())
+    except Exception as exc:  # a corrupt or dangling row (zlib.error, KeyError) must cost the reuse, never the verdict
+        return None, f"result store unavailable, every test runs: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
+    shutil.copyfile(scripts / "tests" / f"{REUSE_PLUGIN_MODULE}.py", root / "plugin" / f"{REUSE_PLUGIN_MODULE}.py")
+    for stale in out_prefix.parent.glob(f"{REUSE_OUT_NAME}.*"):
+        stale.unlink(missing_ok=True)
+    (root / REUSE_IDS_NAME).write_text("".join(f"{i}\n" for i in sorted(hits)), encoding="utf-8")
+    env.update({TRACER_ENV: "1", TRACER_DIR_ENV: str(tracer_dir),
+                "CORE_RESULT_REUSE_IDS": str(root / REUSE_IDS_NAME), "CORE_RESULT_REUSE_OUT": str(out_prefix)})
+    return ReusePlan(path, environment, tracer_dir, out_prefix, hits, registry, root / "core", digests), ""
+
+
+def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
+    """After a full run: name the tests that were left out, and store the passes that were traced completely.
+
+    Only a hermetic run that finished (pytest exit 0 or 1) in the sandbox of ``sha`` stores anything (a
+    run that could see the live repository, home or network may pass for reasons a hermetic one lacks), and only
+    tests its report shows passing that the tracer recorded with no always-rerun reason. A registered catalogue
+    test is the exception: it is keyed on its declared set, not on its trace, so its always-rerun reasons
+    (subprocesses, environment reads) do not keep it from being stored."""
+    left_out = {i for part in plan.out_prefix.parent.glob(f"{plan.out_prefix.name}.*")
+                for i in part.read_text(encoding="utf-8").splitlines() if i}
+    reused = {i: plan.hits[i].candidate_sha for i in sorted(left_out) if i in plan.hits}
+    stored, always, note, reasons = 0, 0, "", collections.Counter()
+    if run.hermetic and not run.timed_out and run.pytest_exit in (0, 1) and run.sandbox_core_sha == sha and run.report_path:
+        try:
+            records = _dep_tracer_records(plan.tracer_dir)
+            lines = _test_report().read_lines(run.report_path)
+            outcome = _test_report().outcomes(lines)
+            ran = [i for i in _test_report().collected_ids(lines) if i in records]
+            always_ids = {i for i in ran if records[i]["always_rerun"] and plan.registry.find(i) is None}
+            always = len(always_ids)
+            for i in always_ids:
+                reasons.update(records[i]["always_rerun"])
+            after = result_store.tree_resolver(plan.core)
+            unchanged: dict[str, bool] = {}
+
+            def subject_held(test_id: str) -> bool:
+                subject = plan.registry.find(test_id)
+                if subject is None:
+                    return True
+                if subject.name not in unchanged:
+                    unchanged[subject.name] = all(
+                        plan.digests.get((catalogue_key.FILE, p)) == after(catalogue_key.FILE, p) for p in subject.paths)
+                return unchanged[subject.name]
+
+            passing = {i: result_store.deps_of(records[i]) for i in ran
+                       if outcome.get(i) == "passed" and i not in run.failures and i not in always_ids
+                       and subject_held(i)}
+            with result_store.ResultStore(plan.store) as store:
+                stored = store.put(sha, plan.environment, passing, registry=plan.registry,
+                                   durations=junit_durations(run.junit_path, passing),
+                                   clean_tree=lambda kind, file: plan.digests[(kind, file)])
+                store.set_meta(result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)))
+                store.set_meta(result_store.FAILED_META, json.dumps(
+                    sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)))
+                store.trim()
+        except Exception as exc:
+            note = f"results of the run were not stored: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
+    elif not run.hermetic and not run.timed_out:
+        note = "results of the run were not stored: the run was not hermetic"
+    if run.report_path:
+        try:
+            lines = _test_report().read_lines(run.report_path)
+            outcome = _test_report().outcomes(lines)
+            # Only a catalogue that failed contradicts its stored pass; one a timed-out run never finished
+            # keeps it, or every timeout would force full catalogue reruns at the next landings.
+            failed_catalogues = [i for i in _test_report().collected_ids(lines) if plan.registry.find(i) is not None
+                                 and i not in left_out and (outcome.get(i) == "failed" or i in run.failures)]
+            if failed_catalogues:
+                with result_store.ResultStore(plan.store) as store:
+                    store.forget(failed_catalogues)
+        except Exception as exc:  # deleting is only a safety net; the verdict does not depend on it
+            note = note or f"failed catalogue passes were not deleted: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
+    ran_tests = ran_ids(run)
+    exit_code = run.pytest_exit
+    if exit_code == NO_TESTS_COLLECTED_EXIT and reused and not ran_tests and not run.timed_out:
+        exit_code = 0  # every collected test was left out as reused, which pytest reports as "no tests"
+    return dataclasses.replace(run, pytest_exit=exit_code, reuse_active=True, reused=reused,
+                               stored_results=stored, always_rerun_tests=always,
+                               always_rerun_reasons=dict(reasons), ran_tests=ran_tests, store_note=note,
+                               catalogue_reused_s={i: plan.hits[i].duration_s for i in reused
+                                                   if plan.registry.find(i) is not None},
+                               catalogue_ran=tuple(i for i in ran_tests if plan.registry.find(i) is not None))
+
+
+def junit_durations(junit_path: str, ids: Iterable[str]) -> dict[str, float]:
+    """Seconds each of ``ids`` took, from the run's junit XML (classname is the dotted file and classes, name the last id part)."""
+    if not junit_path:
+        return {}
+    try:
+        cases = ET.parse(junit_path).getroot().iter("testcase")
+        spent = collections.Counter()
+        for case in cases:
+            spent[(case.get("classname", ""), case.get("name", ""))] += float(case.get("time") or 0)
+    except (OSError, ET.ParseError, ValueError):
+        return {}
+    found = {}
+    for test_id in ids:
+        path, *rest = test_id.split("::")
+        if rest:
+            classname = ".".join([path.removesuffix(".py").replace("/", "."), *rest[:-1]])
+            if (classname, rest[-1]) in spent:
+                found[test_id] = spent[(classname, rest[-1])]
+    return found
+
+
+def _dep_tracer_records(directory: Path) -> dict[str, dict]:
+    return result_store._tracer().load_records(directory)
+
+
+def ran_ids(run: SuiteRun) -> tuple[str, ...]:
+    """The ids the run's pytest collected (those it left out as reused are not among them)."""
+    if not run.report_path:
+        return ()
+    try:
+        return tuple(_test_report().collected_ids(_test_report().read_lines(run.report_path)))
+    except OSError:
+        return ()
+
+
+def reuse_fields(run: SuiteRun) -> dict:
+    """The record's account of reuse: counts, and for every collected id its source, ran or reused."""
+    ran = run.ran_tests
+    return {
+        "results": {"reuse": run.reuse_active, "ran": len(ran), "reused": len(run.reused),
+                    "stored": run.stored_results, "always_rerun": run.always_rerun_tests,
+                    "always_rerun_reasons": dict(run.always_rerun_reasons), "note": run.store_note,
+                    "catalogue_reused_s": dict(run.catalogue_reused_s), "catalogue_ran": list(run.catalogue_ran)},
+        "test_sources": {**{i: "ran" for i in ran}, **{i: "reused" for i in run.reused}},
+        "reused_from": dict(run.reused),
+    }
+
+
 def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], timeout_s: int,
                    hide: bool = True, extra_pytest_args: Sequence[str] = (),
-                   slots: int | None = None) -> SuiteRun:
+                   slots: int | None = None, reuse_results: bool = True) -> SuiteRun:
     """Build the sandbox of ``sha`` under ``root`` (once), then run pytest in it.
 
     ``extra_pytest_args`` end pytest's argv (the gate passes none); ``slots`` is the worker slots a
     full run asks for (default one per CPU, capped by the limiter).
+
+    ``reuse_results`` (a full run only): trace what each test reads, leave out the tests whose stored
+    pass still holds (``result_store``) and store this run's passes; off, the run is as it was before
+    the store existed.
 
     ``hide`` runs pytest with the live repository and agent homes hidden and no network; where the
     namespaces are unavailable (or ``hide`` is off) it runs without, and the run says so."""
@@ -883,6 +1115,11 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
         stale.unlink(missing_ok=True)
     env = suite_env(root, userbase, failures_file, sandbox_scrub_names(scripts / SANDBOX_SCRIPT))
     env[REPORT_ENV] = str(report)
+    plan, store_note = None, ""
+    if reuse_results and not select:
+        plan, store_note = plan_reuse(repo, root, env, scripts)
+        if plan is not None:
+            extra_pytest_args = (*extra_pytest_args, "-p", REUSE_PLUGIN_MODULE)
     try:
         holder, extra_tasks = _hold_slots(xdist_ok, select, slots)
     except test_slots.SlotWaitExpired as exc:
@@ -903,7 +1140,7 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
     finally:
         if holder is not None:
             holder.release()
-    return SuiteRun(
+    finished = SuiteRun(
         None if timed_out else code, read_failures(failures_file), core_sha, timed_out, True, xdist_ok,
         log_tail="\n".join(out.splitlines()[-LOG_TAIL_LINES:]), build_s=build_s,
         duration_s=duration_s, cpu_s=cpu_s, peak_disk_mb=disk.peak_mb,
@@ -918,7 +1155,9 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
         hermetic_reason=hermetic_reason,
         junit_path=str(junit) if junit.is_file() else "",
         report_path=str(report) if report.is_file() else "",
+        store_note=store_note,
     )
+    return settle_reuse(plan, sha, finished) if plan is not None else finished
 
 
 def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path: Path, slots: int | None = None,
@@ -934,7 +1173,7 @@ def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path:
     gate_retention.sweep_dead_sandboxes(sandbox_parent, SANDBOX_PREFIX)
     with gate_retention.sandbox(sandbox_parent, SANDBOX_PREFIX) as root:
         run = default_runner(repo, sha, root, select=(), timeout_s=timeout_s,
-                             extra_pytest_args=extra_pytest_args, slots=slots)
+                             extra_pytest_args=extra_pytest_args, slots=slots, reuse_results=False)
         junit_path.parent.mkdir(parents=True, exist_ok=True)
         report_copy = junit_path.with_name(junit_path.stem + ".tests.jsonl")
         kept = {}
@@ -1002,6 +1241,7 @@ def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s:
                 "unavailable_reason": reason,
                 "log": _write_log(common_dir, BASELINE_DIR, tip, run.log_tail),
                 **cost_fields(run),
+                "results": reuse_fields(run)["results"],
                 **kept,
             }
             shared.write_record(common_dir, BASELINE_DIR, tip, record)
@@ -1097,7 +1337,7 @@ def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Ru
             baseline, baseline_cache = _baseline(repo, tip, common_dir, run, limit, now, sandbox_parent)
             if baseline.get("status") == COMPLETE:
                 new = subtract(unsettled, baseline["failures"])
-                covered = seen.passed | frozenset(unsettled)
+                covered = seen.passed | frozenset(unsettled) | frozenset(candidate_run.reused)
                 first = PartialSet(candidate_sha, tip, covered, covered - frozenset(new))
                 if new:
                     reruns = _rerun(repo, candidate_sha, root, new, run, limit)
@@ -1197,6 +1437,7 @@ def _build_record(execution: Execution, verdict: Verdict, candidate_sha: str, ti
         "waiver": None,
         "log": log,
         **cost_fields(run),
+        **reuse_fields(run),
         **execution.kept,
     }
 
@@ -1205,16 +1446,21 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
               timeout_s: int | None = None, waiver: str | None = None, reuse: bool = False,
               clock: Callable[[], str] | None = None,
               sandbox_parent: str | Path | None = None,
-              tip_reader: Callable[[], str] | None = None) -> SuiteOutcome:
+              tip_reader: Callable[[], str] | None = None, reuse_results: bool = True) -> SuiteOutcome:
     """Run the suite on the candidate, subtract the tip's baseline, rerun what is new, write the record.
 
     Raises ``GateError`` before any record exists (not a descendant of the tip, git failure).
-    ``reuse`` returns a stored record that already admits instead of running again. ``tip_reader``
+    ``reuse`` returns a stored record that already admits instead of running again. ``reuse_results``
+    off (``--no-reuse``) makes the default runner run every test, untraced; an injected ``runner`` decides
+    for itself. ``tip_reader``
     re-reads the remote tip after the reruns; a tip that moved makes the verdict UNAVAILABLE. Unconfirmed
     ids are appended to the flaky journal (``flake_list.journal_path``); the tree is never written.
     """
+    refusal = catalogue_key.control_refusal(os.environ, _store_is_private(Path(repo)))
+    if refusal:
+        raise GateError(refusal, refused=True)
     repo = Path(repo)
-    run = runner or default_runner
+    run = runner or (default_runner if reuse_results else functools.partial(default_runner, reuse_results=False))
     limit = timeout_s or configured_timeout_s()
     now = clock or shared.utc_now
     sandbox_parent = sandbox_parent or SANDBOX_PARENT
@@ -1279,7 +1525,7 @@ def evaluate_landing(repo: str | Path, candidate_sha: str, tip: str, *, runner: 
                      timeout_s: int | None = None, waiver: str | None = None, reuse: bool = True,
                      clock: Callable[[], str] | None = None,
                      sandbox_parent: str | Path | None = None,
-                     tip_reader: Callable[[], str] | None = None) -> LandingDecision:
+                     tip_reader: Callable[[], str] | None = None, reuse_results: bool = True) -> LandingDecision:
     """The landing decision for the candidate: reuse a bound admitting record, else run the suite."""
     try:
         scoped = _scope_decision(repo, tip, candidate_sha)
@@ -1287,6 +1533,6 @@ def evaluate_landing(repo: str | Path, candidate_sha: str, tip: str, *, runner: 
             return scoped
         return run_suite(repo, candidate_sha, tip, runner=runner, timeout_s=timeout_s, waiver=waiver,
                          reuse=reuse, clock=clock, sandbox_parent=sandbox_parent,
-                         tip_reader=tip_reader).decision
+                         tip_reader=tip_reader, reuse_results=reuse_results).decision
     except GateError as exc:
         return _decision(False, REFUSED, f"cannot decide: {exc}")
