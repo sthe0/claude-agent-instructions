@@ -128,7 +128,10 @@ from .cli_questions import (
 )
 # Re-exported: read as agentctl.cli.<name> by 4 test files.
 from .cli_questions import _bound_order_stage_key, _upsert_candidate, _apply_enumeration_result
-from .cli_order import cmd_order_submit, cmd_order_agree, cmd_order_challenge_dismiss
+from .cli_order import (
+    cmd_order_submit, cmd_order_agree, cmd_order_challenge_dismiss, cmd_order_search,
+    cmd_order_executor_revise,
+)
 from .cli_plan import (
     cmd_classify,
     cmd_plan,
@@ -275,6 +278,8 @@ COMMANDS = {
     "order-dispose": cmd_order_dispose,
     "order-submit": cmd_order_submit,
     "order-agree": cmd_order_agree,
+    "order-search": cmd_order_search,
+    "order-executor-revise": cmd_order_executor_revise,
     "order-challenge-dismiss": cmd_order_challenge_dismiss,
     "order-list": cmd_order_list,
     "classify": cmd_classify,

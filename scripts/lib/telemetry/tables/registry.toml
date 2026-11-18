@@ -1,4 +1,4 @@
-version = 3
+version = 5
 
 [[members]]
 name = "cli:accept"
@@ -1543,3 +1543,19 @@ part_of = []
 place = "mandate_cycle"
 source_keys = ["judge:mandate_cycle_judge"]
 calling_modules = ["scripts/mandate_cycle/driver.py"]
+
+[[members]]
+name = "cli:order-search"
+since = 4
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-search"]
+
+[[members]]
+name = "cli:order-executor-revise"
+since = 5
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-executor-revise"]
