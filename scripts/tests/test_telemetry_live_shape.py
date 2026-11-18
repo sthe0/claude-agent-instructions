@@ -27,6 +27,14 @@ from test_core_version_report import event as record_event
 from test_telemetry_tokens import check as check_tokens, judge_event, ledger_call, open_task, usage, write_record
 
 EPOCH_2026 = 1767225600
+CLI_WAIT_S = 300
+
+
+def open_test_record():
+    """The record with a deadline a loaded machine meets; open_record's 0.25 s default fails open to None."""
+    conn = store.open_record(30)
+    assert conn is not None, "the test record did not open within 30 s"
+    return conn
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +95,7 @@ def test_latency_marks_skip_rows_with_empty_time(world):
     record_event("S", "command", 20, source_key="cli:plan")
     untimed("S")
     skipped = {}
-    conn = store.open_record()
+    conn = open_test_record()
     try:
         end, first, commit = sync.latency_marks(conn, "S", skipped)
     finally:
@@ -101,7 +109,7 @@ def test_check_latency_counts_empty_time_rows(world):
     record_event("S", "command", 10, source_key="cli:plan")
     untimed("S")
     untimed("S", source_key="cli:approve")
-    conn = store.open_record()
+    conn = open_test_record()
     try:
         result = report.check_latency(conn, 600, at(0), datetime(2026, 1, 2, tzinfo=timezone.utc))
     finally:
@@ -182,7 +190,7 @@ def acts_task(world, history, live_keys) -> None:
 def test_check_events_matches_hyphen_and_underscore_act_keys(world):
     acts_task(world, [{"event": "record_result", "ts": at(10)}, {"event": "record-result", "ts": at(20)}],
               [(10.5, "cli:record-result"), (20.5, "cli:record-result")])
-    conn = store.open_record()
+    conn = open_test_record()
     try:
         result = report.check_events(conn, "t1", command_keys=frozenset({"cli:record-result"}))
     finally:
@@ -194,7 +202,7 @@ def test_stored_rows_of_either_spelling_read_without_rebuild(world):
     acts_task(world, [{"event": "record_result", "ts": at(10)}, {"event": "record-result", "ts": at(20)}],
               [(10.5, "cli:record_result"), (20.5, "cli:record-result")])
     before = {r[0] for r in query("SELECT source_key FROM events WHERE kind = 'command'")}
-    conn = store.open_record()
+    conn = open_test_record()
     try:
         result = report.check_events(conn, "t1", command_keys=frozenset({"cli:record-result"}))
     finally:
@@ -461,7 +469,7 @@ def test_snapshot_since_landing_takes_only_sources_written_after(world):
 def test_snapshot_check_space_refuses_before_copy(world, monkeypatch, capsys):
     import telemetry as telemetry_cli
     sources(world)
-    store.open_record().close()
+    open_test_record().close()
     cut = sum(path.stat().st_size for _, path in snapshot._sources() if path.exists())
     need = cut + 2 * config_root.telemetry_db().stat().st_size
     copies = []
@@ -540,7 +548,7 @@ def test_check_reconcile_fails_on_missing_live_row(world, monkeypatch, where):
 
 def test_check_reconcile_fails_on_source_kind_with_zero_checked_rows(world, monkeypatch):
     sources(world)
-    store.open_record().close()
+    open_test_record().close()
     out = take(world)
     scratch = scratch_import(world, monkeypatch, out)
     code, result = reconcile_run(scratch, out)
@@ -760,7 +768,7 @@ def test_judge_usage_report_reads_new_format_lines(world, monkeypatch):
 
 def test_check_events_fails_session_with_zero_live_events(world):
     acts_task(world, [{"event": "record_result", "ts": at(10)}], [])
-    conn = store.open_record()
+    conn = open_test_record()
     try:
         conn.execute("UPDATE events SET provenance = 'imported' WHERE session_id = 's-t1'")
         conn.commit()
@@ -775,7 +783,7 @@ def test_check_events_fails_session_with_zero_live_events(world):
 @pytest.mark.parametrize("window_from, named", [(20, True), (5, False)])
 def test_check_events_names_zero_live_session_acts_before_the_emitter(world, window_from, named):
     acts_task(world, [{"event": "record_result", "ts": at(10)}, {"event": "record_result", "ts": at(40)}], [])
-    conn = store.open_record()
+    conn = open_test_record()
     try:
         conn.execute("UPDATE events SET provenance = 'imported' WHERE session_id = 's-t1'")
         conn.commit()
@@ -1081,7 +1089,7 @@ def test_isolation_tests_write_no_live_engine_state(monkeypatch, tmp_path):
     nonce = f"canary-{uuid.uuid4().hex}"
     done = subprocess.run([sys.executable, str(CLI), "start", "--session", nonce, "--task", "t", "--goal", "g",
                            "--done-criterion", "d", "--criterion-type", "measurable"],
-                          env=isolated_home_env(tmp_path / "home"), capture_output=True, text=True, timeout=60)
+                          env=isolated_home_env(tmp_path / "home"), capture_output=True, text=True, timeout=CLI_WAIT_S)
     assert done.returncode == 0, done.stderr
     leaked = [p for p in live_root.rglob("*") if p.is_file() and nonce in p.read_text(errors="replace") + p.name]
     assert leaked == []
@@ -1094,7 +1102,7 @@ INTERRUPTED_SESSION = "s-int"
 
 
 def _open_writer_when_reader_waits(fifo: Path, proc) -> int:
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + CLI_WAIT_S
     while time.monotonic() < deadline and proc.poll() is None:
         try:
             return os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
@@ -1124,7 +1132,7 @@ def interrupt_start_at(tmp_path, sync_env: str, signals_held: bool = False):
         if signals_held:
             os.close(writer)
             writer = None
-        out, err = proc.communicate(timeout=60)
+        out, err = proc.communicate(timeout=CLI_WAIT_S)
     finally:
         if writer is not None:
             os.close(writer)
@@ -1132,7 +1140,7 @@ def interrupt_start_at(tmp_path, sync_env: str, signals_held: bool = False):
 
 
 def command_rows(session: str) -> list:
-    store.open_record().close()
+    open_test_record().close()
     spooled = [r["fields"] for r in spool_events(session) if r["kind"] == "command"]
     return spooled + [r["fields"] for r in events(session, kind="command")]
 
