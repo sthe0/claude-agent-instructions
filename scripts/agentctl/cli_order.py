@@ -55,7 +55,7 @@ def _search_recorded(state: SessionState, search_id: str) -> bool:
 def _record_exists(kind: str, ref: str) -> bool:
     area = LEAVES_ROOT / _TYPE_ENTRY_AREA[kind]
     name = ref[:-3] if ref.endswith(".md") else ref
-    return bool(name) and "/" not in name and any(area.rglob(f"{name}.md"))
+    return bool(name) and "/" not in name and any(p.name == f"{name}.md" for p in area.rglob("*.md"))
 
 
 def _executor_side_violations(meta, state: SessionState) -> list[str]:
@@ -100,16 +100,21 @@ def _beside_records(doc) -> dict:
     }
 
 
-def _order_draft_violations(meta) -> list[str]:
-    """Every reason the order in `meta` is not fit to be put to the user: the
+def _order_draft_violations(doc, state: SessionState) -> list[str]:
+    """Every reason the order in `doc` is not fit to be put to the user: the
     completeness findings (which already contain the understanding tables' own) and
     the understanding findings once more, each reported once. Re-run on the CURRENT
     draft wherever the draft is acted on, never trusted from an earlier submission.
     Also refuses an id the rendering cannot show as an anchor (see `_ORDER_ANCHOR_RE`),
-    so the author learns at submit what no presentation could ever satisfy."""
+    so the author learns at submit what no presentation could ever satisfy.
+
+    An old-form draft (no customer side) is refused unless the user already agreed exactly
+    its understanding in this session: that order may be put again unchanged."""
+    meta = doc.meta
     problems = list(order_understanding_completeness_violations(meta))
     problems.extend(v for v in order_understanding_violations(meta) if v not in problems)
-    problems.extend(order_customer_side_missing(meta))
+    if not _agreed_before(state, understanding_digest(doc)):
+        problems.extend(order_customer_side_missing(meta))
     problems.extend(order_sides_violations(meta))
     order = meta.order
     if order is not None:
@@ -214,7 +219,7 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
             f"{args.plan} carries stages but the user has not agreed this session's order: "
             "submit the order draft without [[stage]] entries first",
         )
-    problems = _order_draft_violations(doc.meta)
+    problems = _order_draft_violations(doc, state)
     problems.extend(_executor_side_violations(doc.meta, state))
     if problems:
         return Directive(
@@ -517,7 +522,17 @@ def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None 
             f"({', '.join(moved)}): that needs a new agreement (order-submit, order-agree), not a revision",
             moved=moved,
         )
-    problems = _order_draft_violations(doc.meta)
+    beside = _beside_records(doc)
+    if beside["binding_conditions"] != (state.order_beside or {}).get("binding_conditions", []) or \
+            {b["id"] for b in beside["binding_conditions"]} != {d["id"] for d in agreement.binding_decisions}:
+        return refuse(
+            "the revision changes a binding condition the user decided on: that needs a new "
+            "agreement (order-submit, order-agree), not a revision")
+    if beside["planning_budget"] != agreement.planning_budget:
+        return refuse(
+            "the revision changes the planning budget the agreement bound: that needs a new "
+            "agreement (order-submit, order-agree), not a revision")
+    problems = _order_draft_violations(doc, state)
     problems.extend(_executor_side_violations(doc.meta, state))
     if problems:
         return refuse("the revised executor side is not fit: " + "; ".join(problems), problems=problems)
@@ -534,6 +549,8 @@ def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None 
         "earlier_executor_side_sha256": earlier_digest, "executor_side_sha256": new_digest,
         "executor_side_parts": new_parts, "agreed_understanding_sha256": agreement.understanding_sha256,
     })
+    state.order_draft_path = path
+    state.order_beside = beside
     state.log("order_executor_revise", executor_side_sha256=new_digest, why=why)
     store.save(state)
     return Directive(

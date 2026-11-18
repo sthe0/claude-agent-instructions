@@ -1516,11 +1516,7 @@ class OrderAgreement:
     anchor: str = ORDER_AGREEMENT_ANCHOR_STAMP
     anchor_at: float = 0.0
     rendering_sha256: str = ""
-    # The two-sided order (schema 63). `customer_side_agreed` is true when the agreed digest
-    # covers the customer side and its acceptance checks (a new-form order); the executor-side
-    # digest is the one SHOWN at agreement, not agreed. `correction` is the user's correction
-    # of the reconstruction, `binding_decisions` the decision on each binding condition and
-    # `planning_budget` the budget record the agreement bound.
+    # `executor_side_sha256` is the digest SHOWN at agreement, not an agreed one.
     customer_side_agreed: bool = False
     executor_side_sha256: str = ""
     executor_side_parts: dict[str, str] = field(default_factory=dict)
@@ -2223,9 +2219,8 @@ class Order:
     # set of parts a plan must state, and an estimate is required only before the first
     # approval, at the seams that check it.
     planning_estimate: ClassVar[PlanningEstimate | None] = None
-    # The two-sided order (schema 63): the customer side (the form mark — an order is new-form
-    # exactly when it is present), the executor side's type and specifics entries, and the
-    # records beside the order. Set per instance by `from_dict`, like `planning_estimate`.
+    # Set per instance by `from_dict`, like `planning_estimate`; `customer_side` is the form
+    # mark: an order is new-form exactly when it is present.
     customer_side: ClassVar[CustomerSide | None] = None
     executor_side: ClassVar[ExecutorSide | None] = None
     binding_conditions: ClassVar[tuple[BindingCondition, ...]] = ()
@@ -2866,11 +2861,7 @@ class SessionState:
     order_draft_path: str = ""
     order_draft_sha256: str = ""
     order_reviews: list[OrderReview] = field(default_factory=list)
-    # The two-sided order (schema 63), plain JSON records. `order_searches`: the experience
-    # searches `order-search` recorded (id, tier, query, results, at). `order_beside`: the
-    # records beside the submitted order (binding conditions, method ideas, means conditions,
-    # planning budget), replaced at each order-submit. `executor_side_revisions`: one record
-    # per `order-executor-revise`.
+    # `order_beside` is replaced at each order-submit and each accepted executor-side revision.
     order_searches: list[dict] = field(default_factory=list)
     order_beside: dict = field(default_factory=dict)
     executor_side_revisions: list[dict] = field(default_factory=list)

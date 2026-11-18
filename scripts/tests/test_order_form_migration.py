@@ -19,9 +19,9 @@ from conftest import SUBSTANTIVE_ORDER, declare_venue
 from order_agreement_mutants import mutant  # noqa: F401  (autouse fixture)
 from test_meta_order import _FINAL_CHECK, _PLAN
 from test_order_agreement import (  # noqa: F401  (home and ostore are fixtures)
-    SESSION, _marker_of, _presented, _start, _user_answers, home, ostore,
+    SESSION, _classify, _confirm_delivery, _marker_of, _presented, _start, _user_answers, home, ostore,
 )
-from test_order_phase import _draft
+from test_order_phase import _draft, _present, _review, _submit
 
 OLD = {"omit": ("customer_side",)}
 
@@ -96,15 +96,22 @@ def test_old_form_plan_still_submits(ostore, tmp_path):
     assert d.ok, (d.detail, d.data)
 
 
-# --- an old-form draft put to the user before the change ------------------------------------
-
-
-def _old_form_presented(ostore, tmp_path, monkeypatch):
-    """An old-form draft submitted, reviewed and presented as an earlier version of the engine
-    accepted it, then the engine as it is now."""
-    with monkeypatch.context() as m:
-        m.setattr(cli_order, "order_customer_side_missing", lambda meta: [])
-        path = _presented(ostore, tmp_path, **OLD)
+def _agreed_earlier(ostore, tmp_path):
+    """An old-form draft the user agreed in an earlier turn of this session, put again unchanged:
+    no monkeypatch, the engine as it is now accepts it at order-submit and present-plan."""
+    _start(ostore)
+    assert _classify(ostore).ok
+    path = _draft(tmp_path, **OLD)
+    doc = _doc(path)
+    state = ostore.load(SESSION)
+    state.order_agreement_history.append(OrderAgreement(
+        understanding_sha256=plan.understanding_digest(doc), parts=plan.understanding_parts(doc),
+        draft_path=str(path), at=1.0))
+    ostore.save(state)
+    assert _submit(ostore, path).ok
+    assert _review(ostore).ok
+    assert _present(ostore, tmp_path).ok
+    _confirm_delivery(ostore)
     assert _user_answers(_marker_of(path)) == 1
     return path
 
@@ -115,7 +122,11 @@ def _agree(store):
 
 
 def test_an_unagreed_old_form_draft_is_refused_at_agreement(ostore, tmp_path, monkeypatch):
-    _old_form_presented(ostore, tmp_path, monkeypatch)
+    """A draft an earlier version of the engine accepted, put to the user, never agreed."""
+    with monkeypatch.context() as m:
+        m.setattr(cli_order, "order_customer_side_missing", lambda meta: [])
+        path = _presented(ostore, tmp_path, **OLD)
+    assert _user_answers(_marker_of(path)) == 1
 
     d = _agree(ostore)
 
@@ -123,15 +134,22 @@ def test_an_unagreed_old_form_draft_is_refused_at_agreement(ostore, tmp_path, mo
     assert ostore.load(SESSION).order_agreement is None
 
 
-def test_an_old_form_order_agreed_before_the_change_is_renewed(ostore, tmp_path, monkeypatch):
-    path = _old_form_presented(ostore, tmp_path, monkeypatch)
-    doc = _doc(path)
-    earlier = OrderAgreement(
-        understanding_sha256=plan.understanding_digest(doc), parts=plan.understanding_parts(doc),
-        draft_path=str(path), at=1.0)
-    state = ostore.load(SESSION)
-    state.order_agreement_history.append(earlier)
-    ostore.save(state)
+def test_an_unagreed_old_form_draft_is_refused_at_present_plan(ostore, tmp_path, monkeypatch):
+    with monkeypatch.context() as m:
+        m.setattr(cli_order, "order_customer_side_missing", lambda meta: [])
+        _start(ostore)
+        assert _classify(ostore).ok
+        assert _submit(ostore, _draft(tmp_path, **OLD)).ok
+        assert _review(ostore).ok
+
+    d = _present(ostore, tmp_path)
+
+    assert d.ok is False and "customer_side" in d.detail
+
+
+def test_an_old_form_order_agreed_before_the_change_is_put_again_and_renewed(ostore, tmp_path):
+    path = _agreed_earlier(ostore, tmp_path)
+    earlier = ostore.load(SESSION).order_agreement_history[0]
 
     d = _agree(ostore)
 
@@ -143,15 +161,19 @@ def test_an_old_form_order_agreed_before_the_change_is_renewed(ostore, tmp_path,
     assert agreement.planning_budget is None
 
 
+def test_an_old_form_draft_changed_since_its_agreement_is_refused_at_submit(ostore, tmp_path):
+    _agreed_earlier(ostore, tmp_path)
+    changed = _draft(tmp_path, name="changed.toml", omit=("customer_side",),
+                     replace={"difficulty": 'difficulty = "a release takes a week"'})
+
+    d = _submit(ostore, changed)
+
+    assert d.ok is False and "customer_side" in d.detail
+
+
 def test_the_agreement_of_an_old_form_order_still_opens_the_arming_from_its_estimate(
-        ostore, tmp_path, monkeypatch):
-    path = _old_form_presented(ostore, tmp_path, monkeypatch)
-    doc = _doc(path)
-    state = ostore.load(SESSION)
-    state.order_agreement_history.append(OrderAgreement(
-        understanding_sha256=plan.understanding_digest(doc), parts=plan.understanding_parts(doc),
-        draft_path=str(path), at=1.0))
-    ostore.save(state)
+        ostore, tmp_path):
+    _agreed_earlier(ostore, tmp_path)
 
     assert _agree(ostore).ok
 

@@ -825,6 +825,9 @@ def order_sides_violations(meta) -> list[str]:
     out = [_order_malformed_sides(name) for name in _SIDES_MALFORMED if name in order.malformed]
     if order.customer_side is None:
         return out
+    if order.planning_estimate is not None:
+        out.append("[meta.order] a two-sided order states its budget in [meta.order.planning_budget]; "
+                   "drop the old-form 'planning_estimate', which binds nothing beside it")
     out.extend(_customer_side_violations(order.customer_side))
     out.extend(_executor_side_shape_violations(order))
     out.extend(_beside_violations(order))

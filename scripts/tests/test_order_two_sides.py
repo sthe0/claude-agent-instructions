@@ -24,7 +24,7 @@ from order_agreement_mutants import mutant  # noqa: F401  (autouse fixture)
 from test_order_agreement import (  # noqa: F401  (home and ostore are fixtures)
     SESSION, _marker_of, _presented, _start, _user_answers, home, ostore,
 )
-from test_order_phase import _LINES, SIDES, _draft, _submit
+from test_order_phase import _LINES, BUDGET, SIDES, _draft, _submit
 
 OTHER_REGULARITY = "a-change-outside-the-state-its-consumers-read-is-unseen-by-them"
 
@@ -70,9 +70,6 @@ def _agree_two_sided(store, tmp_path, *, correction="", decisions=(), **draft_kw
         ns(session=SESSION, note="", correction=correction, binding_decision=list(decisions)), store=store)
     assert d.ok, d.detail
     return path
-
-
-# --- the executor side is outside the agreed digest ---------------------------------
 
 
 def test_executor_side_outside_agreed_digest(tmp_path):
@@ -130,9 +127,6 @@ def test_customer_side_change_moves_the_agreed_digest(tmp_path, change):
     changed = _digests(_sides(tmp_path, "changed.toml", **change))
 
     assert changed[0] != base[0]
-
-
-# --- what the agreement records ----------------------------------------------------------
 
 
 def test_agreement_record_names_customer_side_and_checks(ostore, tmp_path):
@@ -196,9 +190,6 @@ def test_order_submit_refuses_a_malformed_side(ostore, tmp_path, old, new, expec
     assert d.ok is False and any(expected in p for p in d.data["problems"]), d.data["problems"]
 
 
-# --- the records beside the order -------------------------------------------------------
-
-
 def test_beside_records_outside_both_digests(ostore, tmp_path):
     plain = _digests(_draft(tmp_path))
     beside = _sides(tmp_path, "beside.toml", extra=BESIDE)
@@ -222,9 +213,6 @@ def test_a_beside_record_may_change_after_agreement_without_moving_the_digest(tm
         tmp_path, "two.toml", extra=BESIDE.replace("tag from a cron job", "tag from a webhook")))
 
     assert first == second
-
-
-# --- the recorded experience search -------------------------------------------------------
 
 
 def _stub(stdout="  [ 91] a-child-process-reads-its-parents-ambient-root.md\n", returncode=0):
@@ -294,7 +282,42 @@ def test_a_type_entry_naming_no_record_is_refused(ostore, tmp_path):
     assert d.ok is False and any("no-such-record-anywhere" in p for p in d.data["problems"])
 
 
-# --- the executor side changes without a new agreement ------------------------------------
+@pytest.mark.parametrize("pattern", ["*", "[a-z]*", "a-child-process-reads-its-parents-ambient-roo?"])
+def test_a_type_entry_ref_is_a_name_not_a_pattern(ostore, tmp_path, pattern):
+    _start(ostore)
+
+    d = _submit(ostore, _sides(tmp_path, "glob.toml", old="a-child-process-reads-its-parents-ambient-root",
+                               new=pattern))
+
+    assert d.ok is False and any(pattern in p for p in d.data["problems"])
+    assert not ostore.load(SESSION).order_draft_path
+
+
+def test_a_two_sided_order_with_an_old_form_planning_estimate_is_refused(ostore, tmp_path):
+    _start(ostore)
+    both = _sides(tmp_path, "both.toml")
+    both.write_text(both.read_text(encoding="utf-8").replace(
+        "[meta.order]\n", "[meta.order]\n" + _LINES["planning_estimate"] + "\n", 1), encoding="utf-8")
+
+    d = _submit(ostore, both)
+
+    assert d.ok is False and any("planning_estimate" in p for p in d.data["problems"])
+
+
+@pytest.mark.parametrize("decisions, expected", [
+    pytest.param(["B9=keep"], "B9", id="unknown-id"),
+    pytest.param(["B1=maybe"], "keep/drop", id="unknown-verdict"),
+    pytest.param(["B1=keep", "B1=drop"], "twice", id="same-id-twice"),
+])
+def test_agreement_refuses_an_ill_formed_binding_decision(ostore, tmp_path, decisions, expected):
+    path = _presented(ostore, tmp_path, sides=SIDES + BESIDE)
+    assert _user_answers(_marker_of(path)) == 1
+
+    d = cli_order.cmd_order_agree(
+        ns(session=SESSION, note="", correction="", binding_decision=decisions), store=ostore)
+
+    assert d.ok is False and expected in d.detail
+    assert ostore.load(SESSION).order_agreement is None
 
 
 def _revise(store, path, why="the way it is built changed"):
@@ -322,14 +345,61 @@ def test_executor_revision_without_reagreement(ostore, tmp_path):
     assert record["why"] == "the way it is built changed" and record["by"] == "agent"
 
 
+def test_an_accepted_revision_leaves_the_session_describing_the_draft_in_force(ostore, tmp_path):
+    _agree_two_sided(ostore, tmp_path, decisions=["B1=keep"], sides=SIDES + BESIDE)
+    revised = _sides(
+        tmp_path, "revised.toml", extra=BESIDE.replace("tag from a cron job", "tag from a webhook"),
+        replace=_replacing("proposals", "tag releases automatically", "tag on every merge"))
+
+    d = _revise(ostore, revised)
+
+    assert d.ok, d.detail
+    state = ostore.load(SESSION)
+    assert state.order_draft_path == str(revised)
+    assert state.order_beside == cli_order._beside_records(_doc(revised))
+    assert state.order_beside["method_ideas"][0]["text"] == "tag from a webhook"
+
+
 def test_executor_revision_of_the_customer_side_is_refused(ostore, tmp_path):
     _agree_two_sided(ostore, tmp_path)
     touching = _sides(tmp_path, "touching.toml", old="the command tags a release",
-                      new="the command tags and signs a release")
+                      new="the command tags and signs a release",
+                      replace=_replacing("proposals", "tag releases automatically", "tag on every merge"))
 
     d = _revise(ostore, touching)
 
     assert d.ok is False and "C:A1" in d.detail and "new agreement" in d.detail
+    assert not ostore.load(SESSION).executor_side_revisions
+
+
+@pytest.mark.parametrize("beside", [
+    pytest.param(BESIDE.replace("no change to the release branch", "no change to any branch"),
+                 id="condition-text"),
+    pytest.param("", id="condition-dropped"),
+])
+def test_executor_revision_of_a_binding_condition_is_refused(ostore, tmp_path, beside):
+    _agree_two_sided(ostore, tmp_path, decisions=["B1=keep"], sides=SIDES + BESIDE)
+    state = ostore.load(SESSION)
+    before = (state.order_draft_path, state.order_beside)
+    revised = _sides(tmp_path, "revised.toml", extra=beside,
+                     replace=_replacing("proposals", "tag releases automatically", "tag on every merge"))
+
+    d = _revise(ostore, revised)
+
+    assert d.ok is False and "binding condition" in d.detail
+    state = ostore.load(SESSION)
+    assert not state.executor_side_revisions
+    assert (state.order_draft_path, state.order_beside) == before
+
+
+def test_executor_revision_of_the_planning_budget_is_refused(ostore, tmp_path):
+    _agree_two_sided(ostore, tmp_path)
+    revised = _sides(tmp_path, "revised.toml", budget=BUDGET.replace("usd = 4.5", "usd = 9.0"),
+                     replace=_replacing("proposals", "tag releases automatically", "tag on every merge"))
+
+    d = _revise(ostore, revised)
+
+    assert d.ok is False and "planning budget" in d.detail
     assert not ostore.load(SESSION).executor_side_revisions
 
 

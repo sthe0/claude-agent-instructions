@@ -203,7 +203,7 @@ def _agreed(store, home: Path, tmp_path: Path, **draft_kw) -> Path:
 
 def _plan(tmp_path: Path, *, replace=None, name="plan.toml") -> str:
     """A submittable plan whose order carries the draft's understanding (or `replace`d lines)."""
-    lines = {**_LINES, **(replace or {})}
+    lines = {k: v for k, v in {**_LINES, **(replace or {})}.items() if k != "planning_estimate"}
     coverage = "".join(f"{k} = {json.dumps(v)}\n" for k, v in _COVERAGE.items())
     order = ("[meta.order]\n" + "\n".join(lines.values()) + "\n" + SIDES + BUDGET
              + "\n[meta.order.coverage]\n" + coverage + "\n")

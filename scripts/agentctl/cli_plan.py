@@ -369,7 +369,7 @@ def _present_order(args, state: SessionState, *, store: StateStore) -> Directive
             f"(understanding {digest[:12]}, submitted {state.order_draft_sha256[:12]}): "
             "order-submit it again and have it reviewed",
         )
-    problems = _order_draft_violations(doc.meta)
+    problems = _order_draft_violations(doc, state)
     if problems:
         return Directive(
             False, state.node, "noop",
