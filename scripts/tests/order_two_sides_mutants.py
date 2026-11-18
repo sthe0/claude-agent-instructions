@@ -7,7 +7,7 @@
 as underscores) and runs the test files that own it under `ORDER_AGREEMENT_MUTANT`, serially and
 in one process, because a monkeypatch is invisible to a worker process. Exit 1 means a test failed
 under the defect (killed, the intended result), 0 that every test passed (survived), 4 that the
-name is unknown or the defect cannot be applied. `--all-killed` runs the seven defects of this
+name is unknown or the defect cannot be applied. `--all-killed` runs the ten defects of this
 change and exits 0 only when each is registered and killed, 4 when one is not registered, 1 when
 one survives.
 """
@@ -32,6 +32,9 @@ OWNED = {
     "binding_decision_unrecorded": ["test_order_two_sides.py"],
     "old_form_estimate_unhashed": ["test_order_form_migration.py"],
     "executor_side_digested": ["test_order_two_sides.py"],
+    "new_parts_always_digested": ["test_order_form_migration.py"],
+    "executor_parts_in_understanding": ["test_order_two_sides.py"],
+    "beside_record_dropped": ["test_order_two_sides.py"],
     "beside_in_digest": ["test_order_two_sides.py"],
     "executor_revision_unguarded": ["test_order_two_sides.py"],
 }

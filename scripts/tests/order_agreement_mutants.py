@@ -385,6 +385,49 @@ def _executor_side_digested(mp):
                lambda doc: {**original(doc), **plan.executor_side_parts(doc)}, raising=True)
 
 
+def _new_parts_always_digested(mp):
+    """An old-form order's agreed digest also counts the customer-side parts, empty."""
+    from agentctl import plan
+
+    original = plan.understanding_parts
+
+    def with_empty_customer_side(doc):
+        parts = original(doc)
+        if not plan.is_two_sided(doc.meta.order):
+            names = ("step", "missing", "product", "criterion_type")
+            parts.update(plan._hash_parts({f"S:{name}": "" for name in names}))
+        return parts
+
+    mp.setattr(plan, "understanding_parts", with_empty_customer_side, raising=True)
+
+
+def _executor_parts_in_understanding(mp):
+    """A new-form order's agreed digest counts its requirements, proposals and constraints again."""
+    from agentctl import plan
+
+    original = plan.understanding_parts
+
+    def with_executor_items(doc):
+        parts = original(doc)
+        if plan.is_two_sided(doc.meta.order):
+            parts.update(plan._hash_parts(plan._executor_values(doc.meta.order)))
+        return parts
+
+    mp.setattr(plan, "understanding_parts", with_executor_items, raising=True)
+
+
+def _beside_record_dropped(mp):
+    """order-submit stores no method idea and no condition on the means."""
+    from agentctl import cli_order
+
+    original = cli_order._beside_records
+
+    def without_ideas_and_means(doc):
+        return {**original(doc), "method_ideas": [], "means_conditions": []}
+
+    mp.setattr(cli_order, "_beside_records", without_ideas_and_means, raising=True)
+
+
 def _beside_in_digest(mp):
     """The agreed digest also covers the records beside the order."""
     import hashlib
@@ -416,6 +459,9 @@ MUTANTS = {
     "binding_decision_unrecorded": _binding_decision_unrecorded,
     "old_form_estimate_unhashed": _old_form_estimate_unhashed,
     "executor_side_digested": _executor_side_digested,
+    "new_parts_always_digested": _new_parts_always_digested,
+    "executor_parts_in_understanding": _executor_parts_in_understanding,
+    "beside_record_dropped": _beside_record_dropped,
     "beside_in_digest": _beside_in_digest,
     "executor_revision_unguarded": _executor_revision_unguarded,
     "draft_coverage_rendered": _draft_coverage_rendered,

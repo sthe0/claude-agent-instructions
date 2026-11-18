@@ -1522,6 +1522,7 @@ class OrderAgreement:
     executor_side_parts: dict[str, str] = field(default_factory=dict)
     correction: str = ""
     binding_decisions: list[dict] = field(default_factory=list)
+    binding_conditions: list[dict] = field(default_factory=list)
     planning_budget: dict | None = None
 
     @classmethod
@@ -1541,6 +1542,7 @@ class OrderAgreement:
             executor_side_parts=dict(d.get("executor_side_parts") or {}),
             correction=d.get("correction") or "",
             binding_decisions=[dict(x) for x in d.get("binding_decisions") or []],
+            binding_conditions=[dict(x) for x in d.get("binding_conditions") or []],
             planning_budget=dict(d["planning_budget"]) if d.get("planning_budget") else None,
         )
 

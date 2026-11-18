@@ -144,6 +144,8 @@ def test_agreement_record_names_customer_side_and_checks(ostore, tmp_path):
     assert agreement.executor_side_parts == plan.executor_side_parts(doc)
     assert agreement.correction == "the release is cut by the build host, not by hand"
     assert agreement.binding_decisions == [{"id": "B1", "decision": "keep", "decided_by": "user"}]
+    assert [b["id"] for b in agreement.binding_conditions] == ["B1"]
+    assert agreement.binding_conditions[0]["text"] == "no change to the release branch"
     assert agreement.planning_budget == {
         "active_minutes": 12, "usd": 4.5, "derivation": "one reviewed plan of a few stages"}
 
@@ -390,6 +392,19 @@ def test_executor_revision_of_a_binding_condition_is_refused(ostore, tmp_path, b
     state = ostore.load(SESSION)
     assert not state.executor_side_revisions
     assert (state.order_draft_path, state.order_beside) == before
+
+
+def test_a_binding_condition_cannot_be_reworded_by_submitting_then_revising(ostore, tmp_path):
+    _agree_two_sided(ostore, tmp_path, decisions=["B1=keep"], sides=SIDES + BESIDE)
+    revised = _sides(tmp_path, "revised.toml", extra=BESIDE.replace(
+        "no change to the release branch", "no change to any branch"),
+        replace=_replacing("proposals", "tag releases automatically", "tag on every merge"))
+    assert _submit(ostore, revised).ok
+
+    d = _revise(ostore, revised)
+
+    assert d.ok is False and "binding condition" in d.detail
+    assert not ostore.load(SESSION).executor_side_revisions
 
 
 def test_executor_revision_of_the_planning_budget_is_refused(ostore, tmp_path):

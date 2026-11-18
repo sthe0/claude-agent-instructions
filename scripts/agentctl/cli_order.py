@@ -113,7 +113,7 @@ def _order_draft_violations(doc, state: SessionState) -> list[str]:
     meta = doc.meta
     problems = list(order_understanding_completeness_violations(meta))
     problems.extend(v for v in order_understanding_violations(meta) if v not in problems)
-    if not _agreed_before(state, understanding_digest(doc)):
+    if _old_form_unadmitted(state, doc):
         problems.extend(order_customer_side_missing(meta))
     problems.extend(order_sides_violations(meta))
     order = meta.order
@@ -305,7 +305,7 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     doc, _ = load_order_draft(path)
     digest = understanding_digest(doc)
     order = doc.meta.order
-    if not is_two_sided(order) and not _agreed_before(state, digest):
+    if _old_form_unadmitted(state, doc):
         return refuse(
             "cannot record the agreement: the order draft has no customer side and was not agreed "
             "before the order was split into two sides; rewrite it with [meta.order.customer_side] "
@@ -341,13 +341,14 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         anchor_at=since, rendering_sha256=receipt.rendering_sha256,
     )
     if is_two_sided(order):
-        budget = _beside_records(doc)["planning_budget"]
+        beside = _beside_records(doc)
         agreement.customer_side_agreed = True
         agreement.executor_side_sha256 = executor_side_digest(doc)
         agreement.executor_side_parts = executor_side_parts(doc)
         agreement.correction = _agreed_correction(args)
         agreement.binding_decisions = _agreed_binding_decisions(decisions)
-        agreement.planning_budget = budget
+        agreement.binding_conditions = beside["binding_conditions"]
+        agreement.planning_budget = beside["planning_budget"]
     state.order_agreement = agreement
     state.order_agreement_history.append(agreement)
     _record_agreed_estimate(state, doc)
@@ -366,11 +367,14 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
-def _agreed_before(state: SessionState, digest: str) -> bool:
-    """Whether the user already agreed the understanding with this digest in this session — the
-    old-form order whose renewal is accepted."""
-    return any(a.understanding_sha256 == digest
-               for a in (*state.order_agreement_history, state.order_agreement) if a is not None)
+def _old_form_unadmitted(state: SessionState, doc) -> bool:
+    """The one statement of the old-form admission rule: a draft with no customer side is
+    admitted only when the user already agreed exactly its understanding in this session, so
+    that order may be put again unchanged."""
+    digest = understanding_digest(doc)
+    return not is_two_sided(doc.meta.order) and not any(
+        a.understanding_sha256 == digest
+        for a in (*state.order_agreement_history, state.order_agreement) if a is not None)
 
 
 def _parse_binding_decisions(args, order) -> "list[dict] | str":
@@ -490,6 +494,19 @@ def _agreed_parts_moved(doc, agreement: OrderAgreement) -> list[str]:
     return _changed_parts(agreement.parts, understanding_parts(doc)) or ["understanding"]
 
 
+def _agreed_change(moved: list[str], beside: dict, agreement: OrderAgreement) -> str | None:
+    """What of the agreement a revised draft changes, as a phrase for the refusal, or None. The
+    binding conditions and the planning budget are compared with the records the agreement
+    itself bound, never with the session's current draft, which a later order-submit rewrites."""
+    if moved:
+        return f"the customer side or an acceptance check the user agreed ({', '.join(moved)})"
+    if beside["binding_conditions"] != agreement.binding_conditions:
+        return "a binding condition the user decided on"
+    if beside["planning_budget"] != agreement.planning_budget:
+        return "the planning budget the agreement bound"
+    return None
+
+
 def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a revision of the executor side of the agreed order, with no new agreement.
 
@@ -516,22 +533,12 @@ def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None 
     if not is_two_sided(doc.meta.order):
         return refuse("the revised draft has no customer side")
     moved = _agreed_parts_moved(doc, agreement)
-    if moved:
-        return refuse(
-            "the revision touches the customer side or an acceptance check the user agreed "
-            f"({', '.join(moved)}): that needs a new agreement (order-submit, order-agree), not a revision",
-            moved=moved,
-        )
     beside = _beside_records(doc)
-    if beside["binding_conditions"] != (state.order_beside or {}).get("binding_conditions", []) or \
-            {b["id"] for b in beside["binding_conditions"]} != {d["id"] for d in agreement.binding_decisions}:
+    changed = _agreed_change(moved, beside, agreement)
+    if changed:
         return refuse(
-            "the revision changes a binding condition the user decided on: that needs a new "
-            "agreement (order-submit, order-agree), not a revision")
-    if beside["planning_budget"] != agreement.planning_budget:
-        return refuse(
-            "the revision changes the planning budget the agreement bound: that needs a new "
-            "agreement (order-submit, order-agree), not a revision")
+            f"the revision touches {changed}: that needs a new agreement (order-submit, "
+            "order-agree), not a revision", moved=moved)
     problems = _order_draft_violations(doc, state)
     problems.extend(_executor_side_violations(doc.meta, state))
     if problems:
