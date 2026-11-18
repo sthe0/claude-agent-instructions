@@ -1418,6 +1418,8 @@ def test_k1_background_children_is_min_over_second_half(tmp_path):
     samples = [(1.0, 5), (half - 1, 5), (half, 3), (half + 10, 4), (h.K1_WINDOW_S, 3)]
     assert h.background_children(samples) == 3
     assert h.background_children([(1.0, 5), (half + 5, 4), (h.K1_WINDOW_S, 4)]) == 4
+    shutdown = [(half + 5, 3), (h.K1_WINDOW_S, 3), (h.K1_WINDOW_S + 0.5, 0), (h.K1_WINDOW_S + 1.0, 0)]
+    assert h.background_children(shutdown) == 3
 
     def report(old, new):
         arm = lambda name, n: [{"arm": name, "exec_kinds": [], "created_files": [], "background_children": n}] * 3

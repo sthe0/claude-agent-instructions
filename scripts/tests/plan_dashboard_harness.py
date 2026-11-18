@@ -1715,8 +1715,8 @@ def old_code_runs(base: Path, env: dict, *, events: bool, runs: int) -> dict:
 
 def background_children(samples: list[tuple[float, int]]) -> int:
     """The fewest descendants sampled in the window's second half: the steady population, blind to a tick's
-    short-lived child."""
-    return min((n for t, n in samples if t >= K1_WINDOW_S / 2), default=0)
+    short-lived child and to the shutdown after the window, which the sampling still sees."""
+    return min((n for t, n in samples if K1_WINDOW_S / 2 <= t <= K1_WINDOW_S), default=0)
 
 
 def k1_void_reason(trace) -> str | None:
@@ -1725,7 +1725,7 @@ def k1_void_reason(trace) -> str | None:
     if reached < K1_WINDOW_S - K1_WINDOW_SLACK_S:
         return f"window cut at {reached:.0f} s"
     painted = any(e.get("ev") == "rows_painted" for e in trace.events) \
-        or any(frame and frame["rows"] for _, frame in trace.frames)
+        or any(frame and frame.get("rows") for _, frame in trace.frames)
     return None if painted else f"no rows painted in {K1_WINDOW_S:.0f} s"
 
 
