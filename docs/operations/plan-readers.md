@@ -48,6 +48,7 @@ to be exactly that set.
 | `scripts/lib/suite_gate.py`:`settle_reuse` | not a plan | Reads the pytest report and the tracer's per-test files of a suite run; the `plan` it takes is the run's reuse plan (which stored results to leave out), not a plan file. |
 | `scripts/lib/telemetry/sync.py`:`_artifact_texts` | index-only | Copies the session's plan file text, as written, into the telemetry record next to the stored renderings; a record of what the file held, never parsed or compared. A field held in a referenced file is not copied. |
 | `scripts/plan-review-topological.py`:`Driver.launch` | index-only | Recomputes the root digest the reviewer attests: the sha256 of the index bytes. |
+| `scripts/plan-review-topological.py`:`view_dir_for` | not a plan | Reads the re-review history file (JSON) of a pair or unit to tell whether its history is printed as an index; the plan itself is loaded by `build_site_prompt`. |
 | `scripts/verify-agentctl.py`:`check_obligations` | index-only | Hashes the index bytes of a synthetic plan to attest a review in a self-check. |
 | `scripts/verify-agentctl.py`:`check_review_dispatch` | index-only | Same, for the review-dispatch self-check. |
 | `scripts/verify-ticket-plan-sync.py`:`plan_file_sha256` | index-only | Compares the sha256 of the index bytes with the digest posted to the ticket. |

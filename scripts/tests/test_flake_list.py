@@ -38,9 +38,13 @@ def land_fold(world, fold):
 
 # ── the file ──────────────────────────────────────────────────────────────
 
-def test_the_committed_list_is_what_render_list_writes():
+def test_the_committed_list_is_what_the_fold_would_write_back():
     text = FLAKY_TOML.read_text(encoding="utf-8")
     assert text == flake_list.render_list(flake_list.parse_list(text))
+
+
+def test_an_empty_list_renders_and_parses_back_to_empty():
+    assert flake_list.parse_list(flake_list.render_list({})) == {}
 
 
 def test_a_list_round_trips_ids_with_brackets_and_quotes():
