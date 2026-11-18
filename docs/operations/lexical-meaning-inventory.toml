@@ -3119,6 +3119,30 @@ ground = "Accepts INVOCATION_ID only if it is alphanumeric before using it as an
 hits = 1
 reviewed_by = "coordinator"
 
+[sites."scripts/reaper/runner.py::<module>::re.compile"]
+class = "structural"
+ground = "PARAM_FORMAT fixes the argv syntax NAME.KEY=VALUE of a --param flag; it splits a command-line token, it decides no meaning."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/runner.py::parse_params::pattern.fullmatch"]
+class = "structural"
+ground = "PARAM_FORMAT.fullmatch parses one --param argv token into reaper name, key and value; a token of any other shape is invalid argv (exit 2)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/core_session_state.py::_read_states::pattern.fullmatch"]
+class = "structural"
+ground = "STATE_FILE_NAME.fullmatch selects engine state files from a directory listing by file-name syntax (<session id>.json)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/core_session_state.py::_retention::re.fullmatch"]
+class = "structural"
+ground = "Accepts a retention value given as a string only if it is a string of digits before converting it to an integer of days (number syntax)."
+hits = 1
+reviewed_by = "coordinator"
+
 [sites."scripts/verify-canon-writers.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles fixed patterns for file-write primitives in Python/shell source (write_text, open-for-write, sed -i, git commit, tee, redirects); they match code syntax, not natural-language meaning."
