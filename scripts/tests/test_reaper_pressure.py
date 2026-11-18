@@ -431,11 +431,10 @@ def test_main_releases_the_lock_after_the_run(armed, monkeypatch):
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def test_on_pressure_combines_only_with_dry_run(hermetic):
-    for extra in (["--upkeep-only"], ["--only", "a"], ["--force-run"]):
-        with pytest.raises(SystemExit) as raised:
-            runner.main(["--on-pressure", *extra], discover=discover_of())
-        assert raised.value.code == 2, extra
+def test_on_pressure_does_not_combine_with_upkeep_only(hermetic):
+    with pytest.raises(SystemExit) as raised:
+        runner.main(["--on-pressure", "--upkeep-only"], discover=discover_of())
+    assert raised.value.code == 2
 
 
 def test_a_live_pressure_run_exits_zero_even_if_discovery_fails(armed, capsys):

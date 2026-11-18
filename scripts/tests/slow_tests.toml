@@ -46,6 +46,9 @@ guards = [
     "scripts/tests/test_reaper_*.py",
     "scripts/tests/test_hook_branch_backup.py",
     "scripts/tests/reaper_mutation_control.py",
+    "scripts/agentctl/cli_session.py",
+    "scripts/tests/test_agentctl_reopen_evidence.py",
+    "scripts/install-reaper-timer.sh",
 ]
 catalogue_targets = { module = "scripts/tests/reaper_mutation_control.py", kind = "mutants", relpath_root = "scripts", ids_root = "scripts" }
 
