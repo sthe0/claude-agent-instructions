@@ -38,7 +38,7 @@ from test_order_agreement import (  # noqa: F401  (home and ostore are fixtures)
     _user_answers, armed_env, home, ostore,
 )
 from test_order_phase import (
-    COST_LINE, NO_BUDGET_LINE, OLD_RENDERING, RENDERING, RENDERING_NO_BUDGET, SIDES, _draft, _present,
+    BUDGET, COST_LINE, NO_BUDGET_LINE, OLD_RENDERING, RENDERING, RENDERING_NO_BUDGET, SIDES, _draft, _present,
     _ready, _review, _submit,
 )
 from test_order_form_migration import _agreed_earlier
@@ -133,7 +133,24 @@ def test_each_side_carries_its_own_content(ostore, tmp_path):
         "as I understand it.", "as I understand it. [K1]", 1)
     refused = _present(ostore, tmp_path, in_the_preamble, bind=False)
     assert refused.ok is False and "does not carry the anchor(s): K1" in refused.detail
+    also_in_the_preamble = _sections(CUSTOMER_TEXT, EXECUTOR_TEXT).replace(
+        "as I understand it.", "as I understand it. [K1]", 1)
+    refused = _present(ostore, tmp_path, also_in_the_preamble, bind=False)
+    assert refused.ok is False and "anchors sit outside the executor section: K1" in refused.detail
     assert _present(ostore, tmp_path, _sections(CUSTOMER_TEXT, EXECUTOR_TEXT)).ok
+
+
+WITH_CONDITION = _sections(CUSTOMER_TEXT + "B1 no change to the release branch.\n", EXECUTOR_TEXT)
+
+
+def test_a_binding_condition_left_out_of_the_customer_section_is_refused(ostore, tmp_path):
+    _ready(ostore, tmp_path, sides=SIDES + BESIDE)
+    refused = _present(ostore, tmp_path, _sections(CUSTOMER_TEXT, EXECUTOR_TEXT), bind=False)
+    assert refused.ok is False and "does not name its binding condition(s): B1" in refused.detail
+    named_elsewhere = _sections(CUSTOMER_TEXT, EXECUTOR_TEXT + "B1 no change to the release branch.\n")
+    refused = _present(ostore, tmp_path, named_elsewhere, bind=False)
+    assert refused.ok is False and "does not name its binding condition(s): B1" in refused.detail
+    assert _present(ostore, tmp_path, WITH_CONDITION).ok
 
 
 def test_a_check_id_is_a_whole_token_in_the_customer_section(ostore, tmp_path):
@@ -229,6 +246,20 @@ def _close_planning(store):
     assert cli_order._planning_open(store.load(SESSION)) is False
 
 
+def test_a_draft_that_drops_the_agreed_budget_record_is_refused(ostore, home, armed_env, tmp_path):
+    """The budget lies outside the understanding digest: a draft of the very understanding agreed
+    with a figure may not drop its record, or the user is shown `(none)` where a figure was bound."""
+    path = _agreed(ostore, home, tmp_path)
+    assert _bound_budget(ostore) is not None
+    _close_planning(ostore)
+    text = path.read_text(encoding="utf-8")
+    assert BUDGET.strip() in text
+    path.write_text(text.replace(BUDGET.strip(), ""), encoding="utf-8")
+    assert _submit(ostore, path).ok and _review(ostore).ok
+    refused = _present(ostore, tmp_path, RENDERING_NO_BUDGET, bind=False)
+    assert refused.ok is False and "missing or differs from the one agreed" in refused.detail
+
+
 def _renew(store, tmp_path, difficulty: str, *, shown=RENDERING_NO_BUDGET):
     """Put and agree, with no budget record, an order whose understanding differs from the
     standing agreement's."""
@@ -302,20 +333,21 @@ def _dispose(store, answer, qid="BC"):
 def test_binding_conditions_question(ostore, tmp_path):
     _ready(ostore, tmp_path, sides=SIDES + BESIDE)
     _activate_premise(ostore)
-    refused = _present(ostore, tmp_path, bind=False)
+    refused = _present(ostore, tmp_path, WITH_CONDITION, bind=False)
     assert refused.ok is False and "binding-conditions question is not recorded" in refused.detail
 
     _raise_kind(ostore, "Q1")
-    refused = _present(ostore, tmp_path, bind=False)
+    refused = _present(ostore, tmp_path, WITH_CONDITION, bind=False)
     assert refused.ok is False and "not answered" in refused.detail
+    assert "question-research" in refused.detail
 
     _dispose(ostore, gates.BINDING_CONDITIONS_NONE, "Q1")
-    refused = _present(ostore, tmp_path, bind=False)
+    refused = _present(ostore, tmp_path, WITH_CONDITION, bind=False)
     assert refused.ok is False and "disagrees with the draft" in refused.detail
 
     _raise_kind(ostore, "Q2")
     _dispose(ostore, gates.BINDING_CONDITIONS_YES, "Q2")
-    assert _present(ostore, tmp_path, bind=False).ok
+    assert _present(ostore, tmp_path, WITH_CONDITION, bind=False).ok
 
 
 def test_binding_conditions_answer_has_conditions_needs_a_record(ostore, tmp_path):
@@ -347,10 +379,10 @@ def test_a_record_counts_whatever_its_decision_says(ostore, tmp_path):
     _ready(ostore, tmp_path, sides=agent_set)
     _raise_kind(ostore, "Q1")
     _dispose(ostore, gates.BINDING_CONDITIONS_NONE, "Q1")
-    assert _present(ostore, tmp_path, bind=False).ok is False
+    assert _present(ostore, tmp_path, WITH_CONDITION, bind=False).ok is False
     _raise_kind(ostore, "Q2")
     _dispose(ostore, gates.BINDING_CONDITIONS_YES, "Q2")
-    assert _present(ostore, tmp_path, bind=False).ok
+    assert _present(ostore, tmp_path, WITH_CONDITION, bind=False).ok
 
 
 def test_only_the_users_answer_closes_the_question(ostore, tmp_path):

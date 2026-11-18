@@ -60,6 +60,7 @@ from .plan import (
     PLANNING_COST_LABEL,
     PlanError,
     SEVERITY_BLOCKING,
+    expected_order_anchor_ids,
     is_two_sided,
     names_check,
     order_anchor_ids,
@@ -3058,7 +3059,8 @@ def _binding_conditions_problems(state: SessionState, order) -> list[str]:
         return ["the recorded binding-conditions question is not the engine's text"]
     if (question.get("disposition", "open") != QUESTION_DISPOSITION_ESCALATED
             or not (question.get("answer") or "").strip()):
-        return ["the binding-conditions question is not answered by the user: put it to them and "
+        return ["the binding-conditions question is not answered by the user: put it to them, "
+                "record question-research first (question-dispose to 'escalated' requires it), then "
                 f"question-dispose it as {QUESTION_DISPOSITION_ESCALATED!r} with their answer "
                 "(only the user's answer closes it)"]
     expected = BINDING_CONDITIONS_YES if order.binding_conditions else BINDING_CONDITIONS_NONE
@@ -3079,34 +3081,35 @@ def agreed_before_migration(state: SessionState, digest: str) -> bool:
             and agreed.understanding_sha256 == digest)
 
 
-def _section(lines: list[str], start: int, starts: list[int]) -> list[str]:
-    """The lines from the marker at `start` up to the next marker line in `starts` (or the end)."""
+def _section_bounds(lines: list[str], start: int, starts: list[int]) -> tuple[int, int]:
+    """The line range after the marker at `start`, up to the next marker line in `starts` (or the end)."""
     later = [i for i in starts if i > start]
-    return lines[start + 1:min(later) if later else len(lines)]
+    return start + 1, min(later) if later else len(lines)
 
 
 def _sides_placement_problems(order, lines: list[str], at: dict[str, int]) -> list[str]:
     """Where each side's content sits: the customer section is not empty and names every
-    acceptance check of the customer side; the executor section carries every `[R1]` / `[P1]` /
-    `[K1]` anchor of the order, and no anchor sits in the customer or the cost section."""
+    acceptance check and binding condition of the customer side (the user agrees them there);
+    the executor section carries every `[R1]` / `[P1]` / `[K1]` anchor of the order, and no
+    anchor sits anywhere else — before the customer marker, in the customer or in the cost section."""
     starts = sorted(i for i in at.values() if i >= 0)
-    customer = _section(lines, at["customer"], starts)
-    executor = _section(lines, at["executor"], starts)
-    cost = _section(lines, at["cost"], starts) if at["cost"] >= 0 else []
+    first, end = _section_bounds(lines, at["customer"], starts)
+    customer = lines[first:end]
+    executor_first, executor_end = _section_bounds(lines, at["executor"], starts)
+    executor = lines[executor_first:executor_end]
     problems = []
     if not any(customer):
         problems.append("the customer section is empty")
-    unnamed = [c.id for c in order.customer_side.checks
-               if not any(names_check(line, c.id) for line in customer)]
-    if unnamed:
-        problems.append("the customer section does not name its acceptance check(s): " + ", ".join(unnamed))
-    misplaced = order_anchor_ids("\n".join(customer + cost))
+    for what, ids in (("acceptance check(s)", [c.id for c in order.customer_side.checks]),
+                      ("binding condition(s)", [b.id for b in order.binding_conditions])):
+        unnamed = [i for i in ids if not any(names_check(line, i) for line in customer)]
+        if unnamed:
+            problems.append(f"the customer section does not name its {what}: " + ", ".join(unnamed))
+    misplaced = order_anchor_ids("\n".join(lines[:executor_first] + lines[executor_end:]))
     if misplaced:
         problems.append("the executor side's anchors sit outside the executor section: "
                         + ", ".join(sorted(misplaced)))
-    expected = {item.id for items in (order.requirements, order.proposals, order.constraints)
-                for item in items}
-    absent = expected - order_anchor_ids("\n".join(executor))
+    absent = expected_order_anchor_ids(order) - order_anchor_ids("\n".join(executor))
     if absent:
         problems.append("the executor section does not carry the anchor(s): " + ", ".join(sorted(absent)))
     return problems
@@ -3123,10 +3126,12 @@ def _planning_budget_problems(state: SessionState, doc, lines: list[str], cost_a
     problems = []
     agreement = state.order_agreement
     bound = agreement.planning_budget if agreement is not None else None
-    if (bound is not None and budget is not None and agreement.understanding_sha256 == digest
-            and (bound.get("active_minutes"), bound.get("usd")) != (budget.active_minutes, budget.usd)):
-        problems.append("the draft's planning budget differs from the one agreed for this very "
-                        "understanding: restore it, or change the understanding and agree it anew")
+    if bound is not None and agreement.understanding_sha256 == digest:
+        shown_budget = (budget.active_minutes, budget.usd) if budget is not None else None
+        if shown_budget != (bound.get("active_minutes"), bound.get("usd")):
+            problems.append("the draft's planning budget is missing or differs from the one agreed for "
+                            "this very understanding: restore it, or change the understanding and "
+                            "agree it anew")
     if cost_at < 0:
         return problems + ["the rendering carries no planning-cost section beside the order"]
     shown = (budget.active_minutes, budget.usd) if budget is not None else (0, 0)

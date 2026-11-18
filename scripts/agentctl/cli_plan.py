@@ -42,6 +42,7 @@ from .plan import (
     load_order_draft,
     load_plan,
     load_plan_with_digest,
+    expected_order_anchor_ids,
     order_anchor_ids,
     understanding_digest,
     plan_has_any_grants,
@@ -314,9 +315,7 @@ def _order_anchor_problems(doc: PlanDoc, text: str) -> tuple[list[str], list[str
     and no anchor may name anything else, so the user is shown exactly what they are
     asked to agree. An anchor is exactly a match of `\\[[RPK]\\d+\\]`: other bracketed
     text and the text of a markdown link such as `[docs](https://…)` are not anchors."""
-    order = doc.meta.order
-    expected = {item.id for items in (order.requirements, order.proposals, order.constraints)
-                for item in items}
+    expected = expected_order_anchor_ids(doc.meta.order)
     found = order_anchor_ids(text)
     return sorted(expected - found), sorted(found - expected)
 

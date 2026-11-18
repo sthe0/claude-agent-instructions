@@ -2658,6 +2658,12 @@ def order_anchor_ids(text: str) -> set[str]:
     return set(_ORDER_ANCHOR_RE.findall(text))
 
 
+def expected_order_anchor_ids(order) -> set[str]:
+    """The anchor ids an order's rendering must show: every requirement, proposal and constraint."""
+    return {item.id for items in (order.requirements, order.proposals, order.constraints)
+            for item in items}
+
+
 def names_check(section: str, check_id: str) -> bool:
     """Whether `section` names the acceptance check `check_id` as a whole token."""
     return re.search(rf"(?<![\w-]){re.escape(check_id)}(?![\w-])", section) is not None
