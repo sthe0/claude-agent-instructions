@@ -13,7 +13,7 @@ Opt out with `-n 0`, `-p no:xdist`, or `--dist no`; set the count with
 
 Every parallel run, auto or explicit `-n`, first takes worker slots from the machine-wide
 limiter (scripts/lib/test_slots.py) and runs with as many workers as it holds, so an explicit
-`-n 12` is capped to `test-slots-per-run`. A run inside one that already holds slots (the
+`-n` above `test-slots-per-run` is capped to it. A run inside one that already holds slots (the
 suite gate passes `CORE_TEST_SLOTS_HELD`; a nested pytest has a holding ancestor) takes none.
 Serial runs take no slot.
 """

@@ -296,7 +296,7 @@ def test_the_slot_dir_must_be_a_directory_of_this_user(tmp_path, monkeypatch):
 def test_the_config_rows_equal_the_code_defaults(monkeypatch):
     monkeypatch.delenv(test_slots.DIR_ENV, raising=False)
     configured = test_slots.configured()
-    assert (configured.total, configured.per_run) == (test_slots.DEFAULT_TOTAL, test_slots.DEFAULT_PER_RUN) == (8, 4)
+    assert (configured.total, configured.per_run) == (test_slots.DEFAULT_TOTAL, test_slots.DEFAULT_PER_RUN) == (12, 12)
     assert configured.directory == Path(f"/tmp/core-test-slots-{os.getuid()}")
 
 
@@ -304,7 +304,7 @@ def test_the_dir_override_and_bad_rows(tmp_path):
     config = tmp_path / "config.md"
     config.write_text("| `test-slots-total` | `x` |\n| `test-slots-per-run` | `2` |\n"
                       "| `test-slots-dir` | `/tmp/s-<uid>` |\n", encoding="utf-8")
-    assert test_slots.configured(config, env={}) == test_slots.Limits(8, 2, Path(f"/tmp/s-{os.getuid()}"))
+    assert test_slots.configured(config, env={}) == test_slots.Limits(test_slots.DEFAULT_TOTAL, 2, Path(f"/tmp/s-{os.getuid()}"))
     assert test_slots.configured(config, env={test_slots.DIR_ENV: str(tmp_path)}).directory == tmp_path
 
 
@@ -327,12 +327,13 @@ class ExplicitConfig:
         self.cleanups.append(fn)
 
 
-def test_an_explicit_n_12_runs_with_the_per_run_share(slot_dir, monkeypatch):
+def test_an_explicit_n_above_the_share_runs_with_the_per_run_share(slot_dir, monkeypatch):
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
-    config = ExplicitConfig(12)
+    share = test_slots.DEFAULT_PER_RUN
+    config = ExplicitConfig(share + 4)
     _xdist_auto.pytest_configure(config)
-    assert config.option.numprocesses == 4 and config.option.tx == ["popen"] * 4
-    assert len(test_slots.held(slot_dir)) == 4 and os.environ[test_slots.HELD_ENV] == "4"
+    assert config.option.numprocesses == share and config.option.tx == ["popen"] * share
+    assert len(test_slots.held(slot_dir)) == share and os.environ[test_slots.HELD_ENV] == str(share)
     for cleanup in config.cleanups:
         cleanup()
     assert test_slots.held(slot_dir) == [] and test_slots.HELD_ENV not in os.environ
