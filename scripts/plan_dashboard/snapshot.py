@@ -780,8 +780,9 @@ def children_covered(covers, root, found: dict) -> bool:
 
 def keep_listing(key: tuple, version: tuple, covers, found: dict, kind: str) -> None:
     """Keep a pass of the event path that read ``version`` of its directory before it, for as long as nothing
-    moves it: the directory and every file in it are covered, so a change reaches the view as a mark, and no
-    file was unsettled."""
+    moves it: the directory and every file in it are covered, so a change reaches the view as a mark, no
+    file was unsettled, and the view holds a listing of the directory (a directory that could not be listed
+    has none, and nothing marks it once it exists)."""
     root = key[1]
     if covers is not None and not (covers(root) and children_covered(covers, root, found)):
         return
@@ -789,7 +790,7 @@ def keep_listing(key: tuple, version: tuple, covers, found: dict, kind: str) -> 
         return
     kept = KeptListing(version, covers, copy_listing(found), OBSERVED.capture(kind))
     with KEPT._lock:
-        if trust_holds(KEPT, covers):
+        if trust_holds(KEPT, covers) and root in KEPT.listings:
             LISTINGS[key] = kept
 
 

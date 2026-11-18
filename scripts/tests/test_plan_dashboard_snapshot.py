@@ -1727,6 +1727,14 @@ def test_a_reused_listing_replays_its_observation(listing):
     assert store.OBSERVED.capture("state") == recorded
 
 
+def test_a_directory_missing_at_the_first_listing_is_listed_once_it_exists(listing):
+    later = listing.root.parent / "later"
+    assert store.listed("state", later, ".json") == {}
+    later.mkdir()
+    (later / "c.json").write_text("{}", encoding="utf-8")
+    assert set(store.listed("state", later, ".json")) == {"c"}
+
+
 def test_unsettled_entries_are_not_reused(listing, monkeypatch):
     start = time.time_ns()
     clock, real_marker = [start], store.directory_marker
