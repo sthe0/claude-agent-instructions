@@ -2340,7 +2340,7 @@ class Order:
 @dataclass
 class PlanFrame:
     """A snapshot of the parent execution context pushed onto plan_stack when a
-    service sub-plan starts. Restored in full on pop so the parent resumes exactly
+    service plan starts. Restored in full on pop so the parent resumes exactly
     where it left off. `originating_stage` is the parent stage whose missing element
     the sub-plan supplies; it is marked PASSED on successful pop."""
     plan_path: str | None
@@ -2368,7 +2368,7 @@ class PlanFrame:
     effort_fires: list[dict]
     effort_spend_seen: dict
     # Review-round custody (schema 30). The counter and its counted-version marker belong
-    # to the plan under review, so a service sub-plan neither spends the parent's budget
+    # to the plan under review, so a service plan neither spends the parent's budget
     # nor inherits it: cmd_push_subplan snapshots them here and zeroes the live pair,
     # cmd_pop_subplan restores them. This is why the counter's monotonicity invariant is
     # scoped to one plan-stack level — a pop restoring the parent's smaller count is
@@ -2377,7 +2377,7 @@ class PlanFrame:
     plan_review_rounds: int = 0
     plan_review_counted_digest: str = ""
     # Code-review round custody (item A / GitHub issue #96) — mirrors plan_review_rounds
-    # above: the service sub-plan's own code-review rounds are a separate budget from the
+    # above: the service plan's own code-review rounds are a separate budget from the
     # parent's, so cmd_push_subplan snapshots and zeroes, cmd_pop_subplan restores.
     code_review_rounds: int = 0
     # The parent plan's [meta].landing_waiver — plan-level like delivery_worktree, so a
@@ -2895,7 +2895,7 @@ class SessionState:
     # cls(**data) round-trips them untouched; the framework lives in plugins.py.
     plugins: dict[str, dict] = field(default_factory=dict)
     plugins_archive: dict[str, dict] = field(default_factory=dict)
-    # Service sub-plan frame stack (schema 9): each push-subplan appends a PlanFrame
+    # Service plan frame stack (schema 9): each push-subplan appends a PlanFrame
     # snapshot of the parent; pop-subplan restores it. Empty list is byte-identical
     # to pre-schema-9 behaviour — legacy states load with [].
     plan_stack: list[PlanFrame] = field(default_factory=list)

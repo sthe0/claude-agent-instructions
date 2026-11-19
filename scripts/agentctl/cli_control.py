@@ -266,7 +266,7 @@ def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Di
 
 
 def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Start a service sub-plan: snapshot the parent into plan_stack, then reset
+    """Start a service plan: snapshot the parent into plan_stack, then reset
     the live state to a fresh child CLASSIFIED cycle. The child runs its normal
     classify->...->resolve spine; pop-subplan restores the parent on resolution."""
     state = _require(store, args.session)
@@ -419,7 +419,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
 
 
 def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Restore the parent after a service sub-plan resolves. Requires node=RESOLVED;
+    """Restore the parent after a service plan resolves. Requires node=RESOLVED;
     the RESOLVED-frm structural guarantee enforces 'no auto-pop across an unresolved
     child' — check_invariants already mandates resolution.passed at RESOLVED."""
     state = _require(store, args.session)
@@ -818,7 +818,7 @@ def register(sub, add):
                     help="threaded to resolve (see resolve --resolution-ask-unverifiable)")
 
     sp = add("push-subplan"); sp.add_argument("--session", required=True)
-    sp.add_argument("--plan", required=True, help="path to the child service sub-plan TOML")
+    sp.add_argument("--plan", required=True, help="path to the child service plan TOML")
     sp.add_argument("--task", default=None, help="task_id for the child (defaults to sub:<plan-stem>)")
     sp.add_argument("--originating-stage", dest="originating_stage", type=int, default=None,
                     help="parent stage whose missing element the sub-plan supplies "

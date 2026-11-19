@@ -79,7 +79,7 @@ counted twice. The other three accumulator axes (`plan_review_rounds`,
 cross-session visibility but are not, in this stage, consulted by any live gate.
 
 SUB-PLAN CUSTODY. `cmd_push_subplan` resets `state.stages` and re-runs the full
-classify -> ... -> approve spine for a service sub-plan, so a naive second `arm()` would
+classify -> ... -> approve spine for a service plan, so a naive second `arm()` would
 compare the PARENT's whole accumulated actual against the CHILD's tiny estimate — a
 spurious fire on the sub-plan's first command. The fix lives at FIVE call-site seams
 OUTSIDE this module: `cmd_push_subplan`'s reset list, the `PlanFrame` dataclass,
@@ -96,7 +96,7 @@ about. Push snapshots all five effort fields into the frame and resets them
 (estimate and baseline to `None`, fires to `[]`, `effort_spend_seen` to `{}`,
 `effort_actuals` to a fresh zero vector); pop restores the parent's five fields and ADDS
 the child's `effort_actuals` into the restored parent's, because push zeroed it so the
-child's vector is pure child consumption — effort spent inside a service sub-plan is
+child's vector is pure child consumption — effort spent inside a service plan is
 effort spent on the parent's task. `user_prompt_count` lives outside `effort_actuals` and
 is deliberately not zeroed by push.
 
@@ -978,7 +978,7 @@ def merge_actuals(parent: dict, child: dict) -> dict:
     """Add a popped sub-plan's accumulated actuals onto the restored parent's (SUB-PLAN
     CUSTODY, module docstring). Used ONLY by `cmd_pop_subplan`: push zeroed the child's
     `effort_actuals` to a fresh vector, so everything the child accumulated is pure child
-    consumption, and effort spent inside a service sub-plan is effort spent on the
+    consumption, and effort spent inside a service plan is effort spent on the
     parent's task. The other four custody fields are restored straight from the frame —
     this is the one field pop adds instead of overwriting."""
     return {
