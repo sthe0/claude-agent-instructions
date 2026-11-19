@@ -112,24 +112,50 @@ def parse_bands() -> list[int]:
         return DEFAULT_BANDS
 
 
+# The transcript is read backwards in blocks of this size. A forward read of a
+# whole 800 MB transcript took 7.2 s, and the hook's registered timeout is 10 s.
+USAGE_SCAN_BLOCK_BYTES = 1 << 20
+# A line containing this text may carry a usage object; other lines are not parsed.
+_USAGE_MARKER = b'"usage"'
+
+
+def _usage_of(line: bytes) -> dict | None:
+    if _USAGE_MARKER not in line:
+        return None
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    usage = (obj.get("message") or {}).get("usage")
+    return usage if isinstance(usage, dict) else None
+
+
+def _last_usage(transcript_path: str, block_size: int = USAGE_SCAN_BLOCK_BYTES) -> dict | None:
+    """Usage of the last line in file order that has one, read from the end."""
+    with open(transcript_path, "rb") as fh:
+        pos = fh.seek(0, os.SEEK_END)
+        carry = b""  # the head of a line whose beginning lies in an earlier block
+        while pos > 0:
+            step = min(block_size, pos)
+            pos -= step
+            fh.seek(pos)
+            lines = (fh.read(step) + carry).split(b"\n")
+            carry = lines.pop(0) if pos > 0 else b""
+            for line in reversed(lines):
+                usage = _usage_of(line.strip())
+                if usage is not None:
+                    return usage
+    return None
+
+
 def live_context_tokens(transcript_path: str) -> int | None:
     """Latest assistant-turn usage = current context size, or None."""
     if not transcript_path or not os.path.isfile(transcript_path):
         return None
-    last = None
     try:
-        with open(transcript_path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                usage = (obj.get("message") or {}).get("usage")
-                if isinstance(usage, dict):
-                    last = usage
+        last = _last_usage(transcript_path)
     except OSError:
         return None
     if not last:
