@@ -359,6 +359,7 @@ def test_machine_table_overrides_a_default_row_and_adds_its_own(planted: Planted
 
 def test_a_row_above_the_root_does_not_name_entries_below_it(planted: Planted) -> None:
     planted.blob("below", 2 * MIB)
+    planted.blob("unnamed", 2 * MIB)
     planted.names.write_text(
         f'[[entry]]\npath = "{planted.root.parent}"\nlabel = "ancestor"\nkind = "os"\n\n'
         f'[[entry]]\npath = "{planted.root}/below"\nlabel = "below thing"\nkind = "cache"\n')
