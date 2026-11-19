@@ -331,6 +331,8 @@ def begin_cycle(app: "DashboardApp", cycle: int, mode: str, refresh: bool) -> No
         app.generations[cycle] = snapshot_store.KEPT.generation
         app.generations.pop(cycle - snapshot_store.ReuseCensus.KEEP, None)
         return
+    app.generations[cycle] = snapshot_store.REUSED.begin_event_cycle()
+    app.generations.pop(cycle - snapshot_store.ReuseCensus.KEEP, None)
     found = watch.begin_cycle(app.watcher, snapshot_store.KEPT, stamp)
     if watch.needs_sweep(found):
         start_full_check(app)
@@ -442,7 +444,7 @@ def cycle_cpu_ns() -> int:
 
 
 def reused_readers(app: "DashboardApp", cycle: int, kinds) -> list[str]:
-    """The readers among ``kinds`` that served a kept result while the stat-path ``cycle`` was open."""
+    """The readers among ``kinds`` that served a kept result or kept entries while ``cycle`` was open."""
     generation = app.generations.get(cycle)
     return [] if generation is None else snapshot_store.REUSED.names(generation, kinds)
 

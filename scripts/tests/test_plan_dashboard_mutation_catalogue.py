@@ -56,11 +56,14 @@ SNAPSHOT_NAMES = (
     "listing-reuse-ignores-mark", "listing-reuse-ignores-relist", "listing-reuse-kept-after-distrust",
     "listing-version-after-pass", "listing-reuse-root-only-covered", "listing-reuse-shared-result",
     "listing-reuse-no-replay", "listing-reuse-despite-unsettled", "binding-event-reuse-off",
-    "binding-event-reuse-ignores-mark")
+    "binding-event-reuse-ignores-mark", "mark-log-drops-names", "mark-log-survives-trust-change",
+    "binding-entry-reuse-off", "binding-entry-keeps-vanished", "binding-entry-reuse-despite-unsettled",
+    "transcript-event-reuse-off", "transcript-event-reuse-ignores-subdirectory", "event-reuse-census-off",
+    "binding-read-shared-result", "event-cycle-census-unregistered")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
                         "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
                         "startup-applied-last-read-only", "startup-applied-at-check-end",
-                        "startup-applied-needs-old-rows")
+                        "startup-applied-needs-old-rows", "event-cycle-census-unregistered")
 SNAPSHOT_STDLIB_NAMES = tuple(name for name in SNAPSHOT_NAMES if name not in SNAPSHOT_PILOT_NAMES)
 WATCH_TESTS = TESTS / "test_plan_dashboard_watch.py"
 WATCH_NAMES = (
@@ -132,6 +135,7 @@ def pilot_interpreter_has_textual() -> bool:
 PILOT_RED_TEST = {
     "child-warm-piles-up": "test_a_running_child_index_warm_up_is_not_restarted_and_is_made_up_once",
     "cycle-cpu-from-wall": "test_cycle_events_carry_process_cpu_time",
+    "event-cycle-census-unregistered": "test_an_event_cycle_registers_its_census_and_names_the_reused_readers",
     "held-redraw-waits-for-next-tick": "test_two_redraws_are_never_less_than_half_a_second_apart",
     "light-tick-ignores-pending-event": "test_the_light_tick_yields_to_a_pending_event_cycle",
     "light-tick-owns-redraw": "test_a_tmux_change_found_by_the_light_tick_is_applied_by_the_next_ticks_cycle",

@@ -19,7 +19,10 @@ SNAPSHOT_MUTATIONS is the snapshot's and the identity-keyed caches' family, kill
 (the newest refused table's read is never started). ``row-confirmed-skipped`` (no row is named),
 ``startup-applied-last-read-only`` (the sources of earlier reads are dropped), ``startup-applied-at-check-end``
 (named once the check has ended) and ``startup-applied-needs-old-rows`` (named only when old rows are shown)
-are killed by the pilot file too. ``same-named-transcript-dropped`` (a task's
+are killed by the pilot file too, as is ``event-cycle-census-unregistered`` (an event cycle's census generation is
+dropped). The event path's per-entry reuse (``mark-log-*``, ``binding-entry-*``, ``transcript-event-reuse-*``,
+``binding-read-shared-result``, ``event-reuse-census-off``) is killed by the snapshot tests, and
+``state-entry-*`` and ``child-entry-*`` by the model tests. ``same-named-transcript-dropped`` (a task's
 other transcripts are not recorded) and ``unrecorded-source-stat-skipped`` (the live check stats no unrecorded
 source in a directory whose marker is unchanged) are killed by the snapshot tests.
 
@@ -1231,7 +1234,59 @@ def _children_covered_by_the_root(original):
     return lambda covers, root, found: covers(root)
 
 
+def _marks_logged_without_their_names(original):
+    return lambda key: (os.path.split(key)[0], "")
+
+
+def _log_epoch_kept(original):
+    return lambda epoch: epoch
+
+
+def _binding_kept_though_unsettled(original):
+    return lambda record, name, marked: name not in marked and record is not None
+
+
+def _vanished_entries_kept(original):
+    return lambda records, names: records
+
+
+def _no_project_is_marked(original):
+    def mutated(entries, trusting, covers, roots):
+        marked = original(entries, trusting, covers, roots)
+        return None if marked is None else set()
+    return mutated
+
+
+def _census_of_the_stat_path_only(original):
+    return importlib.import_module(SNAPSHOT).stat_cycle_generation
+
+
+def _binding_result_shared(original):
+    return lambda result: result
+
+
+def _child_token_read_after_the_pass(original):
+    return lambda before: importlib.import_module(SNAPSHOT).KEPT.mark_token()
+
+
+def _event_cycle_not_registered(original):
+    def mutated(app, cycle, mode, refresh):
+        original(app, cycle, mode, refresh)
+        app.generations.pop(cycle, None)
+    return mutated
+
+
 SNAPSHOT_MUTATIONS = {
+    "mark-log-drops-names": (SNAPSHOT, "mark_log_entry", _marks_logged_without_their_names),
+    "mark-log-survives-trust-change": (SNAPSHOT, "next_log_epoch", _log_epoch_kept),
+    "binding-entry-reuse-off": (SNAPSHOT, "binding_entry_reusable", _always(False)),
+    "binding-entry-keeps-vanished": (SNAPSHOT, "binding_survivors", _vanished_entries_kept),
+    "binding-entry-reuse-despite-unsettled": (SNAPSHOT, "binding_entry_reusable", _binding_kept_though_unsettled),
+    "transcript-event-reuse-off": (SNAPSHOT, "transcript_project_reusable", _always(False)),
+    "transcript-event-reuse-ignores-subdirectory": (SNAPSHOT, "marked_projects", _no_project_is_marked),
+    "event-reuse-census-off": (SNAPSHOT, "census_generation", _census_of_the_stat_path_only),
+    "binding-read-shared-result": (SNAPSHOT, "frozen_binding", _binding_result_shared),
+    "event-cycle-census-unregistered": (TUI_APP, "begin_cycle", _event_cycle_not_registered),
     "kept-covers-under-lock": (SNAPSHOT, "stat_coverage", _coverage_decided_under_the_lock),
     "kept-scandir-covers-under-lock": (SNAPSHOT, "scandir_coverage", _coverage_decided_under_the_lock),
     "kept-covers-identity-unchecked": (SNAPSHOT, "trust_holds", _trust_checked_without_the_cover_test),
@@ -1292,6 +1347,14 @@ SNAPSHOT_MUTATIONS = {
     "snapshot-records-every-source": (SNAPSHOT, "snapshot_sources", _records_every_source),
     "snapshot-directory-marker-ignored": (SNAPSHOT, "_unchanged", _marker_taken_as_recorded),
 }
+
+MUTATIONS.update({
+    "state-entry-reuse-off": (MODEL, "state_entry_reusable", _always(False)),
+    "state-entry-reuse-no-replay": (MODEL, "replay_state_entries", _always(None)),
+    "child-entry-reuse-off": (MODEL, "child_entry_reusable", _always(False)),
+    "child-entry-token-after-pass": (MODEL, "child_entries_token", _child_token_read_after_the_pass),
+    "child-entry-shared-result": (MODEL, "fresh_link", lambda _original: lambda link: link),
+})
 
 
 WATCH = "plan_dashboard.watch"

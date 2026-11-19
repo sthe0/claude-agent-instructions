@@ -143,7 +143,11 @@ def spawn_cost_of(root):
 
 
 def binding_index(root):
-    return store.harness_index()
+    return as_lists(store.harness_index())
+
+
+def as_lists(index) -> dict:
+    return {key: list(values) for key, values in index.items()}
 
 
 def transcript_path(root) -> Path:
@@ -478,8 +482,8 @@ def test_a_changed_binding_file_is_the_only_one_read_on_the_next_cycle(root, mon
     monkeypatch.setattr(store, "_driven", lambda path: (reads.append(Path(path).name), real(path))[1])
     rewrite(bindings_dir(root) / "bulk-3.json", binding_text(BETA), mtime_ns=PAST_NS)
     index, driven = store.BINDINGS.read()
-    assert reads == ["bulk-3.json"] and driven["bulk-3"] == [BETA]
-    assert index[BETA] == ["bulk-3"] and "bulk-3" not in index[ALPHA]
+    assert reads == ["bulk-3.json"] and list(driven["bulk-3"]) == [BETA]
+    assert list(index[BETA]) == ["bulk-3"] and "bulk-3" not in index[ALPHA]
 
 
 # --- a start from the snapshot reads only what changed since --------------------------------------------
@@ -1793,8 +1797,136 @@ def test_a_bindings_directory_holding_unwatched_files_is_not_reread_on_the_event
 
 
 def test_a_marked_binding_is_seen_by_the_next_read(bound):
-    assert store.BINDINGS.read()[0] == {ALPHA: [HARNESS]}
+    assert as_lists(store.BINDINGS.read()[0]) == {ALPHA: [HARNESS]}
     path = bound / f"{HARNESS}.json"
     path.write_text(json.dumps({"driven": [{"session": BETA, "ts": "2026-10-01T00:00:00+00:00"}]}), encoding="utf-8")
     store.KEPT.mark([path])
-    assert store.BINDINGS.read()[0] == {BETA: [HARNESS]}
+    assert as_lists(store.BINDINGS.read()[0]) == {BETA: [HARNESS]}
+
+
+# --- the event path keeps one record per entry and rebuilds only the entries a mark names -------------------
+
+def test_marked_since_names_the_entries_marked_after_the_token(listing):
+    store.KEPT.mark([listing.root / "a.json"])
+    token = store.KEPT.mark_token()
+    store.KEPT.mark([listing.root / "b.json"])
+    assert store.KEPT.marked_since(listing.root, token) == {"b.json"}
+    assert store.KEPT.marked_since(listing.root, store.KEPT.mark_token()) == set()
+
+
+def test_marked_since_is_none_after_a_trust_change(listing):
+    token = store.KEPT.mark_token()
+    store.KEPT.mark([listing.root / "a.json"])
+    store.KEPT.trust(Cover(listing.root.parent))
+    assert store.KEPT.marked_since(listing.root, token) is None
+
+
+def count_fetches(monkeypatch) -> list[str]:
+    """The paths ``IdentityCache.fetch`` is asked for from now on."""
+    fetched, real_fetch = [], store.IdentityCache.fetch
+
+    def counting(cache, *args, **kwargs):
+        fetched.append(str(args[0]))
+        return real_fetch(cache, *args, **kwargs)
+
+    monkeypatch.setattr(store.IdentityCache, "fetch", counting)
+    return fetched
+
+
+def bulk_bindings(directory: Path, count: int = 3) -> list[Path]:
+    paths = [directory / f"bulk-{number}.json" for number in range(count)]
+    for path in paths:
+        rewrite(path, binding_text(BETA), mtime_ns=PAST_NS)
+    return paths
+
+
+def both_reads(index_and_driven) -> tuple[dict, dict]:
+    index, driven = index_and_driven
+    return as_lists(index), as_lists(driven)
+
+
+def test_a_renamed_binding_rereads_only_that_entry_on_the_event_path(bound, monkeypatch):
+    path = bulk_bindings(bound)[1]
+    store.BINDINGS.read()
+    fetched = count_fetches(monkeypatch)
+    aside = bound / "bulk-1.tmp"
+    rewrite(aside, binding_text(ALPHA), mtime_ns=PAST_NS)
+    os.replace(aside, path)
+    store.KEPT.mark([aside, path], [bound])
+    read = both_reads(store.BINDINGS.read())
+    assert fetched == [str(path)]
+    assert read == both_reads(store.BindingScan().read())
+    assert read[1]["bulk-1"] == [ALPHA]
+
+
+def test_a_vanished_binding_is_dropped_by_the_next_read(bound):
+    gone = bulk_bindings(bound, 1)[0]
+    assert "bulk-0" in store.BINDINGS.read()[1]
+    gone.unlink()
+    store.KEPT.mark([gone], [bound])
+    index, driven = both_reads(store.BINDINGS.read())
+    assert "bulk-0" not in driven and "bulk-0" not in index.get(BETA, [])
+
+
+def test_an_unsettled_binding_is_reread_by_the_next_read(bound, monkeypatch):
+    fresh = bound / "fresh.json"
+    changed = time.time_ns() + FAR_FUTURE_NS
+    rewrite(fresh, binding_text(BETA), mtime_ns=changed)
+    clock = [changed + store.MTIME_STEP_NS - 1]
+    monkeypatch.setattr(store, "now_ns", lambda: clock[0])
+    store.BINDINGS.read()
+    clock[0] = changed + store.MTIME_STEP_NS
+    fetched = count_fetches(monkeypatch)
+    read = both_reads(store.BINDINGS.read())
+    assert fetched == [str(fresh)]
+    assert read[0] == {ALPHA: [HARNESS], BETA: ["fresh"]}
+
+
+def test_a_caller_mutating_a_binding_read_does_not_change_the_next_read(bound):
+    index, driven = store.BINDINGS.read()
+    before = both_reads((index, driven))
+    for edit in (lambda: index[ALPHA].append("x"), lambda: index.__setitem__("x", ()), lambda: driven.pop(HARNESS),
+                 lambda: driven[HARNESS].append("x")):
+        try:
+            edit()
+        except (TypeError, AttributeError):
+            pass
+    assert both_reads(store.BINDINGS.read()) == before
+
+
+def test_event_path_reuse_is_counted_in_the_cycle_census(bound):
+    store.BINDINGS.read()
+    token = store.REUSED.begin_event_cycle()
+    store.BINDINGS.read()
+    assert store.REUSED.names(token, ("binding",)) == ["binding"]
+
+
+@pytest.fixture
+def transcribed(root, tmp_path, monkeypatch):
+    """A trusting kept view over the fixture's transcripts: two project directories on a clock far past them."""
+    store.reset()
+    monkeypatch.setattr(store, "now_ns", lambda: time.time_ns() + FAR_FUTURE_NS)
+    other = root.transcripts_root / "other-project"
+    other.mkdir()
+    (other / "kept-1.jsonl").write_text("{}\n", encoding="utf-8")
+    store.KEPT.trust(Cover(tmp_path))
+    attention.transcript_index(root.transcripts_root)
+    yield SimpleNamespace(root=root, changed=transcript_path(root).parent, unchanged=other)
+    store.reset()
+
+
+def test_an_unchanged_transcript_subdirectory_is_not_rescanned_on_the_event_path(transcribed, monkeypatch):
+    fetched = count_fetches(monkeypatch)
+    (transcribed.changed / "new-1.jsonl").write_text("{}\n", encoding="utf-8")
+    move_directory_key(transcribed.changed)
+    store.KEPT.mark([transcribed.changed / "new-1.jsonl"], [transcribed.changed])
+    attention.transcript_index(transcribed.root.transcripts_root)
+    assert fetched == [str(transcribed.changed)]
+
+
+def test_a_new_transcript_is_seen_by_the_next_event_index(transcribed):
+    path = transcribed.changed / "new-1.jsonl"
+    path.write_text("{}\n", encoding="utf-8")
+    move_directory_key(transcribed.changed)
+    store.KEPT.mark([path], [transcribed.changed])
+    assert list(attention.transcript_index(transcribed.root.transcripts_root)["new-1"]) == [path]

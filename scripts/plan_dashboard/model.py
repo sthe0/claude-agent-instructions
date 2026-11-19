@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import socket
+import stat as stat_module
 import threading
 import time
 from pathlib import Path
@@ -43,6 +44,8 @@ _STATE_KEPT: dict = {}
 _CHILD_KEPT: dict = {}
 _STATE_EVENT: dict = {}
 _CHILD_EVENT: dict = {}
+_STATE_ENTRIES: dict = {}
+_CHILD_ENTRIES: dict = {}
 
 
 class UnknownSession(KeyError):
@@ -59,6 +62,8 @@ def clear_cache() -> None:
         _CHILD_KEPT.clear()
         _STATE_EVENT.clear()
         _CHILD_EVENT.clear()
+        _STATE_ENTRIES.clear()
+        _CHILD_ENTRIES.clear()
     snapshot.STATES.clear()
 
 
@@ -746,18 +751,84 @@ def state_event_reusable(kept, version, covers) -> bool:
     return snapshot.view_unchanged(kept, version, covers)
 
 
+def state_entry_reusable(record, name: str, marked: set) -> bool:
+    """Whether a kept state file's stat stands in for asking again: no mark names it since the pass that made
+    it, and it was settled and covered then."""
+    return name not in marked and snapshot.record_reusable(record)
+
+
+def state_survivors(records: dict, names) -> dict:
+    return snapshot.surviving_records(records, names)
+
+
+def replay_state_entries(records: dict, directory: dict | None) -> None:
+    """Feed ``OBSERVED`` what a full pass over the files of ``records`` would have: their identities and the
+    directory's marker."""
+    snapshot.OBSERVED.replay("state", (snapshot.observed_of(records), directory))
+
+
+def _state_value(path: str, st) -> tuple:
+    return path, st, dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc)
+
+
+def _state_entry_pass(root: Path, covers, entries, marked: set) -> dict:
+    """A pass over the kept records of ``entries``: the files ``marked`` since, new ones and ones whose record
+    cannot stand in are stat'ed again; the rest are not. Returns the records."""
+    read_ns = snapshot.now_ns()
+    marker = snapshot.directory_marker(root)
+    present = snapshot.present_entries(root, ".json")
+
+    def read_again(name: str, entry):
+        try:
+            st = entry.stat()
+        except OSError:
+            return None
+        if not stat_module.S_ISREG(st.st_mode):
+            return None
+        keepable = covers is None or bool(covers(entry.path))
+        return snapshot.identity_of(st), _state_value(entry.path, st), (entry.path, snapshot.settled(st, read_ns)), keepable
+
+    records, reused = snapshot.entry_pass(entries.records, present, marked, state_survivors, state_entry_reusable, read_again)
+    if reused:
+        snapshot.REUSED.note("state", entries)
+    if entries.records.keys() - present.keys():
+        snapshot.STATES.prune({observed[0] for _, _, observed, _ in records.values()})
+    directory = None if marker is None else {"path": str(root), "marker": marker, "taken_ns": read_ns}
+    replay_state_entries(records, directory)
+    return records
+
+
+def _state_mtimes(records: dict) -> dict:
+    return dict(sorted((name[: -len(".json")], record[1]) for name, record in records.items()))
+
+
 def _event_state_listing(root: Path) -> dict:
-    trusting, covers, version = snapshot.event_view(snapshot.KEPT.version_of, root)
+    """The event path's listing: the kept one while the directory's version is the one it was made under; else a
+    pass over the kept records, stat-ing again only the files a mark names and new or unsettled ones (a full
+    pass when no record can be built on). Each call gets a dict of its own."""
+    trusting, covers, version, token = snapshot.event_view(snapshot.KEPT.version_of, root)
     with CACHE_LOCK:
-        kept = _STATE_EVENT.get(str(root))
+        kept, entries = _STATE_EVENT.get(str(root)), _STATE_ENTRIES.get(str(root))
     if trusting and state_event_reusable(kept, version, covers):
         snapshot.replay_observation("state", kept.observed)
         snapshot.REUSED.note("state", kept)
         return dict(kept.value)
-    mtimes = _list_states(root)
-    kept = snapshot.keep_read(root, version, covers, None, lambda: dict(mtimes), ".json", "state") if trusting else None
+    marked = snapshot.entries_marked_since(entries, trusting, covers, None, root)
+    if marked is None:
+        mtimes = _list_states(root)
+        found = {stem: (path, st) for stem, (path, st, _) in mtimes.items()}
+        records = snapshot.listed_records("state", found, ".json", covers, lambda stem, path, st: mtimes[stem])
+        kept = snapshot.keep_read(root, version, covers, None, lambda: dict(mtimes), ".json", "state") if trusting else None
+    else:
+        records = _state_entry_pass(root, covers, entries, marked)
+        mtimes = _state_mtimes(records)
+        kept = None
+    entries = snapshot.keep_entries(root, token, covers, None, records) if trusting else None
+    if kept is None and entries is not None and all(map(snapshot.record_reusable, records.values())):
+        kept = snapshot.KeptRead(version, covers, None, dict(mtimes), snapshot.OBSERVED.capture("state"))
     with CACHE_LOCK:
         _STATE_EVENT[str(root)] = kept
+        _STATE_ENTRIES[str(root)] = entries
     return mtimes
 
 
@@ -890,17 +961,91 @@ def keep_child_index(state_root, version, covers, floor, index):
     return snapshot.keep_read(state_root, version, covers, floor, lambda: _copy_index(index), ".json")
 
 
-def _event_child_index(state_root, floor: float | None) -> dict[str, list[dict]]:
-    trusting, covers, version = snapshot.event_view(child_version, state_root)
+def child_entry_reusable(record, name: str, marked: set) -> bool:
+    """Whether a kept state file's link stands in for reading it again: no mark names it since the pass that
+    made it, and it was settled and covered then."""
+    return name not in marked and snapshot.record_reusable(record)
+
+
+def child_survivors(records: dict, names) -> dict:
+    return snapshot.surviving_records(records, names)
+
+
+def child_entries_token(before: tuple) -> tuple:
+    """The mark log's token the records of a child pass are kept under: the one read before the pass, so a mark
+    made during it shows at the next read."""
+    return before
+
+
+def fresh_link(link: dict) -> dict:
+    return dict(link)
+
+
+def keep_child_entries(state_root, token, covers, floor, records: dict):
+    return snapshot.keep_entries(state_root, child_entries_token(token), covers, floor, records)
+
+
+def _drop_children(state_root: Path, names) -> None:
+    """Drop the cached links of the state files ``names`` of ``state_root``."""
     with CACHE_LOCK:
-        kept = _CHILD_EVENT.get(str(state_root))
+        for name in names:
+            _CHILDREN.pop(state_root / name, None)
+
+
+def _child_entries(state_root, floor: float | None, covers, entries, marked: set | None) -> dict:
+    """The records of a child pass: for each state file its identity, its link (None for a file that links to
+    no parent or that the floor skips) and whether it was settled and covered. With ``marked`` None every file
+    is read again; else only the ones a mark names, new ones and ones whose record cannot stand in."""
+    root = Path(state_root)
+    present = snapshot.present_entries(state_root, ".json")
+
+    def read_again(name: str, entry):
+        try:
+            st = entry.stat()
+        except OSError:
+            return None
+        link, ok = _linked(Path(entry.path), st, floor, snapshot.now_ns())
+        return snapshot.identity_of(st), link, (entry.path, ok), covers is None or bool(covers(entry.path))
+
+    previous = {} if marked is None else entries.records
+    records, reused = snapshot.entry_pass(previous, present, marked or set(), child_survivors, child_entry_reusable, read_again)
+    if reused:
+        snapshot.REUSED.note("children", entries)
+    if marked is None:
+        _prune_children(root, {Path(entry.path) for entry in present.values()})
+    else:
+        _drop_children(root, previous.keys() - present.keys())
+    return records
+
+
+def _child_index_of(records: dict) -> dict[str, list[dict]]:
+    index: dict[str, list[dict]] = {}
+    for _, record in sorted(records.items()):
+        link = record[1]
+        if link is not None:
+            index.setdefault(link[0], []).append(fresh_link(link[1]))
+    return index
+
+
+def _event_child_index(state_root, floor: float | None) -> dict[str, list[dict]]:
+    """The event path's index: the kept one while the state root's version is the one it was made under; else
+    one made from the kept records of the files no mark names (a full pass when no record can be built on).
+    Each call gets an index of its own."""
+    trusting, covers, version, token = snapshot.event_view(child_version, state_root)
+    with CACHE_LOCK:
+        kept, entries = _CHILD_EVENT.get(str(state_root)), _CHILD_ENTRIES.get(str(state_root))
     if trusting and child_event_reusable(kept, version, covers, floor):
         snapshot.REUSED.note("children", kept)
         return _copy_index(kept.value)
-    index = _child_pass(state_root, floor)
-    kept = keep_child_index(state_root, version, covers, floor, index) if trusting else None
+    marked = snapshot.entries_marked_since(entries, trusting, covers, floor, state_root)
+    records = _child_entries(state_root, floor, covers, entries, marked)
+    index = _child_index_of(records)
+    entries = keep_child_entries(state_root, token, covers, floor, records) if trusting else None
+    kept = (keep_child_index(state_root, version, covers, floor, index)
+            if entries is not None and all(map(snapshot.record_reusable, records.values())) else None)
     with CACHE_LOCK:
         _CHILD_EVENT[str(state_root)] = kept
+        _CHILD_ENTRIES[str(state_root)] = entries
     return index
 
 
@@ -927,25 +1072,32 @@ def _child_pass(state_root, floor: float | None) -> dict[str, list[dict]]:
             st = snapshot.KEPT.stat(path)
         except OSError:
             continue
-        key = snapshot.identity_of(st)
-        with CACHE_LOCK:
-            cached = _CHILDREN.get(path)
-        if cached is not None and snapshot.same_identity("state", cached[0], key):
-            link = cached[1]
-        elif cached is None and floor is not None and st.st_mtime < floor:
-            continue
-        else:
-            snapshot.check_stop()
-            read_ns = snapshot.now_ns()
-            link = _child_link(path)
-            with CACHE_LOCK:
-                if snapshot.settled(st, read_ns):
-                    _CHILDREN[path] = (key, link)
-                else:
-                    _CHILDREN.pop(path, None)
+        link, _ = _linked(path, st, floor, snapshot.now_ns())
         if link is not None:
             index.setdefault(link[0], []).append(dict(link[1]))
     return index
+
+
+def _linked(path: Path, st, floor: float | None, seen_ns: int) -> tuple[tuple[str, dict] | None, bool]:
+    """``(link, settled)`` of the state file at ``path``: its cached link while its identity is the cached one,
+    None for an uncached file older than ``floor``, else read, and cached once settled."""
+    key = snapshot.identity_of(st)
+    with CACHE_LOCK:
+        cached = _CHILDREN.get(path)
+    if cached is not None and snapshot.same_identity("state", cached[0], key):
+        return cached[1], True
+    if cached is None and floor is not None and st.st_mtime < floor:
+        return None, snapshot.settled(st, seen_ns)
+    snapshot.check_stop()
+    read_ns = snapshot.now_ns()
+    link = _child_link(path)
+    ok = snapshot.settled(st, read_ns)
+    with CACHE_LOCK:
+        if ok:
+            _CHILDREN[path] = (key, link)
+        else:
+            _CHILDREN.pop(path, None)
+    return link, ok
 
 
 def _co_driven(root: Path, harness_sessions, session_id: str) -> list[str]:

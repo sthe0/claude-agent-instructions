@@ -364,7 +364,7 @@ class KeptResult:
 
     def __init__(self, key: tuple, held, value, observed=None):
         self.key, self.held, self.value, self.observed = key, held, value, observed
-        self.generation = stat_cycle_generation()
+        self.generation = census_generation()
 
 
 def replay_observation(kind: str, observed) -> None:
@@ -372,31 +372,60 @@ def replay_observation(kind: str, observed) -> None:
     OBSERVED.replay(kind, observed)
 
 
+EVENT_CYCLE_BASE = 1 << 40
+
+
 class ReuseCensus:
-    """Which readers served, in each stat-path cycle (by ``KEPT.generation``), a result kept from an earlier
-    cycle. Only the last ``KEEP`` cycles are held; it is read for reporting and decides nothing."""
+    """Which readers served a result, or an entry, kept from an earlier cycle, in each stat-path cycle (by
+    ``KEPT.generation``) and in each event-path cycle (by the token ``begin_event_cycle`` gave it; the tokens
+    start at ``EVENT_CYCLE_BASE``, above every generation). Only the last ``KEEP`` of each are held; it is read
+    for reporting and decides nothing."""
 
     KEEP = 64
 
     def __init__(self):
         self._lock = threading.Lock()
         self._by_generation: dict[int, set[str]] = {}
+        self._by_event: dict[int, set[str]] = {}
+        self._events = 0
+        self._open: int | None = None
 
-    def note(self, kind: str, kept: KeptResult) -> None:
-        generation = stat_cycle_generation()
+    def begin_event_cycle(self) -> int:
+        """The token of the event-path cycle that starts now; reads made until the next call are noted under it."""
+        with self._lock:
+            self._events += 1
+            self._open = EVENT_CYCLE_BASE + self._events
+            return self._open
+
+    def open_event(self) -> int | None:
+        with self._lock:
+            return self._open
+
+    def _held(self, generation: int) -> dict[int, set[str]]:
+        return self._by_event if generation >= EVENT_CYCLE_BASE else self._by_generation
+
+    def note(self, kind: str, kept) -> None:
+        generation = census_generation()
         if generation is None or kept.generation == generation:
             return
         with self._lock:
-            self._by_generation.setdefault(generation, set()).add(kind)
-            for old in sorted(self._by_generation)[:-self.KEEP]:
-                del self._by_generation[old]
+            held = self._held(generation)
+            held.setdefault(generation, set()).add(kind)
+            for old in sorted(held)[:-self.KEEP]:
+                del held[old]
 
     def names(self, generation: int, kinds) -> list[str]:
         with self._lock:
-            return sorted(self._by_generation.get(generation, set()) & set(kinds))
+            return sorted(self._held(generation).get(generation, set()) & set(kinds))
 
 
 REUSED = ReuseCensus()
+
+
+def census_generation() -> int | None:
+    """The cycle a reuse is counted in: the stat-path cycle now open, else the event-path cycle last begun."""
+    generation = stat_cycle_generation()
+    return generation if generation is not None else REUSED.open_event()
 
 
 def read_directory(root) -> list[tuple[str, bool]]:
@@ -435,12 +464,17 @@ def new_cycle_memo() -> CycleMemo | None:
 
 
 class KeptEntry:
-    """A directory entry answered from the kept view: ``name``, ``path``, ``is_dir`` and ``stat``."""
+    """A directory entry answered from the kept view: ``name``, ``path`` (joined when first asked for),
+    ``is_dir`` and ``stat``."""
 
-    __slots__ = ("name", "path", "_is_dir", "_view")
+    __slots__ = ("name", "_root", "_is_dir", "_view")
 
-    def __init__(self, name: str, path: str, is_dir: bool, view: "KeptView"):
-        self.name, self.path, self._is_dir, self._view = name, path, is_dir, view
+    def __init__(self, name: str, root: str, is_dir: bool, view: "KeptView"):
+        self.name, self._root, self._is_dir, self._view = name, root, is_dir, view
+
+    @property
+    def path(self) -> str:
+        return os.path.join(self._root, self.name)
 
     def is_dir(self, follow_symlinks: bool = True) -> bool:
         return self._is_dir
@@ -474,6 +508,20 @@ def next_epoch(epoch: int) -> int:
     return epoch + 1
 
 
+MARK_LOG_MAX = 8192
+
+
+def next_log_epoch(epoch: int) -> int:
+    """The epoch the mark log starts when the view is reset, trusts or distrusts, or the log overflows: a token
+    of an earlier one says nothing of the marks since."""
+    return epoch + 1
+
+
+def mark_log_entry(key: str) -> tuple[str, str]:
+    """``(directory, name)`` a mark of ``key`` is logged under."""
+    return os.path.split(key)
+
+
 def marked_directories(paths, directories) -> list[str]:
     """The directories whose names or entries a mark may have changed: the one holding each marked path and
     each marked directory."""
@@ -495,11 +543,13 @@ class KeptView:
     def __init__(self):
         self._lock = threading.RLock()
         self.epoch = 0
+        self.log_epoch = 0
         self.reset()
 
     def reset(self) -> None:
         with self._lock:
             self.epoch = next_epoch(self.epoch)
+            self._restart_log()
             self.versions: dict[str, int] = {}
             self.trusting = False
             self.covers = None
@@ -531,11 +581,55 @@ class KeptView:
     def trust(self, covers) -> None:
         with self._lock:
             self.covers, self.trusting = covers, True
+            self._restart_log()
 
     def distrust(self) -> None:
         with self._lock:
             self.trusting = False
             self.epoch = next_epoch(self.epoch)
+            self._restart_log()
+
+    def _restart_log(self) -> None:
+        self.log_epoch = next_log_epoch(self.log_epoch)
+        self.mark_log: dict[str, list[tuple[int, str]]] = {}
+        self.logged = 0
+
+    def mark_token(self) -> tuple[int, int]:
+        """What ``marked_since`` takes: the log's epoch and the running sequence of the marks, read together. A
+        reader takes it before its pass, so a mark made during the pass shows at its next read."""
+        with self._lock:
+            return self.log_epoch, self.marks
+
+    def marked_since(self, directory, token: tuple[int, int]) -> set[str] | None:
+        """The names marked in ``directory`` after ``token`` (a path in it, or a subdirectory of it that was
+        marked itself), or None when the token is of another epoch of the log: a trust change, a distrust, a
+        reset or an overflow, after which the log says nothing of what came before."""
+        epoch, seq = token
+        with self._lock:
+            if epoch != self.log_epoch:
+                return None
+            return {name for at, name in reversed(self.mark_log.get(str(directory), ())) if at > seq}
+
+    def marked_under(self, root, token: tuple[int, int]) -> set[str] | None:
+        """The names of the subdirectories of ``root`` that were marked, or in which a path was marked, after
+        ``token``, together with ``marked_since(root, token)``; None as there."""
+        epoch, seq = token
+        root = str(root)
+        with self._lock:
+            if epoch != self.log_epoch:
+                return None
+            names = {name for at, name in reversed(self.mark_log.get(root, ())) if at > seq}
+            for directory, entries in self.mark_log.items():
+                if entries[-1][0] > seq and os.path.dirname(directory) == root:
+                    names.add(os.path.basename(directory))
+            return names
+
+    def _log_mark(self, key: str) -> None:
+        directory, name = mark_log_entry(key)
+        self.mark_log.setdefault(directory, []).append((self.marks, name))
+        self.logged += 1
+        if self.logged > MARK_LOG_MAX:
+            self._restart_log()
 
     def answers_from_memory(self, judged: tuple) -> bool:
         """Under the lock: whether a ``(covers, covered)`` judgement still stands. A trust swapped in since it
@@ -562,6 +656,7 @@ class KeptView:
                 self.marks += 1
                 self.dirty[key] = self.marks
                 self.found.setdefault(key, by)
+                self._log_mark(key)
             for key in directories:
                 self.relist[key] = self.marks
             self._bump(marked_directories(paths, directories))
@@ -654,7 +749,7 @@ class KeptView:
                     self._bump(relisted_directories(key))
                 if self.relist.get(key) == seen:
                     self.relist.pop(key, None)
-        return [KeptEntry(name, os.path.join(key, name), is_dir, self) for name, is_dir in kept]
+        return [KeptEntry(name, key, is_dir, self) for name, is_dir in kept]
 
     def _list(self, key: str, by_directory_time: bool, memo: CycleMemo | None, generation: int):
         if memo is None or not by_directory_time:
@@ -750,7 +845,7 @@ class KeptListing:
 
     def __init__(self, version: tuple, covers, found: dict, observed):
         self.version, self.covers, self.found, self.observed = version, covers, found, observed
-        self.generation = stat_cycle_generation()
+        self.generation = census_generation()
 
 
 LISTINGS: dict[tuple, KeptListing] = {}
@@ -840,13 +935,106 @@ class KeptRead:
 
     def __init__(self, version: tuple, covers, held, value, observed):
         self.version, self.covers, self.held, self.value, self.observed = version, covers, held, value, observed
-        self.generation = stat_cycle_generation()
+        self.generation = census_generation()
 
 
-def event_view(version_of, directory) -> tuple[bool, object, tuple]:
-    """``(trusting, covers, version)`` of the kept view, read together under its lock before a reader's pass."""
+def event_view(version_of, directory) -> tuple[bool, object, tuple, tuple]:
+    """``(trusting, covers, version, token)`` of the kept view: the directory's version and the mark log's token,
+    read together under its lock before a reader's pass."""
     with KEPT._lock:
-        return KEPT.trusting, KEPT.covers, version_of(directory)
+        return KEPT.trusting, KEPT.covers, version_of(directory), KEPT.mark_token()
+
+
+class EntryKept:
+    """What one event-path pass of a reader made of each name in a directory: ``records`` is
+    ``{name: (identity, value, observed, covered)}`` with ``observed`` the ``(path, settled)`` the entry fed
+    ``OBSERVED``; the ``token`` of the mark log taken before the pass, the cover test the pass ran under and the
+    ``held`` condition it was made under."""
+
+    __slots__ = ("token", "covers", "held", "records", "generation")
+
+    def __init__(self, token: tuple, covers, held, records: dict):
+        self.token, self.covers, self.held, self.records = token, covers, held, records
+        self.generation = census_generation()
+
+
+def record_reusable(record) -> bool:
+    """Whether an entry's record may stand in for a read of it: the file was settled when read and covered, so a
+    change reaches the view as a mark."""
+    return record is not None and record[2][1] and record[3]
+
+
+def entries_usable(kept: EntryKept | None, trusting: bool, covers, held) -> bool:
+    """Whether the records of ``kept`` may be built on: the view trusts with the cover test and the held
+    condition of the pass that made them."""
+    return kept is not None and trusting and kept.covers is covers and (kept.held is held or kept.held == held)
+
+
+def entries_marked_since(kept: EntryKept | None, trusting: bool, covers, held, root) -> set[str] | None:
+    """The names marked in ``root`` since ``kept``'s pass when its records may be built on, else None and the
+    reader takes a full pass."""
+    return KEPT.marked_since(root, kept.token) if entries_usable(kept, trusting, covers, held) else None
+
+
+def present_entries(root, suffix: str) -> dict[str, KeptEntry]:
+    """The files named ``*<suffix>`` of ``root``, by name, from the kept listing."""
+    return {entry.name: entry for entry in KEPT.scandir(root)
+            if entry.name.endswith(suffix) and not entry.is_dir()}
+
+
+def surviving_records(records: dict, names) -> dict:
+    """The records of the names that are still there."""
+    return {name: record for name, record in records.items() if name in names}
+
+
+def entry_pass(previous: dict, present: dict, marked: set, survivors, reusable, compute) -> tuple[dict, int]:
+    """``(records, reused)``: the previous records of the names still ``present`` (by ``survivors``), each
+    reused when ``reusable(record, name, marked)`` and otherwise made again by ``compute(name, entry)``, which
+    answers None for a name that is no entry of the reader's."""
+    records = survivors(previous, present)
+    reused = 0
+    for name, entry in present.items():
+        if reusable(records.get(name), name, marked):
+            reused += 1
+            continue
+        check_stop()
+        record = compute(name, entry)
+        if record is None:
+            records.pop(name, None)
+        else:
+            records[name] = record
+    return records, reused
+
+
+def listed_records(kind: str, found: dict, suffix: str, covers, value_of, stable=None) -> dict:
+    """The records of a full pass whose ``found`` (``{stem: (path, stat)}``) ``OBSERVED`` has just recorded under
+    ``kind``: ``value_of(stem, path, stat)`` is an entry's value, and ``stable(path, identity)`` tells whether
+    its value rests on the file alone."""
+    observed = OBSERVED.capture(kind)[0]
+    records = {}
+    for stem, (path, st) in found.items():
+        identity, ok = observed.get(path, (identity_of(st), False))
+        covered = (covers is None or bool(covers(path))) and (stable is None or stable(path, identity))
+        records[stem + suffix] = (identity, value_of(stem, path, st), (path, ok), covered)
+    return records
+
+
+def observed_of(records: dict) -> dict:
+    """What ``OBSERVED`` holds of the entries of ``records``: ``{path: (identity, settled)}``."""
+    return {observed[0]: (identity, observed[1]) for identity, _, observed, _ in records.values()}
+
+
+def keep_entries(root, token, covers, held, records: dict) -> EntryKept | None:
+    """The records of a pass that read the mark log's ``token`` before it, kept while the view trusts with the
+    cover test the pass ran under and covers the directory."""
+    root = str(root)
+    with KEPT._lock:
+        listed_here = root in KEPT.listings
+    if not listed_here or (covers is not None and not covers(root)):
+        return None
+    kept = EntryKept(token, covers, held, records)
+    with KEPT._lock:
+        return kept if trust_holds(KEPT, covers) else None
 
 
 def entries_covered(covers, root: str, suffix: str) -> bool:
@@ -903,13 +1091,31 @@ def binding_event_reusable(kept: KeptRead | None, version: tuple, covers, presum
     return view_unchanged(kept, version, covers) and kept.held is presumption
 
 
-def copy_binding(result: tuple) -> tuple:
-    """A private copy of ``(index, driven)``, a presumed index still presumed."""
+def frozen_binding(result: tuple) -> tuple:
+    """``(index, driven)`` as read-only mappings of tuples, a presumed index still presumed: the kept result of
+    the event path, handed to every caller as it is (no caller changes a binding read: every one only looks
+    engine sessions up)."""
     index, driven = result
-    copied = {engine: list(stems) for engine, stems in index.items()}
+    frozen = {engine: tuple(stems) for engine, stems in index.items()}
     if isinstance(index, PresumedIndex):
-        copied = PresumedIndex(copied, index.covered)
-    return copied, {stem: list(engines) for stem, engines in driven.items()}
+        frozen = PresumedIndex(frozen, index.covered)
+    return MappingProxyType(frozen), MappingProxyType({stem: tuple(engines) for stem, engines in driven.items()})
+
+
+def binding_entry_reusable(record, name: str, marked: set) -> bool:
+    """Whether a kept binding file's value stands in for reading it again: no mark names it since the pass that
+    made it, and the file was settled and covered then."""
+    return name not in marked and record_reusable(record)
+
+
+def binding_survivors(records: dict, names) -> dict:
+    return surviving_records(records, names)
+
+
+def entry_stable(presumption, path: str, identity: tuple) -> bool:
+    """Whether a binding file's value under ``presumption`` rests on the file alone: a file the snapshot does
+    not record is presumed to drive nothing by its directory's marker too, which moves with every save."""
+    return presumption is None or path in presumption[1] or _unchanged(presumption[1], path, "binding", identity, None)
 
 
 def shared_this_cycle(shared, generation: int, presumption):
@@ -930,6 +1136,7 @@ class BindingScan:
         self.presumption: tuple[frozenset[str], Recorded] | None = None
         self.kept: KeptResult | None = None
         self.event_kept: KeptRead | None = None
+        self.entries: EntryKept | None = None
         self.cycle: tuple | None = None
         self._lock = threading.RLock()
 
@@ -967,45 +1174,103 @@ class BindingScan:
             self.cycle = (generation, presumption, result)
             return result
 
-    def _event_read(self, presumption) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-        """The event path's read: the kept result while the bindings directory's version is the one it was made
-        under (its observation replayed, a private copy returned), else a pass, kept for the next read."""
+    def _event_read(self, presumption) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+        """The event path's read, an immutable result the callers share: the kept one while the bindings
+        directory's version is the one it was made under (its observation replayed); else a pass that reads again
+        only the files a mark names, new ones and ones that were not kept, and builds the result from the kept
+        records of the rest (a full pass when no record can be built on). Either is kept for the next read."""
         directory = self.directory()
-        trusting, covers, version = event_view(binding_version, directory)
+        trusting, covers, version, token = event_view(binding_version, directory)
         with self._lock:
-            kept = self.event_kept
+            kept, entries = self.event_kept, self.entries
         if trusting and binding_event_reusable(kept, version, covers, presumption):
             replay_observation("binding", kept.observed)
             REUSED.note("binding", kept)
-            return copy_binding(kept.value)
-        result = self._pass(presumption)
-        kept = keep_read(directory, version, covers, presumption, lambda: copy_binding(result), ".json", "binding") if trusting else None
+            return kept.value
+        marked = entries_marked_since(entries, trusting, covers, presumption, directory)
+        if marked is None:
+            result, records = self._full_pass(presumption, covers)
+            kept = keep_read(directory, version, covers, presumption, lambda: result, ".json", "binding") if trusting else None
+        else:
+            result, records = self._entry_pass(directory, presumption, covers, entries, marked)
+            kept = None
+        entries = keep_entries(directory, token, covers, presumption, records) if trusting else None
+        if kept is None and entries is not None and all(map(record_reusable, records.values())):
+            kept = KeptRead(version, covers, presumption, result, OBSERVED.capture("binding"))
         with self._lock:
-            self.event_kept = kept
+            self.event_kept, self.entries = kept, entries
         return result
 
+    def _full_pass(self, presumption, covers) -> tuple[tuple, dict]:
+        found, raw = self._read(presumption)
+        records = listed_records("binding", found, ".json", covers, lambda stem, path, st: tuple(raw[1][stem]),
+                                 lambda path, identity: entry_stable(presumption, path, identity))
+        return frozen_binding(raw), records
+
+    def _entry_pass(self, directory, presumption, covers, entries: EntryKept, marked: set) -> tuple[tuple, dict]:
+        """A pass over the kept records of ``entries``: the files ``marked`` since, new ones and ones whose
+        record cannot stand in are read again; the rest are not even statted."""
+        read_ns = now_ns()
+        marker = directory_marker(directory)
+        present = present_entries(directory, ".json")
+
+        def read_again(name: str, entry: KeptEntry):
+            try:
+                st = entry.stat()
+            except OSError:
+                return None
+            if not stat_module.S_ISREG(st.st_mode):
+                return None
+            path, identity = entry.path, identity_of(st)
+            engines = tuple(self._engines(path, st, presumption, marker))
+            keepable = (covers is None or bool(covers(path))) and entry_stable(presumption, path, identity)
+            return identity, engines, (path, settled(st, read_ns)), keepable
+
+        records, reused = entry_pass(entries.records, present, marked, binding_survivors, binding_entry_reusable, read_again)
+        if reused:
+            REUSED.note("binding", entries)
+        if entries.records.keys() - present.keys():
+            self.files.prune({observed[0] for _, _, observed, _ in records.values()})
+        directory_record = None if marker is None else {"path": str(directory), "marker": marker, "taken_ns": read_ns}
+        OBSERVED.replay("binding", (observed_of(records), directory_record))
+        driven = {name[: -len(".json")]: list(record[1]) for name, record in records.items()}
+        driven = dict(sorted(driven.items()))
+        raw = (self._index(driven, presumption), driven)
+        self.memo = (None, *raw)
+        return frozen_binding(raw), records
+
+    def _engines(self, path: str, st, presumption, marker) -> list[str]:
+        """The engine sessions the binding file at ``path`` drives: none for a file a presumption holds for, else
+        the file's, read once per identity."""
+        if (presumption is not None and path not in presumption[1]
+                and _unchanged(presumption[1], path, "binding", identity_of(st), marker)):
+            return []
+        return self.files.fetch(path, st, _driven)
+
+    @staticmethod
+    def _index(driven: dict, presumption) -> dict:
+        index: dict[str, list[str]] = {}
+        for stem, engines in driven.items():
+            for engine in engines:
+                index.setdefault(engine, []).append(stem)
+        return PresumedIndex(index, presumption[0]) if presumption is not None else index
+
     def _pass(self, presumption) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        return self._read(presumption)[1]
+
+    def _read(self, presumption) -> tuple[dict, tuple]:
+        """``(found, (index, driven))`` of a pass over every binding file."""
         found = listed("binding", self.directory(), ".json", by_directory_time=True)
         driven, marker = {}, OBSERVED.marker("binding")
         for stem, (path, st) in sorted(found.items()):
-            if (presumption is not None and path not in presumption[1]
-                    and _unchanged(presumption[1], path, "binding", identity_of(st), marker)):
-                driven[stem] = []
-            else:
-                driven[stem] = self.files.fetch(path, st, _driven)
+            driven[stem] = self._engines(path, st, presumption, marker)
         self.files.prune({path for path, _ in found.values()})
         key = fingerprint((str(self.directory()), presumption is not None,
                            *((stem, identity_of(st)) for stem, (_, st) in sorted(found.items()))))
         memo = self.memo
         if memo is None or memo[0] != key:
-            index: dict[str, list[str]] = {}
-            for stem, engines in driven.items():
-                for engine in engines:
-                    index.setdefault(engine, []).append(stem)
-            if presumption is not None:
-                index = PresumedIndex(index, presumption[0])
-            memo = self.memo = (key, index, driven)
-        return memo[1], memo[2]
+            memo = self.memo = (key, self._index(driven, presumption), driven)
+        return found, (memo[1], memo[2])
 
     def driven(self) -> dict[str, list[str]]:
         """The engine sessions each harness session drives, as of the last ``read``."""
@@ -1017,7 +1282,7 @@ class BindingScan:
             self.files.clear()
             self.memo = None
             self.presumption = None
-            self.kept = self.cycle = self.event_kept = None
+            self.kept = self.cycle = self.event_kept = self.entries = None
 
 
 class PresumedIndex(dict):
@@ -1142,6 +1407,35 @@ def transcript_reusable(kept: KeptResult | None, key, roots) -> bool:
     return kept is not None and kept.key == key and kept.held == roots
 
 
+def root_versions(roots) -> tuple:
+    """The versions of the transcript roots, read together."""
+    return tuple(KEPT.version_of(root) for root in roots)
+
+
+def marked_projects(entries: EntryKept | None, trusting: bool, covers, roots) -> set[str] | None:
+    """The project directories (paths) of ``roots`` that were marked, or in which a path was marked, since the
+    pass that made ``entries``; None when its records cannot be built on."""
+    if not entries_usable(entries, trusting, covers, roots):
+        return None
+    marked: set[str] = set()
+    for root in roots:
+        names = KEPT.marked_under(root, entries.token)
+        if names is None:
+            return None
+        marked.update(os.path.join(str(root), name) for name in names)
+    return marked
+
+
+def transcript_project_reusable(record, path: str, marked: set) -> bool:
+    """Whether a kept project directory's transcript names stand in for listing it again: no mark names it
+    (or a transcript in it) since the pass that made them, and it was settled and covered then."""
+    return path not in marked and record_reusable(record)
+
+
+def transcript_survivors(records: dict, present) -> dict:
+    return surviving_records(records, present)
+
+
 def transcript_shared(shared, generation: int, roots):
     """The transcript index this stat-path cycle already made for ``roots``, else None."""
     if shared is not None and shared[0] == generation and shared[1] == roots:
@@ -1159,6 +1453,8 @@ class TranscriptListing:
         self.dirs = IdentityCache("transcript")
         self.passes = 0
         self.kept: KeptResult | None = None
+        self.event_kept: KeptRead | None = None
+        self.entries: EntryKept | None = None
         self.cycle: tuple | None = None
         self._lock = threading.RLock()
 
@@ -1166,7 +1462,7 @@ class TranscriptListing:
         roots = tuple(roots)
         generation = stat_cycle_generation()
         if generation is None:
-            return self._pass([self._subdirs(root) for root in roots])
+            return self._event_index(roots)
         with self._lock:
             shared = transcript_shared(self.cycle, generation, roots)
             if shared is not None:
@@ -1183,6 +1479,60 @@ class TranscriptListing:
                     self.kept = KeptResult(key, roots, result)
             self.cycle = (generation, roots, result)
             return result
+
+    def _event_index(self, roots: tuple) -> dict[str, tuple[Path, ...]]:
+        """The event path's index, immutable and shared: the kept one while no root's version moved and no
+        project directory or file in one was marked; else the project directories that were marked, are new or
+        were not kept are listed again, the rest keep their stems, and the merge is made again."""
+        trusting, covers, version, token = event_view(root_versions, roots)
+        with self._lock:
+            kept, entries = self.event_kept, self.entries
+        marked = marked_projects(entries, trusting, covers, roots)
+        if marked is not None and not marked and view_unchanged(kept, version, covers) and kept.held == roots:
+            REUSED.note("transcripts", kept)
+            return kept.value
+        self.passes += 1
+        read_ns = now_ns()
+        layout = [sorted(self._project_entries(root), key=lambda entry: entry.name) for root in roots]
+        present = {entry.path: entry for projects in layout for entry in projects}
+
+        def read_again(path: str, entry: KeptEntry):
+            try:
+                st = entry.stat()
+            except OSError:
+                return None
+            names = tuple(self.dirs.fetch(path, st, self._names))
+            covered = covers is None or (bool(covers(path)) and all(covers(str(name)) for name in names))
+            return identity_of(st), names, (path, settled(st, read_ns)), covered
+
+        previous = entries.records if marked is not None else {}
+        records, reused = entry_pass(previous, present, marked or set(), transcript_survivors,
+                                     transcript_project_reusable, read_again)
+        if reused:
+            REUSED.note("transcripts", entries)
+        if marked is None or previous.keys() - present.keys():
+            self.dirs.prune(set(records))
+        found: dict[str, list[Path]] = {}
+        for projects in layout:
+            for entry in projects:
+                for transcript in records[entry.path][1] if entry.path in records else ():
+                    found.setdefault(transcript.stem, []).append(transcript)
+        result = MappingProxyType({stem: tuple(sorted(paths, key=str)) if len(paths) > 1 else tuple(paths)
+                                   for stem, paths in found.items()})
+        kept_entries = [keep_entries(root, token, covers, roots, records) for root in roots] if trusting else []
+        entries = kept_entries[0] if kept_entries and all(kept_entries) else None
+        kept = (KeptRead(version, covers, roots, result, None)
+                if entries is not None and all(map(record_reusable, records.values())) else None)
+        with self._lock:
+            self.event_kept, self.entries = kept, entries
+        return result
+
+    @staticmethod
+    def _project_entries(root) -> list[KeptEntry]:
+        try:
+            return [entry for entry in KEPT.scandir(root) if entry.is_dir()]
+        except OSError:
+            return []
 
     def _pass(self, subdirs) -> dict[str, list[Path]]:
         self.passes += 1
@@ -1225,7 +1575,7 @@ class TranscriptListing:
     def clear(self) -> None:
         with self._lock:
             self.dirs.clear()
-            self.kept = self.cycle = None
+            self.kept = self.cycle = self.event_kept = self.entries = None
             self.passes = 0
 
 

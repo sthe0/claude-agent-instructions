@@ -2608,6 +2608,24 @@ def test_a_reused_stat_cycle_reports_its_reused_readers(tmp_path, monkeypatch, t
     run_fleet(scenario, root, timers, stream, path="stat", interval=2.0)
 
 
+def test_an_event_cycle_registers_its_census_and_names_the_reused_readers(tmp_path, monkeypatch, timers, stream):
+    root = attention_root(tmp_path)
+    monkeypatch.setattr(snapshot_store, "now_ns", lambda: time.time_ns() + 10**13)
+
+    async def scenario(fleet):
+        got = []
+        for goal in ("an event named change", "a second named change"):
+            edit_goal(root, ALPHA, goal)
+            fleet.named()
+            await fleet.tick(0.5)
+            got.extend(fleet.events())
+        ended = [e for e in got if e["ev"] == "cycle_end"]
+        assert len(ended) >= 2, got
+        assert ended[-1]["reused"] == ["binding", "state", "transcripts"], ended
+
+    run_fleet(scenario, root, timers, stream)
+
+
 def test_the_light_tick_reads_no_source_file(tmp_path, monkeypatch, timers, stream):
     root = attention_root(tmp_path)
     calls, reads = [], []

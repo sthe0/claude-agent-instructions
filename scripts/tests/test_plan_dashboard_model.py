@@ -1014,16 +1014,18 @@ def count_calls(monkeypatch, owner, name) -> list:
 def test_an_unchanged_state_root_is_not_relisted_on_the_event_path(kept_root, monkeypatch):
     first = model._state_listing(kept_root.state_root)
     listings = count_calls(monkeypatch, store, "listed")
+    scans = count_calls(monkeypatch, store.KEPT, "scandir")
     second = model._state_listing(kept_root.state_root)
-    assert listings == []
+    assert listings == [] and scans == []
     assert second == first and set(second) == {"parent", "child", "sibling"}
 
 
 def test_an_unchanged_state_root_is_not_globbed_again_on_the_event_path(kept_root, monkeypatch):
     first = model.child_index(kept_root.state_root)
     globs = count_calls(monkeypatch, store.KEPT, "glob")
+    scans = count_calls(monkeypatch, store.KEPT, "scandir")
     second = model.child_index(kept_root.state_root)
-    assert globs == []
+    assert globs == [] and scans == []
     assert second == first and set(second) == {"parent"}
 
 
@@ -1047,16 +1049,16 @@ def test_a_reused_child_index_is_a_fresh_copy(kept_root):
 
 
 def test_a_mark_during_the_child_pass_is_not_reused(kept_root, monkeypatch):
-    passes, real_glob = [], store.KEPT.glob
+    passes, real_scandir = [], store.KEPT.scandir
 
     def marking(root, *args, **kwargs):
-        found = real_glob(root, *args, **kwargs)
+        found = real_scandir(root, *args, **kwargs)
         if not passes:
             store.KEPT.mark([Path(root) / "child.json"])
         passes.append(root)
         return found
 
-    monkeypatch.setattr(store.KEPT, "glob", marking)
+    monkeypatch.setattr(store.KEPT, "scandir", marking)
     model.child_index(kept_root.state_root)
     model.child_index(kept_root.state_root)
     assert len(passes) == 2
@@ -1068,9 +1070,9 @@ def test_a_state_file_unsettled_during_the_child_pass_is_not_reused(kept_root, m
         json.dumps({"session_id": "fresh", "parent_link": {"parent_session": "parent", "stage_index": 2}}),
         encoding="utf-8")
     model.child_index(kept_root.state_root)
-    globs = count_calls(monkeypatch, store.KEPT, "glob")
+    listings = count_calls(monkeypatch, store.KEPT, "scandir")
     model.child_index(kept_root.state_root)
-    assert len(globs) == 1
+    assert len(listings) == 1
 
 
 def trust_json_files_only(root) -> None:
@@ -1085,21 +1087,107 @@ def test_a_state_root_holding_unwatched_files_is_not_relisted_on_the_event_path(
     trust_json_files_only(kept_root.state_root)
     model._state_listing(kept_root.state_root)
     listings = count_calls(monkeypatch, store, "listed")
+    scans = count_calls(monkeypatch, store.KEPT, "scandir")
     model._state_listing(kept_root.state_root)
-    assert listings == []
+    assert listings == [] and scans == []
 
 
 def test_a_state_root_holding_unwatched_files_is_not_globbed_again_on_the_event_path(kept_root, monkeypatch):
     trust_json_files_only(kept_root.state_root)
     model.child_index(kept_root.state_root)
     globs = count_calls(monkeypatch, store.KEPT, "glob")
+    scans = count_calls(monkeypatch, store.KEPT, "scandir")
     model.child_index(kept_root.state_root)
-    assert globs == []
+    assert globs == [] and scans == []
 
 
 def test_a_child_index_over_an_uncovered_state_file_is_not_reused(kept_root, monkeypatch):
     store.KEPT.trust(lambda path: str(path).startswith(str(kept_root.state_root.parent)) and not str(path).endswith("sibling.json"))
     model.child_index(kept_root.state_root)
-    globs = count_calls(monkeypatch, store.KEPT, "glob")
+    listings = count_calls(monkeypatch, store.KEPT, "scandir")
     model.child_index(kept_root.state_root)
-    assert len(globs) == 1
+    assert len(listings) == 1
+
+
+def test_a_state_listing_over_an_uncovered_state_file_is_not_reused(kept_root, monkeypatch):
+    store.KEPT.trust(lambda path: str(path).startswith(str(kept_root.state_root.parent)) and not str(path).endswith("sibling.json"))
+    model._state_listing(kept_root.state_root)
+    listings = count_calls(monkeypatch, store.KEPT, "scandir")
+    model._state_listing(kept_root.state_root)
+    assert len(listings) == 1
+
+
+# --- a save marks one state file: the event path asks again about that entry only ----------------------------
+
+def save_child(root, goal: str) -> Path:
+    """The way an editor saves ``child.json``: new content, then the marks of the watch (the file, and the
+    directory whose names changed)."""
+    child = root / "child.json"
+    child.write_text(json.dumps({"session_id": "child", "node": "EXECUTING", "goal": goal,
+                                 "parent_link": {"parent_session": "parent", "stage_index": 1}}), encoding="utf-8")
+    store.KEPT.mark([child], [root])
+    return child
+
+
+def asked(calls: list) -> list[str]:
+    """The state files (not the directory) the calls named."""
+    return sorted(str(call[0]) for call in calls if str(call[0]).endswith(".json"))
+
+
+def test_a_saved_state_file_restats_only_that_entry_on_the_event_path(kept_root, monkeypatch):
+    model._state_listing(kept_root.state_root)
+    stats = count_calls(monkeypatch, store.KEPT, "stat")
+    child = save_child(kept_root.state_root, "a goal saved by the editor")
+    listing = model._state_listing(kept_root.state_root)
+    assert asked(stats) == [str(child)]
+    assert set(listing) == {"parent", "child", "sibling"} and listing["child"][1].st_size == child.stat().st_size
+
+
+def test_a_reused_state_entry_replays_its_observation(kept_root):
+    model._state_listing(kept_root.state_root)
+    recorded = store.OBSERVED.capture("state")[0]
+    store.OBSERVED.scanned("state", {})
+    save_child(kept_root.state_root, "a goal saved by the editor")
+    model._state_listing(kept_root.state_root)
+    replayed = store.OBSERVED.capture("state")[0]
+    untouched = {path for path in recorded if not path.endswith("child.json")}
+    assert untouched and {path: replayed.get(path) for path in untouched} == {path: recorded[path] for path in untouched}
+
+
+def test_a_saved_state_file_rebuilds_only_its_child_links_on_the_event_path(kept_root, monkeypatch):
+    model.child_index(kept_root.state_root)
+    stats = count_calls(monkeypatch, store.KEPT, "stat")
+    links = count_calls(monkeypatch, model, "_child_link")
+    child = save_child(kept_root.state_root, "a goal saved by the editor")
+    index = model.child_index(kept_root.state_root)
+    assert (asked(stats), asked(links)) == ([str(child)], [str(child)])
+    assert index["parent"][0]["goal"] == "a goal saved by the editor"
+
+
+def test_a_mark_during_the_child_pass_is_restatted_next_time(kept_root, monkeypatch):
+    child = kept_root.state_root / "child.json"
+    marked, real_scandir = [], store.KEPT.scandir
+
+    def marking(root, *args, **kwargs):
+        found = real_scandir(root, *args, **kwargs)
+        if not marked:
+            marked.append(root)
+            store.KEPT.mark([child])
+        return found
+
+    monkeypatch.setattr(store.KEPT, "scandir", marking)
+    model.child_index(kept_root.state_root)
+    stats = count_calls(monkeypatch, store.KEPT, "stat")
+    model.child_index(kept_root.state_root)
+    assert str(child) in asked(stats)
+
+
+def test_a_child_index_built_from_kept_entries_is_a_fresh_copy(kept_root):
+    first = model.child_index(kept_root.state_root)
+    first["parent"][0]["goal"] = "changed by the caller"
+    store.KEPT.mark([kept_root.state_root / "sibling.json"])
+    second = model.child_index(kept_root.state_root)
+    assert second["parent"][0]["goal"] == "goal of child"
+    second["parent"][0]["goal"] = "changed by the next caller"
+    store.KEPT.mark([kept_root.state_root / "sibling.json"])
+    assert model.child_index(kept_root.state_root)["parent"][0]["goal"] == "goal of child"
