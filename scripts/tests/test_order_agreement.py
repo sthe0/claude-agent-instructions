@@ -201,13 +201,32 @@ def _agreed(store, home: Path, tmp_path: Path, **draft_kw) -> Path:
     return path
 
 
-def _plan(tmp_path: Path, *, replace=None, name="plan.toml") -> str:
-    """A submittable plan whose order carries the draft's understanding (or `replace`d lines)."""
+_EXECUTOR_STAGE_LINES = ("means = ", "method = ", "procedure = ", "conditions = ")
+
+
+def _describe_stage(text: str) -> str:
+    """`text` with its stage in the description form of a two-sided order: the executor's means,
+    method, procedure and conditions are left out and the place the stage serves is stated."""
+    kept = [line for line in text.splitlines()
+            if not line.startswith(_EXECUTOR_STAGE_LINES)]
+    at = kept.index('executor = "in_thread"')
+    kept[at + 1:at + 1] = ['place = "the seam the agreement gate holds"', "binding_conditions = []"]
+    return "\n".join(kept) + "\n"
+
+
+def _plan(tmp_path: Path, *, replace=None, name="plan.toml", describe=True) -> str:
+    """A submittable plan whose order carries the draft's understanding (or `replace`d lines).
+    The order is two-sided, so its stage is a description and the coverage names the check A1
+    of the customer side beside the requirements. `describe=False` leaves the stage in the old
+    form (the means, method, procedure and conditions of the executor beside the product): the
+    plan a session approved before the two-sided order took the stage form from the order."""
     lines = {k: v for k, v in {**_LINES, **(replace or {})}.items() if k != "planning_estimate"}
-    coverage = "".join(f"{k} = {json.dumps(v)}\n" for k, v in _COVERAGE.items())
+    coverage = "".join(
+        f"{k} = {json.dumps(v)}\n"
+        for k, v in {**_COVERAGE, "A1": ["stage 1 verify_command"]}.items())
     order = ("[meta.order]\n" + "\n".join(lines.values()) + "\n" + SIDES + BUDGET
              + "\n[meta.order.coverage]\n" + coverage + "\n")
-    text = _PLAN.format(
+    text = (_describe_stage(_PLAN) if describe else _PLAN).format(
         goal=json.dumps("g"), done_criterion=json.dumps("d"),
         weight_class='weight_class = "substantive"\n', order=order, final_check=_FINAL_CHECK)
     path = tmp_path / name
@@ -547,6 +566,88 @@ def test_replan_refuses_a_diverging_proposal(ostore, home, armed_env, tmp_path):
 
     assert d.ok is False and "diverges from the agreed" in _blockers(d)
     assert ostore.load(SESSION).plan_path != proposal
+
+
+_OLD_FORM_REFUSAL = ("is a stage description and carries no means, method, procedure, conditions",
+                     "belong to the executor's sub-plan record")
+
+
+def _stage_form_refusal(d) -> str:
+    """The refusal of an old-form stage on a two-sided order, with the way out the message gives:
+    which parts the stage must not carry and where they go instead."""
+    assert d.ok is False and d.action == "fix_plan", (d.action, d.detail)
+    problems = " | ".join(d.data["problems"])
+    for part in _OLD_FORM_REFUSAL:
+        assert part in problems, problems
+    assert "states no place (`place`)" in problems, problems
+    return problems
+
+
+def test_submit_plan_refuses_an_old_form_stage_on_an_agreed_two_sided_order(
+        ostore, home, armed_env, tmp_path):
+    """A plan written before the order chose the stage form, put in again against the agreed
+    two-sided order: refused at submission, and the session stays at planning."""
+    _agreed(ostore, home, tmp_path)
+    assert cli.cmd_plan(ns(session=SESSION), store=ostore).ok
+
+    d = cli.cmd_submit_plan(ns(session=SESSION, plan=_plan(tmp_path, describe=False)), store=ostore)
+
+    _stage_form_refusal(d)
+    state = ostore.load(SESSION)
+    assert state.plan_verified is False and state.node == "PLANNING"
+
+
+def test_replan_refuses_an_old_form_stage_on_a_two_sided_order(ostore, home, armed_env, tmp_path):
+    """The next replan of a session whose plan carries the two-sided order does not carry the old
+    form over: its stages are described, whatever the form the approved plan had."""
+    plan = _plan_ready(ostore, home, tmp_path)
+    proposal = _plan(tmp_path, describe=False, name="proposal.toml")
+
+    d = cli.cmd_replan(ns(session=SESSION, plan=proposal), store=ostore)
+
+    assert d.detail.startswith("replan blocked"), d.detail
+    _stage_form_refusal(d)
+    assert ostore.load(SESSION).plan_path == plan
+
+
+def test_approve_refuses_a_plan_rewritten_in_the_old_form(ostore, home, armed_env, tmp_path):
+    """A plan whose file holds the old form when approval re-reads it (a plan registered before
+    the change) is refused by approve itself; it does not attest to an old-form stage."""
+    plan = _plan_ready(ostore, home, tmp_path)
+    Path(plan).write_text(Path(_plan(tmp_path, describe=False, name="scratch.toml")).read_text(
+        encoding="utf-8"), encoding="utf-8")
+
+    d = cli.cmd_approve(ns(session=SESSION, by="user"), store=ostore)
+
+    assert d.ok is False
+    problems = " | ".join(d.data.get("problems", []) + d.data.get("blockers", []))
+    for part in _OLD_FORM_REFUSAL:
+        assert part in problems, problems
+    assert ostore.load(SESSION).node != "APPROVED"
+
+
+def test_the_converted_form_of_a_plan_keeps_the_stage_form_and_a_replan_of_it_is_refused(
+        ostore, home, armed_env, tmp_path):
+    """`plan-convert` moves the bytes of a plan into a tree and never rewords them, so an
+    old-form stage stays old-form in its output; the way on the converter's own message names,
+    `replan --plan <converted index>`, meets the refusal and describes the stage."""
+    from agentctl import plan as plan_module, plan_convert
+
+    _plan_ready(ostore, home, tmp_path)
+    source = _plan(tmp_path, describe=False, name="old-form.toml")
+    out = tmp_path / "converted"
+
+    converted = plan_convert.cmd_plan_convert(ns(plan=source, out=str(out), format="json"))
+
+    assert converted.ok, converted.detail
+    index = converted.data["index"]
+    stage = plan_module.load_plan(index).stages[0]
+    assert stage.means.means and stage.means.method and stage.place is None
+
+    d = cli.cmd_replan(ns(session=SESSION, plan=index), store=ostore)
+
+    assert d.detail.startswith("replan blocked"), d.detail
+    _stage_form_refusal(d)
 
 
 def test_present_essence_refuses_a_diverged_plan(ostore, home, armed_env, tmp_path):

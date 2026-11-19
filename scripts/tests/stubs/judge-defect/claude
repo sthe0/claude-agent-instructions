@@ -1,2 +1,2 @@
 #!/bin/sh
-cat >/dev/null; echo '{"defects": ["irrelevant"], "reason": "e2e stub"}'
+cat >/dev/null; echo '{"defects": ["irrelevant"], "verdict": "neither", "reason": "e2e stub"}'

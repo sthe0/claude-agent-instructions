@@ -1972,9 +1972,13 @@ def stage_above_threshold(stage, thr) -> bool:
     judged by `classify.above_threshold`. A stage that declares no minutes is judged on the
     minutes of its cost tier, so the declaration (the tier) states the size. A stage that
     declares no size at all (no lines, no flag, no minutes) is above the line; this is the one
-    place that rule lives."""
+    place that rule lives. An old-form stage carries no description, so it has no size to judge
+    and is never above the line: reading its absent size as undeclared would give every old-form
+    stage a record it can never make."""
     from . import classify, effort
 
+    if stage.place is None:
+        return False
     if stage.declared_size is None and not stage.size_flags and stage.expected_minutes is None:
         return True
     minutes = stage.expected_minutes

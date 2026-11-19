@@ -313,16 +313,41 @@ def read(state, stage_index: int, store_=None, children=None) -> SubPlanRecord |
     child linked at that stage (`parent_link.stage_index`), whose own record describes the
     stage it was linked at. Each level is read only for the stages of its own plan: a record a
     deeper session holds under the same stage number describes that session's plan, not this
-    one. `children` are the linked sessions when the caller already has them."""
+    one. `children` are the linked sessions when the caller already has them. A stage with
+    records in the contours of more than one linked child has no one record to read:
+    `SubPlanError` names the sessions, never a silent pick of the first."""
     raw = state.sub_plan_records.get(record_key(stage_index, len(state.plan_stack)))
     if raw:
         return SubPlanRecord.from_dict(raw)
     if children is None:
         children = linked_children(state, store_)
-    for child in children:
-        if (child.parent_link or {}).get("stage_index") != stage_index:
-            continue
-        raw = child.sub_plan_records.get(record_key(stage_index))
-        if raw:
-            return SubPlanRecord.from_dict(raw)
-    return None
+    found = [(child.session_id, child.sub_plan_records[record_key(stage_index)])
+             for child in children
+             if (child.parent_link or {}).get("stage_index") == stage_index
+             and child.sub_plan_records.get(record_key(stage_index))]
+    if len(found) > 1:
+        raise SubPlanError(f"stage {stage_index} has a sub-plan record in the contours of "
+                           f"{len(found)} linked children ({', '.join(s for s, _ in found)}): "
+                           f"no one record to read")
+    return SubPlanRecord.from_dict(found[0][1]) if found else None
+
+
+ORDER_SETTER = "user"
+RELEASING_VALUES = ("changed", "withdrawn")
+
+
+def parent_set_ids(conditions) -> frozenset[str]:
+    """The ids, among the binding conditions stated on the parent plan's stage, that the parent
+    level set itself: every one but those the order's own setter, the user, set. A condition the
+    user set is inherited from above and is released only by the order's own binding decisions,
+    never by a level between."""
+    return frozenset(c["id"] for c in conditions or ()
+                     if str(c.get("set_by", "")).strip().lower() != ORDER_SETTER)
+
+
+def released_ids(record: SubPlanRecord, conditions) -> frozenset[str]:
+    """The conditions `record`'s decisions changed or withdrew that the parent level set itself
+    (`parent_set_ids`): a decision on an inherited condition releases nothing."""
+    own = parent_set_ids(conditions)
+    return frozenset(d.condition for d in record.setter_decisions
+                     if d.value in RELEASING_VALUES and d.condition in own)

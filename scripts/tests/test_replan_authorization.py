@@ -592,7 +592,7 @@ def test_case11_marked_order_ask_stamps_order_receipt_despite_delivered_essence(
     from test_order_phase import _draft
     from test_plan_delivery_gate_judge import run_hook_answering
 
-    draft = _draft(tmp_path)
+    draft = _draft(tmp_path, omit=("customer_side",))
     digest = understanding_digest(load_order_draft(draft)[0])
     essence_text = "## Essence\n...plan essence...\n"
     order_text = "## Order\n...the order as understood...\n"
@@ -640,7 +640,7 @@ def test_case11_marked_order_ask_allowed_when_essence_receipt_is_stale(tmp_path)
     from test_order_phase import _draft
     from test_plan_delivery_gate_judge import run_hook_answering
 
-    draft = _draft(tmp_path)
+    draft = _draft(tmp_path, omit=("customer_side",))
     digest = understanding_digest(load_order_draft(draft)[0])
     plan = tmp_path / "plan.toml"
     plan.write_text("index = 2\n")

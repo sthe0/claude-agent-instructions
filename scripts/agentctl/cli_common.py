@@ -2578,32 +2578,40 @@ def _write_securing_firings(state: SessionState, doc, now: float) -> None:
     state.log(_SECURING_APPROVED_EVENT, revisions=[[r["stage"], r["was"]] for r in revisions])
 
 
-def _released_ids(record_raw: dict | None) -> frozenset[str]:
-    """The binding-condition ids a stored record's decisions changed or withdrew."""
+def _released_ids(record_raw: dict | None, conditions) -> frozenset[str]:
+    """The binding-condition ids a stored record's decisions changed or withdrew, among those
+    the level above the child's stage set itself (`sub_plan.released_ids`)."""
     if not record_raw:
         return frozenset()
-    record = sub_plan.SubPlanRecord.from_dict(record_raw)
-    return frozenset(d.condition for d in record.setter_decisions
-                     if d.value in ("changed", "withdrawn"))
+    return sub_plan.released_ids(sub_plan.SubPlanRecord.from_dict(record_raw), conditions)
 
 
-def _setter_level_released(state: SessionState, parent_state: SessionState | None) -> frozenset[str]:
+def _setter_level_released(state: SessionState, parent_state: SessionState | None,
+                           conditions) -> frozenset[str]:
     """The conditions released in the record of the level above the plan that carries the
-    sub-plan record: the setter level, never the carrying record itself. For a plan in a frame
-    nested in another frame that is the record of the frame below it; for a frame directly under
-    a child contour's plan, the record that contour carries; for a child contour's own plan,
-    the record its parent session carries. The root level has no such record: what the user set
-    in the order is released by the order's own binding decisions, not here."""
+    sub-plan record: the setter level, never the carrying record itself, and only a condition
+    that level set itself — one stated on the parent plan's stage (`conditions`) and not set by
+    the user, which no level between releases. For a plan in a frame nested in another frame
+    that is the record of the frame below it; for a frame directly under a child contour's plan,
+    the record that contour carries; for a child contour's own plan, the record its parent
+    session carries (the parent's own contour, or the frame it runs in). The root level has no
+    such record: what the user set in the order is released by the order's own binding
+    decisions, not here."""
     depth = len(state.plan_stack)
     if depth >= 2:
         key = sub_plan.record_key(state.plan_stack[-2].originating_stage, depth - 2)
-        return _released_ids(state.sub_plan_records.get(key))
+        return _released_ids(state.sub_plan_records.get(key), conditions)
     if depth == 1 and state.parent_link:
         return _released_ids(state.sub_plan_records.get(
-            sub_plan.record_key(state.parent_link.get("stage_index"))))
-    if depth == 0 and parent_state is not None and parent_state.parent_link:
-        return _released_ids(parent_state.sub_plan_records.get(
-            sub_plan.record_key(parent_state.parent_link.get("stage_index"))))
+            sub_plan.record_key(state.parent_link.get("stage_index"))), conditions)
+    if depth == 0 and parent_state is not None:
+        if parent_state.plan_stack:
+            frames = len(parent_state.plan_stack)
+            key = sub_plan.record_key(parent_state.plan_stack[-1].originating_stage, frames - 1)
+            return _released_ids(parent_state.sub_plan_records.get(key), conditions)
+        if parent_state.parent_link:
+            return _released_ids(parent_state.sub_plan_records.get(
+                sub_plan.record_key(parent_state.parent_link.get("stage_index"))), conditions)
     return frozenset()
 
 
@@ -2632,17 +2640,14 @@ def _stage_order_context(state: SessionState, *, store: StateStore | None = None
         tagged = next((e for e in description if e and e[0] == "description"), None)
         if tagged is not None:
             conditions = tuple({"id": c[0], "text": c[1], "set_by": c[2]} for c in tagged[2])
-        try:
-            parent_state = store.load(state.parent_link["parent_session"]) if store is not None else None
-        except Exception:
-            parent_state = None
+        parent_state = store.load(state.parent_link["parent_session"]) if store is not None else None
         if parent_state is not None:
             ancestors = frozenset(conditions_securing.ancestors(
                 expected, {s.index: list(s.depends_on or ()) for s in parent_state.stages}))
     return StageOrderContext(
         expected_stage=expected,
         binding_conditions=conditions,
-        released=_setter_level_released(state, parent_state),
+        released=_setter_level_released(state, parent_state, conditions),
         parent_ancestors=ancestors,
         search_resolver=lambda search_id: cli_order._search_recorded(state, search_id),
     )

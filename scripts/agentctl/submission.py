@@ -1450,10 +1450,11 @@ def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) ->
     """Check 13: every binding condition of the stage is kept, or the record of the level that
     set it (`ctx.released`) says it was changed or withdrawn. The carrying record's own
     decisions are checked for form and never release a condition: a plan does not release what
-    was set above it."""
+    was set above it. Nor does the setter level release a condition it only inherited: one the
+    user set is owed whatever `ctx.released` says (`sub_plan.parent_set_ids`)."""
     out: list[str] = []
     known = None if ctx.binding_conditions is None else {c["id"] for c in ctx.binding_conditions}
-    released = set(ctx.released)
+    released = set(ctx.released) & sub_plan.parent_set_ids(ctx.binding_conditions)
     for decision in record.setter_decisions:
         if decision.value not in sub_plan.SETTER_VALUES:
             out.append(f"{prefix}'s decision on {decision.condition!r} has value "
