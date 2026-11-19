@@ -58,11 +58,15 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from . import conditions_securing, exempt_paths, grant_shadow
+from . import conditions_securing, exempt_paths, grant_shadow, sub_plan
 from . import grants as _grants
 from .conditions import judge_restatement, restatement_prefilter
-from .plan import _declared_absolute_venue, _remote_head_for, venue_declaration_blockers
+from .plan import (
+    _declared_absolute_venue, _remote_head_for, stage_above_threshold, venue_declaration_blockers,
+)
 from .plan_resources import RESOURCE_REQUEST_KINDS, plan_time_resource_set, uncovered_request_entries
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
@@ -95,6 +99,8 @@ _SUBSTANTIVE_SUBMISSION_FIELDS = (
     ("means.method", "method", None),
     ("means.procedure", "procedure", None),
 )
+
+_EXECUTOR_OWNED_PATHS = frozenset({"means.method", "means.procedure", "knowledge"})
 
 _WHY = {
     "knowledge": (
@@ -1321,6 +1327,165 @@ def _ephemeral_artifacts_violations(stage, venue: str | None) -> list[str]:
     ]
 
 
+@dataclass(frozen=True)
+class StageOrderContext:
+    """What the stage-order checks cannot read from the plan alone.
+
+    `expected_stage` is the parent stage this plan carries the sub-plan of (the frame's
+    originating stage, the child contour's handoff stage); `binding_conditions` are that
+    stage's, read from the carrier; `search_resolver` tells whether a search id resolves in
+    the session that carries the record; `record_exists` (given only where a parent plan is
+    approved) tells whether a stage already has a record; `thresholds` draw the size line.
+    Each field left None skips the check that needs it."""
+    expected_stage: int | None = None
+    binding_conditions: tuple[dict, ...] | None = None
+    search_resolver: Callable[[str], bool] | None = None
+    record_exists: Callable[[int], bool] | None = None
+    thresholds: object | None = None
+
+
+class _AnyStage(frozenset):
+    """A stage-ancestor set that holds every stage: the sub-plan's `[means: stage N]` mark names
+    a stage of the parent plan, which the carrying plan does not hold."""
+
+    def __contains__(self, item) -> bool:
+        return True
+
+
+@dataclass
+class _RecordedConditions:
+    index: int
+    conditions: str
+
+
+def _stage_description_violations(doc, ctx: StageOrderContext) -> list[str]:
+    """Check 4: a stage that states a place is a description and carries no means, method,
+    procedure or conditions; and check 11 (parent side): an above-threshold stage with no
+    sub-plan record cannot be approved, unless its sub-plan is decided later (`lazy`)."""
+    out: list[str] = []
+    for stage in doc.stages:
+        if stage.place is None:
+            continue
+        carried = [name for name, value in (
+            ("means", stage.means.means), ("method", stage.means.method),
+            ("procedure", stage.means.procedure), ("conditions", stage.conditions),
+        ) if value and str(value).strip()]
+        if carried:
+            out.append(
+                f"stage {stage.index} states a place, so it is a stage description and carries "
+                f"no {', '.join(carried)}: those belong to the executor's sub-plan record "
+                f"(`[meta.sub_plan]` of the plan that builds the stage), not to the order"
+            )
+        if (ctx.record_exists is not None and ctx.thresholds is not None
+                and not sub_plan.is_decided_later(stage)
+                and stage_above_threshold(stage, ctx.thresholds)
+                and not ctx.record_exists(stage.index)):
+            out.append(
+                f"stage {stage.index} is above the size line and has no sub-plan record: "
+                f"record it (`[meta.sub_plan]` in the plan that builds it) before the plan is "
+                f"approved, or mark the stage `lazy` to decide its sub-plan when it is reached"
+            )
+    return out
+
+
+def _sub_plan_text_violations(record, prefix: str) -> list[str]:
+    out = [f"{prefix} has a malformed part: {part}" for part in record.malformed]
+    for name in ("means", "method", "procedure"):
+        if not getattr(record, name).strip():
+            out.append(f"{prefix} states no {name}")
+    if record.conditions.strip():
+        shim = _RecordedConditions(record.stage, record.conditions)
+        out.extend(conditions_securing.securing_problems(shim, _AnyStage()))
+    return out
+
+
+def _sub_plan_estimate_violations(record, prefix: str) -> list[str]:
+    estimate = record.estimate
+    if estimate is None or (estimate.minutes is None and estimate.usd is None):
+        return [f"{prefix} has no estimate (minutes or usd)"]
+    missing = [role for role, who in (("author", estimate.author),
+                                      ("confirmer", estimate.confirmer)) if not who.strip()]
+    return [f"{prefix}'s estimate names no {role}" for role in missing]
+
+
+def _sub_plan_compared_violations(record, prefix: str, ctx: StageOrderContext) -> list[str]:
+    compared = record.compared_plans
+    if compared is None or not (compared.entries or compared.none):
+        return [f"{prefix} states no compared plans: name the plans compared with and the "
+                f"departure from each, or `none = true` with the id of the search that found nothing"]
+    out: list[str] = []
+    if compared.entries and compared.none:
+        out.append(f"{prefix}'s compared plans list entries and also say `none`")
+    for entry in compared.entries:
+        if not entry["ref"].strip() or not entry["departure"].strip():
+            out.append(f"{prefix}'s compared plan {entry['ref'] or '(no ref)'!r} needs a ref "
+                       f"and the departure from it")
+    if compared.none:
+        if not compared.search_id.strip():
+            out.append(f"{prefix} says no plan was found but names no search id")
+        elif ctx.search_resolver is not None and not ctx.search_resolver(compared.search_id):
+            out.append(f"{prefix} names search {compared.search_id!r}, which no search "
+                       f"recorded in this session resolves")
+    return out
+
+
+def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) -> list[str]:
+    """Check 13: every binding condition of the stage is kept, or its setter's decision says
+    it was changed or withdrawn."""
+    out: list[str] = []
+    known = None if ctx.binding_conditions is None else {c["id"] for c in ctx.binding_conditions}
+    released = {d.condition for d in record.setter_decisions if d.value in ("changed", "withdrawn")}
+    for decision in record.setter_decisions:
+        if decision.value not in sub_plan.SETTER_VALUES:
+            out.append(f"{prefix}'s decision on {decision.condition!r} has value "
+                       f"{decision.value!r}; it is one of {', '.join(sub_plan.SETTER_VALUES)}")
+        for role, who in (("setter", decision.setter), ("who decided", decision.decided_by)):
+            if not who.strip():
+                out.append(f"{prefix}'s decision on {decision.condition!r} names no {role}")
+        if known is not None and decision.condition not in known:
+            out.append(f"{prefix}'s decision names condition {decision.condition!r}, which the "
+                       f"stage does not carry")
+    if known is None:
+        return out
+    kept = {h.condition for h in record.how_kept if h.how.strip()}
+    for cid in sorted(known - kept - released):
+        out.append(f"{prefix} does not say how it keeps binding condition {cid!r}: add a "
+                   f"`[[meta.how_kept]]` entry, or record the setter's decision to change or "
+                   f"withdraw it")
+    for held in record.how_kept:
+        if held.condition not in known:
+            out.append(f"{prefix} says how it keeps {held.condition!r}, which the stage does not carry")
+    return out
+
+
+def _sub_plan_record_violations(record, ctx: StageOrderContext) -> list[str]:
+    prefix = f"sub-plan record of stage {record.stage}"
+    if record.stage <= 0:
+        return [f"the sub-plan record names no parent stage (`stage = <n>`)"] + _sub_plan_text_violations(
+            record, "the sub-plan record")
+    out: list[str] = []
+    if ctx.expected_stage is not None and record.stage != ctx.expected_stage:
+        out.append(f"{prefix}: this plan builds stage {ctx.expected_stage}, not stage {record.stage}")
+    out.extend(_sub_plan_text_violations(record, prefix))
+    out.extend(_sub_plan_estimate_violations(record, prefix))
+    out.extend(_sub_plan_compared_violations(record, prefix, ctx))
+    out.extend(_sub_plan_binding_violations(record, prefix, ctx))
+    return out
+
+
+def _stage_order_violations(doc, ctx: StageOrderContext | None = None) -> list[str]:
+    """The stage-order checks, both carriers in one place: a parent plan's stage descriptions
+    (checks 4 and the parent side of 11), and the sub-plan record a plan carries in
+    `[meta.sub_plan]` (the content of 11 and check 13), whether that plan runs in a pushed
+    frame or in a child contour. A plan with neither draws nothing."""
+    ctx = ctx or StageOrderContext()
+    out = _stage_description_violations(doc, ctx)
+    record = doc.meta.sub_plan
+    if record is not None:
+        out.extend(_sub_plan_record_violations(record, ctx))
+    return out
+
+
 def submission_violations(
     doc,
     *,
@@ -1329,6 +1494,7 @@ def submission_violations(
     judge_enabled: bool = True,
     frozen_edge_stages: frozenset[int] = frozenset(),
     conditions_securing_required: bool = False,
+    stage_order: StageOrderContext | None = None,
 ) -> list[str]:
     """Every submission-grade violation in `doc`, as author-readable strings. [] == clean.
 
@@ -1359,6 +1525,7 @@ def submission_violations(
         out.append(_UNDECLARED)
     # Whatever the weight class: the spawn refuses a grant collision for every plan.
     out.extend(grant_shadow.plan_grant_shadow_problems(doc))
+    out.extend(_stage_order_violations(doc, stage_order))
     # Keyed on the SESSION's class, independent of doc.meta.weight_class, exactly as
     # `verify_command_reachability_blockers` is armed by the caller: a plan declaring a
     # lighter class must not buy a verdict that depends on the invoker's cwd.
@@ -1396,6 +1563,8 @@ def submission_violations(
         supplied = {s.element for s in stage.supplies if s.element}
         for dotted, label, supply_element in _SUBSTANTIVE_SUBMISSION_FIELDS:
             if _attr(stage, dotted):
+                continue
+            if stage.place is not None and dotted in _EXECUTOR_OWNED_PATHS:
                 continue
             if supply_element is not None and supply_element in supplied:
                 continue

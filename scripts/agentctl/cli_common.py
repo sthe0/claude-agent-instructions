@@ -46,6 +46,7 @@ from . import (
     premise,
     resources as _resources,
     runtime_host,
+    sub_plan,
     task_accumulator,
 )
 from . import conditions_securing
@@ -66,6 +67,7 @@ from .plan import (
     _venue_for,
 )
 from .submission import (
+    StageOrderContext,
     plan_size_blocks,
     plan_size_warnings,
     submission_advice,
@@ -2575,11 +2577,44 @@ def _write_securing_firings(state: SessionState, doc, now: float) -> None:
     state.log(_SECURING_APPROVED_EVENT, revisions=[[r["stage"], r["was"]] for r in revisions])
 
 
+def _stage_order_context(state: SessionState, *, store: StateStore | None = None,
+                         require_records: bool = False) -> StageOrderContext:
+    """What the stage-order checks need from the session that carries a plan: the parent stage
+    it builds and that stage's binding conditions (from the pushed frame, or from the child
+    contour's handoff norm), the search ids this session recorded, and -- only where a parent
+    plan is approved (`require_records`) -- whether a stage's sub-plan record exists, read
+    through the one reader that finds it in a frame or in a linked contour."""
+    from . import cli_order
+
+    expected = None
+    conditions = None
+    if state.plan_stack:
+        frame = state.plan_stack[-1]
+        expected = frame.originating_stage
+        parent = next((s for s in frame.stages if s.index == expected), None)
+        if parent is not None and parent.place is not None:
+            conditions = tuple(parent.binding_conditions)
+    elif state.parent_link:
+        expected = state.parent_link.get("stage_index")
+        description = (state.parent_link.get("norm") or {}).get("description_place") or ()
+        if description:
+            conditions = tuple({"id": c[0], "text": c[1], "set_by": c[2]} for c in description[0][2])
+    return StageOrderContext(
+        expected_stage=expected,
+        binding_conditions=conditions,
+        search_resolver=lambda search_id: cli_order._search_recorded(state, search_id),
+        record_exists=((lambda index: sub_plan.read(state, index, store) is not None)
+                       if require_records else None),
+        thresholds=Thresholds(),
+    )
+
+
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
                          frozen_edge_stages: frozenset[int] = frozenset(), *,
                          state: SessionState | None = None, baseline=None,
                          warnings: list[str] | None = None, plan_path=None,
-                         conditions_securing_required: bool = False) -> list[str]:
+                         conditions_securing_required: bool = False,
+                         stage_order: StageOrderContext | None = None) -> list[str]:
     """The submission seam's REFUSING channel, with its judge resolved the way the advice
     channel's is — one place per channel, so no seam re-derives the enabled rule.
 
@@ -2605,6 +2640,7 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
         judge_enabled=enabled,
         frozen_edge_stages=frozen_edge_stages,
         conditions_securing_required=conditions_securing_required,
+        stage_order=stage_order,
     )
     # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
     # that admits plan bytes to a session (submit-plan, approve after an in-place edit,

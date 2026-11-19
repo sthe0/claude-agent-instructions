@@ -68,6 +68,7 @@ from .cli_common import (
     _with_advisories,
     _submission_advice,
     _submission_problems,
+    _stage_order_context,
     _conditions_securing_required,
     _record_securing_firings,
     _adopt_order_identities,
@@ -132,6 +133,7 @@ def _refresh_caches_from_plan_path(
     runner: Runner | None = None,
     advice: list[str] | None = None,
     baseline=None,
+    store: StateStore | None = None,
 ) -> list[str]:
     """SUBMISSION SEAM (c). Re-load state.plan_path, validate it at submission grade, and
     — only if it is clean — refresh state.final_check plus each live stage's
@@ -187,7 +189,9 @@ def _refresh_caches_from_plan_path(
     violations = _submission_problems(refreshed, runner, state.weight_class,
                                       _frozen_edge_stages(state, baseline, refreshed),
                                       state=state, baseline=baseline, plan_path=state.plan_path,
-                                      conditions_securing_required=_conditions_securing_required(state))
+                                      conditions_securing_required=_conditions_securing_required(state),
+                                      stage_order=_stage_order_context(
+                                          state, store=store, require_records=True))
     if violations:
         return violations
     if advice is not None:
@@ -482,7 +486,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     run = runner if runner is not None else advisor.subprocess_runner
     submission = _refresh_caches_from_plan_path(
         state, runner=run, advice=echo_advice,
-        baseline=_baseline_plan_for_tier(store, state))
+        baseline=_baseline_plan_for_tier(store, state), store=store)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "cannot approve: the plan at plan_path does not meet submission "

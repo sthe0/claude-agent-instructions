@@ -610,7 +610,7 @@ def test_how_built_in_brief_is_defect(tmp_path):
     assert judge.texts.count(requirement) == 1
 
     carried = load_plan(_plan_file(tmp_path, name="carried"))
-    carried.stages[0].binding_conditions = [SimpleNamespace(id="B1", text=requirement)]
+    carried.stages[0].binding_conditions = [{"id": "B1", "text": requirement, "set_by": "user"}]
     beside = Judge(answering(M.HOW_BUILT, place=M.BRIEF, containing=requirement))
 
     assert render.brief_site_defects(carried, 1, runner=beside) == []
@@ -619,7 +619,8 @@ def test_how_built_in_brief_is_defect(tmp_path):
 
 def test_brief_binding_conditions_not_judged(tmp_path):
     doc = load_plan(_plan_file(tmp_path))
-    doc.stages[0].binding_conditions = [SimpleNamespace(id="B1", text="the build host runs Linux")]
+    doc.stages[0].binding_conditions = [
+        {"id": "B1", "text": "the build host runs Linux", "set_by": "user"}]
     judge = Judge(answering(M.METHOD))
 
     render.brief_site_defects(doc, 1, runner=judge)
@@ -687,7 +688,7 @@ def test_how_built_in_a_result_reaches_the_recorded_review(tmp_path):
 def test_binding_conditions_a_stage_carries_raise_no_plan_review_concern(tmp_path, monkeypatch):
     path = _plan_file(tmp_path)
     doc = load_plan(path)
-    doc.stages[0].binding_conditions = [SimpleNamespace(id="B1", text=BINDING_TEXT)]
+    doc.stages[0].binding_conditions = [{"id": "B1", "text": BINDING_TEXT, "set_by": "user"}]
     topo = _topo()
     monkeypatch.setattr(topo.plan, "load_plan", lambda _path: doc)
     judge = Judge(answering(M.METHOD, containing=BINDING_TEXT))

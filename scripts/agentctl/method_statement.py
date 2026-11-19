@@ -273,10 +273,13 @@ def question_statements(text: str, kind: str, order, *, sourced: bool = False) -
 
 
 def stage_statements(stage, place: str) -> list[Statement]:
-    """The prose of a stage description outside its sub-plan, labelled by field, and the binding-condition
-    records the stage carries beside it when they are not exempt (no stage field carries them yet)."""
+    """The prose of a stage description, labelled by field: every prose field of the stage, `place`
+    among them, and never the sub-plan (means, method, procedure, conditions on means), which is the
+    executor's own record. The binding conditions the stage carries beside it are read as statements
+    only when `binding_exempt` is lifted."""
     fields = (
         ("title", stage.title),
+        ("place", stage.place),
         ("result", stage.subject.result),
         ("material", stage.subject.material),
         ("invariants", stage.subject.invariants),
@@ -287,13 +290,22 @@ def stage_statements(stage, place: str) -> list[Statement]:
     )
     out = [Statement(f"stage {stage.index} {name}", place, text or "") for name, text in fields]
     if not binding_exempt():
-        for b in getattr(stage, "binding_conditions", ()) or ():
-            out.append(Statement(f"stage {stage.index} binding condition {b.id}", place, b.text))
+        for b in stage.binding_conditions:
+            out.append(Statement(f"stage {stage.index} binding condition {b['id']}", place, b["text"]))
     return out
 
 
+def description_statements(doc, stage_index: int) -> list[Statement]:
+    """The stage description of `stage_index`, at the place stage_description. Empty for a plan on an
+    order in the old form, which is not judged."""
+    if not plan_mod.is_two_sided(doc.meta.order):
+        return []
+    stage = next((s for s in doc.stages if s.index == stage_index), None)
+    return [] if stage is None else stage_statements(stage, STAGE_DESCRIPTION)
+
+
 def brief_statements(doc, stage_index: int) -> list[Statement]:
-    """The brief's own text, without the binding-condition records it carries beside it."""
+    """The brief's own text: the stage's prose fields, never its binding conditions."""
     if not plan_mod.is_two_sided(doc.meta.order):
         return []
     stage = next((s for s in doc.stages if s.index == stage_index), None)
@@ -302,10 +314,8 @@ def brief_statements(doc, stage_index: int) -> list[Statement]:
 
 def plan_statements(doc, stages=None) -> list[Statement]:
     """Every stage description of a new-form plan (all stages, or those in `stages`)."""
-    if not plan_mod.is_two_sided(doc.meta.order):
-        return []
     out = []
     for stage in doc.stages:
         if stages is None or stage.index in stages:
-            out.extend(stage_statements(stage, STAGE_DESCRIPTION))
+            out.extend(description_statements(doc, stage.index))
     return out

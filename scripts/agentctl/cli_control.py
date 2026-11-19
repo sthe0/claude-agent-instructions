@@ -7,7 +7,7 @@ import argparse
 import copy
 import json
 from pathlib import Path
-from . import effort, effort_segments, gates
+from . import effort, effort_segments, gates, sub_plan
 from .directive import Directive
 from .dispatch import Runner
 from .machine import transition
@@ -526,6 +526,7 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     except KeyError:
         pass
     _restore_current_stage(state)
+    sub_plan.close_frame_interval(state, frame.originating_stage, len(state.history))
     state.log("pop_subplan", child_task_id=child_task_id, originating_stage=frame.originating_stage,
               depth=len(state.plan_stack), venue_source=venue_source)
     store.save(state)

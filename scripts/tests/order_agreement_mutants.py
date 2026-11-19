@@ -479,8 +479,21 @@ def _size_predicate_hardcoded(mp):
     mp.setattr(classify, "above_threshold", hardcoded, raising=True)
 
 
+def _stage_order_checks_unchecked(mp):
+    """The submission seam stops grading stage descriptions and the sub-plan record a plan carries."""
+    mp.setattr("agentctl.submission._stage_order_violations", lambda doc, ctx=None: [], raising=True)
+
+
+def _stage_description_rule_unwired(mp):
+    """No stage description reaches the method-statement judge, so no description is ever read."""
+    mp.setattr("agentctl.method_statement.description_statements", lambda doc, stage_index: [],
+               raising=True)
+
+
 MUTANTS = {
     "size_predicate_hardcoded": _size_predicate_hardcoded,
+    "stage_order_checks_unchecked": _stage_order_checks_unchecked,
+    "stage_description_rule_unwired": _stage_description_rule_unwired,
     "binding_conditions_judged": _binding_conditions_judged,
     "order_criterion_type_not_adopted": _order_criterion_type_not_adopted,
     "order_review_type_from_session": _order_review_type_from_session,

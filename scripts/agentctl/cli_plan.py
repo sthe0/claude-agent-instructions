@@ -26,6 +26,7 @@ from . import (
     premise,
 )
 from . import effort_segments
+from . import sub_plan
 from .cli_common import _book_and_judge, _closing_arming_figures, _figures_instruction, _judge_and_refuse
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
@@ -102,6 +103,7 @@ from .cli_common import (
     _attach_advisories,
     _submission_advice,
     _submission_problems,
+    _stage_order_context,
     _conditions_securing_decision,
     _conditions_securing_required,
     _note_securing_outcome,
@@ -685,7 +687,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     securing_required = _conditions_securing_required(state)
     problems: list[str] = _submission_problems(
         doc, run, state.weight_class, warnings=grounding_warnings, plan_path=plan_path,
-        conditions_securing_required=securing_required)
+        conditions_securing_required=securing_required,
+        stage_order=_stage_order_context(state, store=store))
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -770,6 +773,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             scope: pr for scope, pr in state.plan_stage_reviews.items() if _still_covers(pr)
         }
     _register_plan_assumptions(state, doc, plan_path)
+    sub_plan.record_carried_by(state, doc)
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting,
               plan_sha256=_submitted_plan_sha256)

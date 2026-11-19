@@ -1370,6 +1370,26 @@ def brief_site_defects(doc: PlanDoc, stage_index: int, *, runner=None) -> list[s
     return [method_statement.defect_line(f) for f in brief_site_findings(doc, stage_index, runner=runner)]
 
 
+def stage_description_site_findings(doc: PlanDoc, stage_index: int, *, runner=None) -> list:
+    """The method-statement defects in the stage description of `stage_index`: every prose field of
+    the description judged at the place stage_description, never its binding conditions and never the
+    sub-plan (means, method, procedure, conditions on means), which is the executor's own record.
+    The list ends at the first statement the judge could not read (a blocker). Empty for a plan on
+    an order in the old form, which is never judged, so no judge is called for it."""
+    from . import method_statement
+
+    return method_statement.site_defects(
+        method_statement.description_statements(doc, stage_index), runner=runner, stop_on_unread=True)
+
+
+def stage_description_site_defects(doc: PlanDoc, stage_index: int, *, runner=None) -> list[str]:
+    """`stage_description_site_findings`, one line each."""
+    from . import method_statement
+
+    return [method_statement.defect_line(f)
+            for f in stage_description_site_findings(doc, stage_index, runner=runner)]
+
+
 def render_unit_review_bundle(
     doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
     agreed_understanding: "str | None" = None,

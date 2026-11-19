@@ -271,3 +271,472 @@ def test_a_rewritten_record_keeps_its_reviews():
     sub_plan.add_review(state, 2, {"verdict": "pass"})
     sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="m, revised"))
     assert sub_plan.read(state, 2).reviews == [{"verdict": "pass"}]
+
+
+# --- 2. The submission checks and their two carriers ------------------------------------------
+
+from argparse import Namespace  # noqa: E402
+
+from agentctl import cli, cli_common, submission  # noqa: E402
+from agentctl.state import (  # noqa: E402
+    FinalCheck, GateRecord, Node, Partition, Route, StageStatus, WeightClass,
+)
+from agentctl.submission import StageOrderContext  # noqa: E402
+
+BINDING = ({"id": "B1", "text": "no push", "set_by": "user"},)
+
+
+def _doc(stage_extra=None, record=None):
+    raw = _raw_plan({"place": "the engine", **(stage_extra or {})})
+    if record is not None:
+        raw["meta"].update(record)
+    return parse_plan(raw)
+
+
+def _problems(doc, ctx=None):
+    return submission.submission_violations(doc, stage_order=ctx)
+
+
+def _ctx(**kw):
+    return StageOrderContext(expected_stage=2, binding_conditions=BINDING, thresholds=TIGHT, **kw)
+
+
+def _record(**edits):
+    meta = json.loads(json.dumps(_META))
+    for key, value in edits.items():
+        if key in ("compared_plans", "how_kept"):
+            meta[key] = value
+        elif value is None:
+            meta["sub_plan"].pop(key, None)
+        else:
+            meta["sub_plan"][key] = value
+    return meta
+
+
+def test_a_described_stage_that_states_a_method_is_refused():
+    problems = _problems(_doc({"means": "Edit", "method": "split it"}))
+    assert any("stage 1 states a place" in p and "no means, method" in p for p in problems), problems
+
+
+def test_a_described_stage_that_states_conditions_is_refused():
+    problems = _problems(_doc({"conditions": "- the module imports [risk: unverified]"}))
+    assert any("no conditions" in p for p in problems), problems
+
+
+def test_a_description_alone_draws_no_stage_order_violation():
+    assert submission._stage_order_violations(_doc(), _ctx()) == []
+
+
+def test_an_old_form_plan_draws_no_stage_order_violation():
+    old_form = parse_plan(_raw_plan({"means": "Edit", "method": "m"}))
+    assert submission._stage_order_violations(old_form, _ctx(record_exists=lambda i: False)) == []
+
+
+def test_below_threshold_stage_needs_only_description():
+    doc = _doc({"declared_size": 5, "expected_minutes": 2})
+    assert submission._stage_order_violations(doc, _ctx(record_exists=lambda i: False)) == []
+
+
+def test_an_above_threshold_stage_needs_a_record_before_the_parent_is_approved():
+    doc = _doc({"declared_size": 400})
+    problems = submission._stage_order_violations(doc, _ctx(record_exists=lambda i: False))
+    assert any("stage 1 is above the size line and has no sub-plan record" in p for p in problems)
+    assert submission._stage_order_violations(doc, _ctx(record_exists=lambda i: True)) == []
+    assert submission._stage_order_violations(doc, _ctx()) == []  # the submit seam does not ask yet
+
+
+def test_a_lazy_stage_decides_its_sub_plan_later():
+    doc = _doc({"declared_size": 400, "lazy": True})
+    assert submission._stage_order_violations(doc, _ctx(record_exists=lambda i: False)) == []
+
+
+def test_a_complete_record_is_clean():
+    assert submission._stage_order_violations(_doc(record=_record()), _ctx()) == []
+
+
+_REFUSALS = [
+    ("method", {"method": ""}, "states no method"),
+    ("means", {"means": " "}, "states no means"),
+    ("procedure", {"procedure": ""}, "states no procedure"),
+    ("unsecured condition", {"conditions": "- the module imports"}, "unmarked"),
+    ("estimate missing", {"estimate": None}, "has no estimate"),
+    ("estimate confirmer", {"estimate": {"minutes": 9, "author": "executor"}},
+     "names no confirmer"),
+    ("estimate author", {"estimate": {"minutes": 9, "confirmer": "parent"}}, "names no author"),
+    ("wrong stage", {"stage": 7}, "builds stage 2, not stage 7"),
+]
+
+
+@pytest.mark.parametrize("name, edit, expected", _REFUSALS, ids=[r[0] for r in _REFUSALS])
+def test_a_record_defect_is_refused(name, edit, expected):
+    problems = submission._stage_order_violations(_doc(record=_record(**edit)), _ctx())
+    assert any(expected in p for p in problems), problems
+
+
+def _record_problems(meta, ctx):
+    return submission._stage_order_violations(_doc(record=meta), ctx)
+
+
+def test_compared_plans_need_an_entry_with_its_departure_or_a_resolving_search():
+    resolves = _ctx(search_resolver=lambda sid: sid == "S1")
+    assert _record_problems(_record(compared_plans={"none": True, "search_id": "S1"}), resolves) == []
+    unresolved = _ctx(search_resolver=lambda sid: False)
+    assert any("no search recorded in this session resolves" in p for p in _record_problems(
+        _record(compared_plans={"none": True, "search_id": "S1"}), unresolved))
+    assert any("names no search id" in p for p in _record_problems(
+        _record(compared_plans={"none": True}), resolves))
+    assert any("states no compared plans" in p for p in _record_problems(
+        _record(compared_plans={}), resolves))
+    assert any("needs a ref and the departure" in p for p in _record_problems(
+        _record(compared_plans={"entries": [{"ref": "plan-a", "departure": ""}]}), resolves))
+    assert any("list entries and also say" in p for p in _record_problems(
+        _record(compared_plans={"entries": [{"ref": "a", "departure": "b"}], "none": True,
+                                "search_id": "S1"}), resolves))
+
+
+def test_every_binding_condition_is_kept_or_released_by_its_setter():
+    two = (*BINDING, {"id": "B2", "text": "stay in the worktree", "set_by": "user"})
+    ctx = StageOrderContext(expected_stage=2, binding_conditions=two, thresholds=TIGHT)
+    assert any("does not say how it keeps binding condition 'B2'" in p
+               for p in _record_problems(_record(), ctx))
+    released = _record(setter_decisions=[
+        {"condition": "B1", "value": "kept", "setter": "user", "decided_by": "user"},
+        {"condition": "B2", "value": "withdrawn", "setter": "user", "decided_by": "user"}])
+    assert _record_problems(released, ctx) == []
+
+
+def test_a_record_names_only_the_conditions_the_stage_carries():
+    unknown = _record(how_kept=[{"condition": "B1", "how": "x"}, {"condition": "B9", "how": "y"}])
+    assert any("'B9', which the stage does not carry" in p for p in _record_problems(unknown, _ctx()))
+    stray = _record(setter_decisions=[{"condition": "B9", "value": "kept", "setter": "u",
+                                       "decided_by": "u"}])
+    assert any("names condition 'B9'" in p for p in _record_problems(stray, _ctx()))
+
+
+def test_a_setter_decision_has_a_known_value_a_setter_and_a_decider():
+    bad = _record(setter_decisions=[{"condition": "B1", "value": "ignored", "setter": "",
+                                     "decided_by": ""}])
+    problems = _record_problems(bad, _ctx())
+    assert any("value 'ignored'" in p for p in problems)
+    assert any("names no setter" in p for p in problems)
+    assert any("names no who decided" in p for p in problems)
+
+
+def test_a_malformed_record_part_is_refused_by_name():
+    meta = _record()
+    meta["sub_plan"]["building_place"] = 3
+    assert any("malformed part: building_place" in p for p in _record_problems(meta, _ctx()))
+
+
+def _described_parent(store, sid):
+    from agentctl.state import Stage as _Stage
+
+    parent = _Stage(
+        index=1, title="stage 1", subject=Subject(material="m", result="img"),
+        means=Means(means="", method=""), actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="crit"),
+        outcome=Outcome(status=StageStatus.ACTIVE.value), place="the engine",
+        binding_conditions=[dict(c) for c in BINDING])
+    state = SessionState(
+        session_id=sid, task_id="parent-task", goal="g", overall_done_criterion="d",
+        weight_class=WeightClass.SUBSTANTIVE.value, route=Route.SPAWN.value,
+        node=Node.EXECUTING.value,
+        approval=GateRecord("plan_approval", armed=True, passed=True, by="tester"),
+        partition=Partition(verdict="single"), repo_root="/tmp/repo",
+        delivery_worktree="/tmp/repo/.wt",
+        final_check=[FinalCheck(command="echo ok", expected_exit=0, label="smoke")],
+        stages=[parent], current_stage=1, order_searches=[{"id": "S1"}])
+    store.save(state)
+    return state
+
+
+_NORM = {"description_place": [["description", "the engine", [["B1", "no push", "user"]],
+                                None, [], None]]}
+
+
+def test_a_frame_and_a_child_contour_judge_one_record_by_one_definition(store):
+    _described_parent(store, "p")
+    cli.cmd_push_subplan(Namespace(session="p", plan="/tmp/child.toml", task=None,
+                                   originating_stage=1), store=store)
+    framed = store.load("p")
+    contour = _session("child", order_searches=[{"id": "S1"}],
+                       parent_link={"parent_session": "p", "stage_index": 1, "norm": _NORM})
+    flawed = _doc(record=_record(stage=1, how_kept=[], estimate={"minutes": 9, "author": "e"}))
+    by_frame = _problems(flawed, cli_common._stage_order_context(framed))
+    by_contour = _problems(flawed, cli_common._stage_order_context(contour))
+    assert by_frame == by_contour and len(by_frame) == 2, (by_frame, by_contour)
+    assert cli_common._stage_order_context(framed).expected_stage == 1
+    assert cli_common._stage_order_context(contour).expected_stage == 1
+
+
+def test_the_context_resolves_searches_in_the_carrying_session():
+    carrying = _session("c", order_searches=[{"id": "S1"}],
+                        parent_link={"stage_index": 1, "norm": {}})
+    ctx = cli_common._stage_order_context(carrying)
+    assert ctx.search_resolver("S1") and not ctx.search_resolver("S2")
+    assert ctx.binding_conditions is None
+
+
+def test_the_approve_context_finds_a_record_in_the_frame_and_in_a_linked_contour(store):
+    parent = _described_parent(store, "p")
+    child = _session("child", parent_link={"parent_session": "p", "stage_index": 1, "norm": {}})
+    sub_plan.store(child, sub_plan.SubPlanRecord(stage=1, method="m"))
+    store.save(child)
+    ctx = cli_common._stage_order_context(parent, store=store, require_records=True)
+    assert ctx.record_exists(1) and not ctx.record_exists(2)
+    assert cli_common._stage_order_context(parent).record_exists is None
+
+
+_RECORD_HEAD = """
+[meta.sub_plan]
+stage = 1
+means = "Edit and Write"
+method = "split the module and keep the seam"
+procedure = "1. read the module. 2. split it. 3. run the suite"
+conditions = "- the suite stays green [probe: python3 -m pytest -q => passes]"
+
+[meta.sub_plan.estimate]
+minutes = 40
+author = "executor"
+confirmer = "parent"
+
+[meta.compared_plans]
+none = true
+search_id = "S1"
+"""
+
+_HOW_KEPT = """
+[[meta.how_kept]]
+condition = "B1"
+how = "no push verb is run"
+
+[[meta.sub_plan.setter_decisions]]
+condition = "B1"
+value = "kept"
+setter = "user"
+decided_by = "user"
+"""
+
+
+def _walk_to_submit(store, tmp_path, record_toml):
+    from test_submit_plan_surfaces import _write_plan
+
+    _described_parent(store, "w")
+    pushed = cli.cmd_push_subplan(Namespace(session="w", plan=str(tmp_path / "plan.toml"),
+                                            task=None, originating_stage=1), store=store)
+    assert pushed.ok, pushed
+    cli.cmd_classify(Namespace(session="w", chat=False, changed_lines=200, files=5,
+                               wall_clock_min=60, tracker_key=None, architectural=True,
+                               external_effect=False, new_dependency=False,
+                               public_api_change=False), store=store)
+    cli.cmd_plan(Namespace(session="w"), store=store)
+    plan = _write_plan(tmp_path, tier="small")
+    plan.write_text(plan.read_text(encoding="utf-8") + record_toml, encoding="utf-8")
+    return cli.cmd_submit_plan(Namespace(session="w", plan=str(plan)), store=store)
+
+
+def _stage_order_problems(directive) -> list[str]:
+    return [p for p in directive.data.get("problems", []) if "sub-plan record" in p]
+
+
+def test_the_whole_verb_sequence_refuses_a_missing_how_kept_and_then_accepts_the_fixed_record(
+        store, tmp_path):
+    refused = _walk_to_submit(store, tmp_path, _RECORD_HEAD)
+    assert refused.ok is False
+    assert any("does not say how it keeps binding condition 'B1'" in p
+               for p in _stage_order_problems(refused)), refused.data
+    assert store.load("w").sub_plan_records == {}
+
+    plan = tmp_path / "plan.toml"
+    plan.write_text(plan.read_text(encoding="utf-8").replace(_RECORD_HEAD, _RECORD_HEAD + _HOW_KEPT),
+                    encoding="utf-8")
+    fixed = cli.cmd_submit_plan(Namespace(session="w", plan=str(plan)), store=store)
+    assert fixed.ok, fixed.data.get("problems")
+    assert sub_plan.read(store.load("w"), 1).how_kept[0].condition == "B1"
+
+
+def test_a_good_record_is_stored_at_submit_with_all_its_elements_and_its_building_interval(
+        store, tmp_path):
+    accepted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT)
+    assert accepted.ok, accepted.data.get("problems")
+    state = store.load("w")
+    record = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["1"])
+    assert record.means and record.method and record.procedure
+    assert record.estimate.author == "executor" and record.estimate.confirmer == "parent"
+    assert record.compared_plans.none and record.compared_plans.search_id == "S1"
+    assert [h.condition for h in record.how_kept] == ["B1"]
+    assert [d.value for d in record.setter_decisions] == ["kept"]
+    place = record.building_place
+    assert place.session == "w" and place.pushed is not None and place.popped is None
+    assert state.history[place.pushed]["event"] == "push_subplan"
+
+    state.node = Node.RESOLVED.value
+    state.stages[0].outcome.status = StageStatus.PASSED.value
+    state.partition = Partition(verdict="single")
+    state.resolution = GateRecord("resolution", armed=True, passed=True, by="tester")
+    state.current_stage = None
+    store.save(state)
+    popped = cli.cmd_pop_subplan(Namespace(session="w"), store=store)
+    assert popped.ok, popped
+    after = store.load("w")
+    closed = sub_plan.read(after, 1).building_place
+    assert closed.pushed == place.pushed and closed.popped is not None
+    assert closed.popped > closed.pushed
+    assert after.history[closed.popped - 1]["event"] != "pop_subplan"
+    assert sub_plan.read(after, 1).method == record.method
+
+
+# --- 3. The stage-description review ---------------------------------------------------------
+
+from agentctl import cli_review, method_statement as M, render  # noqa: E402
+from agentctl.plan import load_plan  # noqa: E402
+from test_method_statement_rule import Judge, _plan_file, answering  # noqa: E402
+
+PLACE_TEXT = "the release engine, relied on by stage 2"
+HOW_BUILT_TEXT = "the release command is a shell script"
+
+
+def _described_doc(tmp_path, *, two_sided=True, name="plan", **fields):
+    doc = load_plan(_plan_file(tmp_path, two_sided=two_sided, name=name))
+    stage = doc.stages[0]
+    stage.place = fields.pop("place", PLACE_TEXT)
+    stage.subject.result = fields.pop("result", stage.subject.result)
+    for key, value in fields.items():
+        setattr(stage, key, value)
+    return doc
+
+
+def test_description_method_field_refused():
+    judge = Judge(answering(M.METHOD))
+    problems = _problems(_doc({"method": "write a shell script", "procedure": "1. do it"}))
+    assert any("stage 1 states a place" in p and "method" in p and "procedure" in p
+               for p in problems), problems
+    assert judge.calls == []
+
+
+def test_description_binding_conditions_not_judged(tmp_path):
+    doc = _described_doc(tmp_path, binding_conditions=[
+        {"id": "B1", "text": "the build host runs Linux", "set_by": "user"}])
+    judge = Judge(answering(M.METHOD))
+
+    render.stage_description_site_defects(doc, 1, runner=judge)
+
+    assert judge.calls and judge.places == {M.STAGE_DESCRIPTION}
+    assert not any("build host runs Linux" in text for text in judge.texts)
+
+
+def test_description_how_built_is_defect(tmp_path):
+    doc = _described_doc(tmp_path, result=HOW_BUILT_TEXT)
+    judge = Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION, containing=HOW_BUILT_TEXT))
+
+    lines = render.stage_description_site_defects(doc, 1, runner=judge)
+
+    assert len(lines) == 1, lines
+    assert "stage 1 result (stage description)" in lines[0]
+    assert "states how the product is built" in lines[0]
+
+
+def test_description_extra_field_how_built_reported(tmp_path):
+    doc = _described_doc(tmp_path, place=HOW_BUILT_TEXT)
+    judge = Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION, containing=HOW_BUILT_TEXT))
+
+    lines = render.stage_description_site_defects(doc, 1, runner=judge)
+
+    assert len(lines) == 1 and "stage 1 place (stage description)" in lines[0], lines
+    assert "states how the product is built" in lines[0]
+
+
+def test_description_old_form_not_judged(tmp_path):
+    doc = _described_doc(tmp_path, two_sided=False)
+    judge = Judge(answering(M.METHOD))
+
+    assert render.stage_description_site_defects(doc, 1, runner=judge) == []
+    assert M.plan_statements(doc) == []
+    assert judge.calls == []
+
+
+def test_description_could_not_read_is_defect(tmp_path):
+    doc = _described_doc(tmp_path)
+    judge = Judge(fail=True)
+
+    findings = render.stage_description_site_findings(doc, 1, runner=judge)
+
+    assert len(findings) == 1 and findings[0].verdict == M.COULD_NOT_READ
+    assert len(judge.calls) == 1
+    assert "the judge did not answer" in M.defect_line(findings[0])
+
+
+def test_means_condition_not_judged(tmp_path):
+    doc = _described_doc(tmp_path, conditions="- a means condition [risk: the build host is slow]")
+    doc.stages[0].means.method = "use the shell script"
+    judge = Judge(answering(M.METHOD))
+
+    render.stage_description_site_defects(doc, 1, runner=judge)
+
+    assert judge.calls
+    for text in ("a means condition", "the build host is slow", "use the shell script"):
+        assert not any(text in judged for judged in judge.texts), text
+
+
+def test_place_is_one_of_the_statements_of_the_description(tmp_path):
+    doc = _described_doc(tmp_path)
+    labels = {s.label: s for s in M.description_statements(doc, 1)}
+    assert labels["stage 1 place"].text == PLACE_TEXT
+    assert labels["stage 1 place"].place == M.STAGE_DESCRIPTION
+
+
+def _plan_review_args(path):
+    return Namespace(verdict="pass", scope="", target=str(path))
+
+
+@pytest.mark.parametrize("flow", ["old-form", "no-order", "child-contour"])
+def test_a_flow_that_never_meets_the_description_guard_makes_no_judge_call(
+        tmp_path, monkeypatch, flow):
+    path = _plan_file(tmp_path, two_sided=False)
+    assert not plan.is_two_sided(load_plan(path).meta.order)
+    if flow == "no-order":
+        orderless = parse_plan(_raw_plan({"place": PLACE_TEXT}))
+        assert orderless.meta.order is None
+        monkeypatch.setattr(cli_review, "load_plan", lambda target: orderless)
+    parent_link = ({"parent_session": "p", "stage_index": 1, "norm": {}}
+                   if flow == "child-contour" else None)
+    state = _session("s", plan_path=str(path), parent_link=parent_link)
+    judge = Judge(answering(M.METHOD))
+
+    assert cli_review._method_statement_plan_pass_refusal(
+        _plan_review_args(path), state, judge) is None
+    assert judge.calls == []
+
+
+def test_the_submit_flow_makes_no_judge_call(store, tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("the stage-order checks reached the method-statement judge")
+
+    monkeypatch.setattr(M, "site_defects", forbidden)
+    accepted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT)
+    assert accepted.ok, accepted.data.get("problems")
+
+
+def test_the_plan_review_pass_refuses_a_described_stage_the_judge_cannot_read(tmp_path):
+    path = _plan_file(tmp_path)
+    state = _session("s", plan_path=str(path))
+    refused = cli_review._method_statement_plan_pass_refusal(
+        _plan_review_args(path), state, Judge(fail=True))
+    assert refused is not None and refused.action == "fix_plan"
+    assert "did not answer" in " ".join(refused.data["problems"])
+
+    clean = cli_review._method_statement_plan_pass_refusal(_plan_review_args(path), state, Judge())
+    assert clean is None
+
+
+def test_the_whole_verb_sequence_reads_the_description_at_the_review(store, tmp_path):
+    accepted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT)
+    assert accepted.ok, accepted.data.get("problems")
+    state = store.load("w")
+    two_sided = _plan_file(tmp_path, name="two-sided")
+    judge = Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION))
+    refusal = cli_review._method_statement_plan_pass_refusal(
+        _plan_review_args(two_sided), state, judge)
+    assert judge.places == {M.STAGE_DESCRIPTION}
+    assert refusal is not None and refusal.action == "fix_plan"
+    assert "states how the product is built" in " ".join(refusal.data["problems"])

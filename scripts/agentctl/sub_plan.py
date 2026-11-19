@@ -242,6 +242,42 @@ def store(state, record: SubPlanRecord) -> None:
     state.sub_plan_records[key] = record.to_dict()
 
 
+def frame_push_position(state, stage_index: int) -> int | None:
+    """The history position of the push that opened the frame building `stage_index`: the
+    newest `push_subplan` entry naming it, or None when no frame was pushed for it."""
+    for position in range(len(state.history) - 1, -1, -1):
+        entry = state.history[position]
+        if entry.get("event") == "push_subplan" and entry.get("originating_stage") == stage_index:
+            return position
+    return None
+
+
+def record_carried_by(state, doc) -> None:
+    """Store the record a submitted plan carries, with the place it was built: this session,
+    and, when the plan runs in a pushed frame, the interval that opens at the push. A plan
+    carrying no record stores nothing."""
+    record = doc.meta.sub_plan
+    if record is None or record.stage <= 0:
+        return
+    pushed = frame_push_position(state, record.stage) if state.plan_stack else None
+    previous = state.sub_plan_records.get(str(record.stage)) or {}
+    place = previous.get("building_place")
+    if pushed is not None and not (place and place.get("pushed") == pushed):
+        record.building_place = BuildingPlace(session=state.session_id, pushed=pushed)
+    elif pushed is None and state.parent_link:
+        record.building_place = BuildingPlace(session=state.session_id)
+    store(state, record)
+
+
+def close_frame_interval(state, stage_index: int, popped: int) -> None:
+    """End the building-place interval of the record for `stage_index` at history position
+    `popped`: the frame that built it has been popped."""
+    raw = state.sub_plan_records.get(str(stage_index))
+    place = (raw or {}).get("building_place")
+    if place and place.get("popped") is None and place.get("session") == state.session_id:
+        place["popped"] = popped
+
+
 def add_review(state, stage_index: int, review: dict) -> None:
     """Add a review to the record of `stage_index`; no other stage's record is touched."""
     key = str(stage_index)
