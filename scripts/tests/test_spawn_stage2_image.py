@@ -597,22 +597,72 @@ def _venue_settings(store, sid: str) -> Path:
     return settings
 
 
+def _checkout_venue(store, sid: str, monkeypatch) -> Path:
+    """Make `store` the default engine store and the session's venue a git
+    checkout: the two conditions, besides starting in the venue, under which a
+    child loads its project settings."""
+    monkeypatch.setattr("agentctl.store.DEFAULT_ROOT", store.root)
+    venue = Path(store.load(sid).resolve_check_venue("delivery"))
+    (venue / ".git").mkdir(parents=True, exist_ok=True)
+    (venue / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    return venue
+
+
+def _setting_sources(run: DryRun) -> str:
+    return run.argv[run.argv.index("--setting-sources") + 1]
+
+
+def _no_parent_hooks(monkeypatch, root: Path) -> None:
+    monkeypatch.setattr(MOD, "parent_project", lambda env=None: MOD.ParentProject(str(root), "test", None, (), False))
+
+
 def test_p14_the_settings_dispatch_forwards_reach_the_child(store, fixtures_dir, tmp_path, plans, capsys, monkeypatch):
     sid = "stage2-project-settings-dispatched"
     plan = _engine_plan(fixtures_dir, tmp_path)
     _to_executing(store, sid, fixtures_dir, plan_path=plan)
     _venue_settings(store, sid)
+    _checkout_venue(store, sid, monkeypatch)
     children = []
 
     def runner(argv, cwd=None):
         monkeypatch.chdir(cwd)
-        children.append(_dry_run(capsys, argv[2:] + ["--dry-run", "--state-root", str(tmp_path / "state")]))
+        children.append(_dry_run(capsys, argv[2:] + ["--dry-run"]))
         return RunResult(0, stdout="COMPLETED: done\n")
 
     cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium", dry_run=False), store=store, runner=runner)
 
     assert children[0].rc == 0
     assert PROJECT_RULE in children[0].allow
+    assert _setting_sources(children[0]) == "user,project,local"
+
+
+def test_p14_a_scratch_workdir_with_planted_settings_loads_user_sources_only(tmp_path, plans, two_stage_plan, capsys, monkeypatch):
+    scratch = tmp_path / "scratch"
+    planted = scratch / ".claude" / "settings.local.json"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(json.dumps({"permissions": {"allow": ["Bash(git push:*)"]}}))
+    _no_parent_hooks(monkeypatch, tmp_path)
+
+    run = _dry_run(capsys, _base_argv("developer", two_stage_plan) + ["--workdir", str(scratch)])
+
+    assert run.rc == 0
+    assert _setting_sources(run) == "user"
+    assert "Bash(git push:*)" not in run.allow
+    assert "notice: the child loads user settings only" in run.err
+
+
+def test_p14_state_root_with_project_settings_is_refused(store, fixtures_dir, tmp_path, plans, capsys, monkeypatch):
+    sid = "stage2-project-settings-state-root"
+    plan = _engine_plan(fixtures_dir, tmp_path)
+    _to_executing(store, sid, fixtures_dir, plan_path=plan)
+    settings = _venue_settings(store, sid)
+    monkeypatch.chdir(_checkout_venue(store, sid, monkeypatch))
+
+    refused = _dry_run(capsys, _session_argv(sid, tmp_path, plan) + ["--project-settings", str(settings)])
+
+    assert refused.rc == 2
+    assert PROJECT_RULE not in refused.allow
+    assert "--state-root names an engine store other than the default" in refused.err
 
 
 def test_p14_project_settings_must_end_in_settings_local_json(store, fixtures_dir, tmp_path, plans, capsys, monkeypatch):
@@ -634,17 +684,21 @@ def test_p14_project_settings_of_another_directory_is_refused(store, fixtures_di
     sid = "stage2-project-settings-forged"
     plan = _engine_plan(fixtures_dir, tmp_path)
     _to_executing(store, sid, fixtures_dir, plan_path=plan)
-    venue = _venue_settings(store, sid).parent.parent
+    _venue_settings(store, sid)
+    venue = _checkout_venue(store, sid, monkeypatch)
     forged = tmp_path / "scratch" / "x" / ".claude" / "settings.local.json"
     forged.parent.mkdir(parents=True)
     forged.write_text(json.dumps({"permissions": {"allow": ["Bash(git push:*)"]}}))
     monkeypatch.chdir(venue)
+    argv = _base_argv("developer", Path(plan)) + [
+        "--session", sid, "--stage-index", "1", "--project-settings", str(forged),
+    ]
 
-    refused = _dry_run(capsys, _session_argv(sid, tmp_path, plan) + ["--project-settings", str(forged)])
+    refused = _dry_run(capsys, argv)
 
     assert refused.rc == 2
     assert "Bash(git push:*)" not in refused.allow
-    assert "is not the settings file of the delivery venue" in refused.err
+    assert "is not the delivery venue's settings file" in refused.err
 
 
 def test_p14_project_settings_without_a_session_is_refused(tmp_path, plans, two_stage_plan, capsys):
@@ -659,7 +713,7 @@ def test_p14_project_settings_without_a_session_is_refused(tmp_path, plans, two_
 
     assert refused.rc == 2
     assert PROJECT_RULE not in refused.allow
-    assert "names the engine session (--session)" in refused.err
+    assert "no --session names the engine session" in refused.err
 
 
 # --- point 15: ledger row carries the child's real session/transcript ---------
