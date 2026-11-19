@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, fields, replace
 
 from .plan import (
     delivery_place,
+    description_place,
     interface_empty,
     knowledge_place,
     negative_control_place,
@@ -82,6 +83,7 @@ class StageNorm:
     interface_brief: str | None = None
     supplier_interfaces: tuple = ()  # ((supplier index, its interface_digest), ...)
     renorms: tuple = ()  # norm files the stage edits (stage.renorms), as given
+    description_place: tuple = ()  # the stage-description fields; empty for an old-form stage
 
     @classmethod
     def from_stage(cls, stage, suppliers=None, *, doc=None) -> "StageNorm":
@@ -128,6 +130,7 @@ class StageNorm:
             delivery_place=delivery_place(stage),
             interface_brief=brief,
             renorms=tuple(stage.renorms),
+            description_place=description_place(stage),
         )
         if not suppliers:
             return norm
@@ -152,7 +155,7 @@ class StageNorm:
             raw["landed"] = LandedSpec.from_dict(landed)
         for name in ("principle", "edges", "output_artifacts", "knowledge_place",
                      "preconditions_place", "procedure_place", "negative_control_place",
-                     "delivery_place", "supplier_interfaces", "renorms"):
+                     "delivery_place", "supplier_interfaces", "renorms", "description_place"):
             if name in raw:
                 raw[name] = _tuplify(raw[name])
         return cls(**raw)
@@ -188,6 +191,7 @@ class StageNorm:
             *self.negative_control_place,
             *self.delivery_place,
             *((("renorms", self.renorms),) if self.renorms else ()),
+            *self.description_place,
         ))
 
     def review_digest(self) -> str:
@@ -248,6 +252,7 @@ class StageNorm:
             *self.procedure_place,
             *self.negative_control_place,
             *((("renorms", self.renorms),) if self.renorms else ()),
+            *self.description_place,
         )
 
     def carry_digest(self) -> str:

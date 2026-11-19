@@ -119,6 +119,35 @@ def classify_action(
     return "unknown"
 
 
+SIZE_FLAGS = {
+    "not cohesive": "cohesive",
+    "architectural": "architectural",
+    "external effect": "external_effect",
+    "new dependency": "new_dependency",
+    "public api change": "public_api_change",
+}
+
+
+def above_threshold(
+    declared_size: int | None,
+    size_flags: "list[str] | tuple[str, ...]",
+    expected_minutes: int | None,
+    thr: Thresholds,
+) -> bool:
+    """Whether a work item declaring this size is above the line the substantive class draws:
+    `classify` over the declared signals, with no constant of its own. `declared_size` is
+    hand-written production lines, `expected_minutes` the wall-clock estimate, and each flag
+    one of SIZE_FLAGS (a flag outside them is no signal here; the submission seam refuses it)."""
+    sig = Signals(changed_lines=declared_size or 0, wall_clock_min=expected_minutes or 0)
+    for flag in size_flags:
+        attr = SIZE_FLAGS.get(str(flag).strip().lower())
+        if attr == "cohesive":
+            sig.cohesive = False
+        elif attr:
+            setattr(sig, attr, True)
+    return classify(sig, thr).weight_class == WeightClass.SUBSTANTIVE.value
+
+
 def classify(sig: Signals, thr: Thresholds) -> Classification:
     reasons: list[str] = []
 

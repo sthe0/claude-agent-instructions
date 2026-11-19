@@ -2280,6 +2280,11 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.lazy = refined.lazy
     cur.backlog_issue = refined.backlog_issue
     cur.branch = refined.branch
+    cur.place = refined.place
+    cur.binding_conditions = [dict(c) for c in refined.binding_conditions]
+    cur.declared_size = refined.declared_size
+    cur.size_flags = list(refined.size_flags)
+    cur.expected_minutes = refined.expected_minutes
     cur.amendments = list(refined.amendments)
     if is_skipped(cur) and not cur.optional:
         cur.outcome.status = StageStatus.PENDING.value

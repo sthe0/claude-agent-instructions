@@ -166,6 +166,7 @@ from lib import widening_targets as _widening_targets
 
 from . import grants as _grants
 from . import resources as _resources
+from . import sub_plan
 from .grants import AddDirGrant, RuleGrant, StageGrants
 from .landed_providers import PROVIDER_NAME_RE
 from .script_effects import StageEffectDeclaration
@@ -248,6 +249,10 @@ class PlanMeta:
     # `[meta.order].requires_resource_request` arms it. In no digest: the check compares it
     # to grants that are digested, so an edited request moves nothing the user approved.
     resource_requests: "list[ResourceRequest]" = field(default_factory=list)
+    # The executor's sub-plan record this plan carries (`[meta.sub_plan]` with
+    # `[meta.compared_plans]` and `[[meta.how_kept]]`), the answer to the stage it serves.
+    # None for a plan that carries none; submission._stage_order_violations grades it.
+    sub_plan: "sub_plan.SubPlanRecord | None" = None
 
 
 @dataclass(frozen=True)
@@ -569,11 +574,17 @@ _COST_TIERS = ("small", "medium", "large")
 # Extra stage fields required for substantive plans (8-element activity structure).
 _SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants", "capability_required")
 _PRINCIPLE_SUBFIELDS = ("statement", "source", "derivation", "confidence", "refutation")
+# The stage fields a stage description does not carry: they are the executor's side.
+_EXECUTOR_OWNED_FIELDS = ("means", "method", "procedure", "conditions")
 
 
 def _validate_substantive_stage(s: dict, index: int) -> None:
-    """Raise PlanError if a substantive stage is missing any activity-structure field."""
+    """Raise PlanError if a substantive stage is missing any activity-structure field. A
+    stage description (it states a `place`) leaves means, method and conditions to the
+    executor's sub-plan record and is refused at the submission seam when it carries them."""
     for field_name in _SUBSTANTIVE_STAGE_FIELDS:
+        if s.get("place") and field_name in _EXECUTOR_OWNED_FIELDS:
+            continue
         if not s.get(field_name):
             raise PlanError(
                 f"stage {index} missing {field_name!r} (required for substantive plans)"
@@ -1942,6 +1953,32 @@ def check_venue_warnings(
     return warnings
 
 
+def _opt_int(value) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _parse_stage_binding_conditions(raw) -> list[dict]:
+    """The `[[stage.binding_conditions]]` rows as {id, text, set_by}; lenient, a row that is not
+    a table is skipped (the stage-order check at submission reports what a row lacks)."""
+    if not isinstance(raw, list):
+        return []
+    return [{"id": str(r.get("id", "")).strip(), "text": str(r.get("text", "")).strip(),
+             "set_by": str(r.get("set_by", "")).strip()}
+            for r in raw if isinstance(r, dict)]
+
+
+def stage_above_threshold(stage, thr) -> bool:
+    """Whether `stage` is above the line that gives it a sub-plan record: its declared size
+    judged by `classify.above_threshold`. A stage that declares no minutes is judged on the
+    minutes of its cost tier, so the declaration (the tier) states the size."""
+    from . import classify, effort
+
+    minutes = stage.expected_minutes
+    if minutes is None:
+        minutes = thr.effort_stage_minutes(effort._stage_tier(stage))
+    return classify.above_threshold(stage.declared_size, stage.size_flags, minutes, thr)
+
+
 def _parse_order(raw_order) -> Order | None:
     """The `[meta.order]` value as an Order: None when absent, `Order(malformed=("order",))`
     for a present value that is not a table, else `Order.from_dict`. Shared by `parse_plan`
@@ -2062,6 +2099,7 @@ def parse_plan(
         order=order,
         assumptions=_parse_assumptions(m.get("assumption")),
         resource_requests=_parse_resource_requests(m.get("resource_request")),
+        sub_plan=sub_plan.from_meta(m),
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
@@ -2274,6 +2312,11 @@ def parse_plan(
                 backlog_issue=raw_backlog_issue,
                 amendments=_parse_amendments(s.get("amendments"), stage_ctx),
                 branch=_parse_branch(s.get("branch"), stage_ctx, strict=strict) or meta.branch,
+                place=str(s["place"]).strip() or None if isinstance(s.get("place"), str) else None,
+                binding_conditions=_parse_stage_binding_conditions(s.get("binding_conditions")),
+                declared_size=_opt_int(s.get("declared_size")),
+                size_flags=[str(f) for f in s.get("size_flags", []) if isinstance(f, str)],
+                expected_minutes=_opt_int(s.get("expected_minutes")),
             )
         )
 
@@ -2950,6 +2993,21 @@ def optional_place(stage) -> tuple:
 def lazy_place(stage) -> tuple:
     """`optional_place` for the lazy mark: empty for a stage not marked lazy."""
     return ((("lazy", True),),) if stage.lazy else ()
+
+
+def description_place(stage) -> tuple:
+    """The stage-description fields (`Stage.place` and the four beside it) as a contribution
+    to a change-decision key: one TAGGED element for a new-form stage, EMPTY for every other,
+    so a plan that states no stage description keeps the exact key it had. Shared by
+    `diff_plans`' `_prose` and `StageNorm`, so an edited description is a refinement and
+    never a carried PASSED stage."""
+    if stage.place is None:
+        return ()
+    return ((
+        "description", stage.place,
+        tuple((c.get("id"), c.get("text"), c.get("set_by")) for c in stage.binding_conditions),
+        stage.declared_size, tuple(stage.size_flags), stage.expected_minutes,
+    ),)
 
 
 def optional_stages_place(doc: PlanDoc) -> tuple:
@@ -4681,6 +4739,7 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # that edit diffs as 'no_change' and the branch is unreachable by
              # construction.
              *procedure_place(s),
+             *description_place(s),
              # Adding a negative control (or waiving one) changes what the stage's
              # positive check is trusted to certify — without this place, that edit
              # diffs as 'no_change'.

@@ -469,7 +469,18 @@ def _binding_conditions_judged(mp):
     mp.setattr("agentctl.method_statement.binding_exempt", lambda: False, raising=True)
 
 
+def _size_predicate_hardcoded(mp):
+    """The size line a stage is judged against is a constant in the predicate, not classify's."""
+    from agentctl import classify
+
+    def hardcoded(declared_size, size_flags, expected_minutes, thr):
+        return (declared_size or 0) > 200 or (expected_minutes or 0) >= 30 or bool(size_flags)
+
+    mp.setattr(classify, "above_threshold", hardcoded, raising=True)
+
+
 MUTANTS = {
+    "size_predicate_hardcoded": _size_predicate_hardcoded,
     "binding_conditions_judged": _binding_conditions_judged,
     "order_criterion_type_not_adopted": _order_criterion_type_not_adopted,
     "order_review_type_from_session": _order_review_type_from_session,

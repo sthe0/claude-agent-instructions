@@ -1,0 +1,271 @@
+"""The executor's sub-plan record: what a stage's executor sets down in answer to the stage
+description, kept apart from the description itself.
+
+Difficulty removed: a stage used to hold the order (the product, its place, the checks) and the
+means for it in one record, so the planner decided the method for an executor who knew the
+material better, and the executor's own plan had no record of its own. The stage description
+(`state.Stage.place` and the fields around it) now states only the result; this record is the
+executor's side: its means, method and procedure, the conditions on the means with their securing
+marks, one estimate, the plans compared with the departure from them, how each binding condition
+the stage carries is kept, and the setter's decision on each.
+
+Two carriers hold the same record: a frame pushed by `push-subplan` (the record sits in the
+session that builds the plan, beside the parent's stages), and a linked child's own contour (the
+record sits in the child's session). `read` is the one reader over both, so the parent reads a
+record the same way at every level and no check knows which carrier it is looking at.
+
+Pure: no file or process I/O. The parse is total (a malformed value degrades to its empty form
+and is named in `malformed`); what a record must carry is the submission seam's grade
+(`submission._stage_order_violations`).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
+
+SETTER_VALUES = ("kept", "changed", "withdrawn")
+
+# Entries a digest of the record leaves out: a review or an objection is a record ABOUT the
+# sub-plan, and counting one as a change to it would reopen the plan each time it was reviewed.
+DIGEST_EXCLUDED = ("reviews", "objections")
+
+
+class SubPlanError(Exception):
+    """A write the record refuses."""
+
+
+def _text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _number(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _rows(value, malformed: list[str], name: str) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(x, dict) for x in value):
+        malformed.append(name)
+        return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+    return value
+
+
+@dataclass
+class Estimate:
+    """The one estimate of the sub-plan: the executor's figure and who confirmed it."""
+    minutes: float | None = None
+    usd: float | None = None
+    author: str = ""
+    confirmer: str = ""
+
+    @property
+    def agreed(self) -> bool:
+        return bool(self.confirmer)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Estimate":
+        return cls(minutes=_number(d.get("minutes")), usd=_number(d.get("usd")),
+                   author=_text(d.get("author")), confirmer=_text(d.get("confirmer")))
+
+
+@dataclass
+class ComparedPlans:
+    """The plans this one was compared with. Either entries ({ref, departure}: the plan
+    compared and how this one departs from it) or `none` with the id of the search that found
+    nothing to compare; the id must resolve in the session that carries the record."""
+    entries: list[dict] = field(default_factory=list)
+    none: bool = False
+    search_id: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict, malformed: list[str]) -> "ComparedPlans":
+        entries = [{"ref": _text(r.get("ref")), "departure": _text(r.get("departure"))}
+                   for r in _rows(d.get("entries"), malformed, "compared_plans.entries")]
+        return cls(entries=entries, none=bool(d.get("none", False)),
+                   search_id=_text(d.get("search_id")))
+
+
+@dataclass
+class HowKept:
+    """How the plan keeps one binding condition of the stage."""
+    condition: str = ""
+    how: str = ""
+
+
+@dataclass
+class SetterDecision:
+    """The decision on one binding condition: kept, changed or withdrawn, by the setter's
+    leave or the user's. `objection` names the in-flight objection the decision answers and is
+    empty for a decision that answers none."""
+    condition: str = ""
+    value: str = ""
+    setter: str = ""
+    decided_by: str = ""
+    objection: str = ""
+
+
+@dataclass
+class BuildingPlace:
+    """Where the sub-plan was built: the session, and for a frame the interval of history
+    entries between the push and the pop (`popped` None while the frame is open)."""
+    session: str = ""
+    pushed: int | None = None
+    popped: int | None = None
+
+
+@dataclass
+class SubPlanRecord:
+    stage: int = 0
+    means: str = ""
+    method: str = ""
+    procedure: str = ""
+    conditions: str = ""
+    estimate: Estimate | None = None
+    compared_plans: ComparedPlans | None = None
+    how_kept: list[HowKept] = field(default_factory=list)
+    setter_decisions: list[SetterDecision] = field(default_factory=list)
+    building_place: BuildingPlace | None = None
+    reviews: list[dict] = field(default_factory=list)
+    objections: list[dict] = field(default_factory=list)
+    resource_request: list[dict] = field(default_factory=list)
+    parent_resource_approval: str = ""
+    user_subplan_approval: str = ""
+    malformed: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SubPlanRecord":
+        """Total: every malformation degrades to the empty form and is named in `malformed`."""
+        malformed: list[str] = []
+        raw_stage = d.get("stage")
+        stage = raw_stage if isinstance(raw_stage, int) and not isinstance(raw_stage, bool) else 0
+        if raw_stage is not None and not stage:
+            malformed.append("stage")
+        raw_estimate = d.get("estimate")
+        estimate = Estimate.from_dict(raw_estimate) if isinstance(raw_estimate, dict) else None
+        if raw_estimate is not None and estimate is None:
+            malformed.append("estimate")
+        raw_compared = d.get("compared_plans")
+        compared = (ComparedPlans.from_dict(raw_compared, malformed)
+                    if isinstance(raw_compared, dict) else None)
+        if raw_compared is not None and compared is None:
+            malformed.append("compared_plans")
+        raw_place = d.get("building_place")
+        place = None
+        if isinstance(raw_place, dict):
+            pushed, popped = raw_place.get("pushed"), raw_place.get("popped")
+            place = BuildingPlace(
+                session=_text(raw_place.get("session")),
+                pushed=pushed if isinstance(pushed, int) else None,
+                popped=popped if isinstance(popped, int) else None)
+        elif raw_place is not None:
+            malformed.append("building_place")
+        return cls(
+            stage=stage,
+            means=_text(d.get("means")), method=_text(d.get("method")),
+            procedure=_text(d.get("procedure")), conditions=_text(d.get("conditions")),
+            estimate=estimate, compared_plans=compared,
+            how_kept=[HowKept(_text(r.get("condition")), _text(r.get("how")))
+                      for r in _rows(d.get("how_kept"), malformed, "how_kept")],
+            setter_decisions=[
+                SetterDecision(_text(r.get("condition")), _text(r.get("value")),
+                               _text(r.get("setter")), _text(r.get("decided_by")),
+                               _text(r.get("objection")))
+                for r in _rows(d.get("setter_decisions"), malformed, "setter_decisions")],
+            building_place=place,
+            reviews=list(_rows(d.get("reviews"), malformed, "reviews")),
+            objections=list(_rows(d.get("objections"), malformed, "objections")),
+            resource_request=list(_rows(d.get("resource_request"), malformed, "resource_request")),
+            parent_resource_approval=_text(d.get("parent_resource_approval")),
+            user_subplan_approval=_text(d.get("user_subplan_approval")),
+            malformed=tuple(malformed),
+        )
+
+
+def from_meta(meta: dict) -> SubPlanRecord | None:
+    """The record a plan's `[meta]` table carries: `[meta.sub_plan]` with `[meta.compared_plans]`
+    and `[[meta.how_kept]]` beside it. None when the plan has no `[meta.sub_plan]`."""
+    raw = meta.get("sub_plan")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        return SubPlanRecord(malformed=("sub_plan",))
+    merged = dict(raw)
+    for key in ("compared_plans", "how_kept"):
+        if key in meta:
+            merged[key] = meta[key]
+    return SubPlanRecord.from_dict(merged)
+
+
+def digest(record: SubPlanRecord) -> str:
+    """Identity of the record as a plan: a change to any authored part changes it; a review or
+    an objection added to it does not."""
+    body = {k: v for k, v in record.to_dict().items() if k not in DIGEST_EXCLUDED}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def agree_estimate(record: SubPlanRecord, estimate: Estimate) -> bool:
+    """Set the record's estimate. Once agreed, the same figure written again changes nothing
+    (False) and a different figure is refused: the confirmer agreed to that figure."""
+    current = record.estimate
+    if current is not None and current.agreed:
+        if (current.minutes, current.usd) == (estimate.minutes, estimate.usd):
+            return False
+        raise SubPlanError(
+            f"the estimate was agreed as {current.minutes} min / {current.usd} usd by "
+            f"{current.confirmer}; a different figure needs a new agreement, not a rewrite")
+    record.estimate = estimate
+    return True
+
+
+def is_decided_later(stage) -> bool:
+    """A stage whose sub-plan is decided when the stage is reached is the stage `lazy` marks."""
+    return bool(stage.lazy)
+
+
+def store(state, record: SubPlanRecord) -> None:
+    """Keep `record` in `state` under its parent stage; a stored record's reviews and
+    objections survive a rewrite of the authored parts."""
+    key = str(record.stage)
+    previous = state.sub_plan_records.get(key)
+    if previous:
+        kept = SubPlanRecord.from_dict(previous)
+        record.reviews = record.reviews or kept.reviews
+        record.objections = record.objections or kept.objections
+        record.building_place = record.building_place or kept.building_place
+    state.sub_plan_records[key] = record.to_dict()
+
+
+def add_review(state, stage_index: int, review: dict) -> None:
+    """Add a review to the record of `stage_index`; no other stage's record is touched."""
+    key = str(stage_index)
+    if key not in state.sub_plan_records:
+        raise SubPlanError(f"no sub-plan record for stage {stage_index}")
+    state.sub_plan_records[key].setdefault("reviews", []).append(dict(review))
+
+
+def read(state, stage_index: int, store_=None) -> SubPlanRecord | None:
+    """The record for `stage_index`, wherever its carrier is: this session's own (a frame's
+    record sits beside the parent's stages) or any session linked below it (a child's
+    contour). `store_` is the state store that finds the linked sessions; without one only the
+    session's own record is read."""
+    seen: set[str] = set()
+    pending = [state]
+    while pending:
+        current = pending.pop(0)
+        if current.session_id in seen:
+            continue
+        seen.add(current.session_id)
+        raw = current.sub_plan_records.get(str(stage_index))
+        if raw:
+            return SubPlanRecord.from_dict(raw)
+        if store_ is not None:
+            from .cli_common import _linked_children
+            pending.extend(_linked_children(store_, current.session_id))
+    return None
