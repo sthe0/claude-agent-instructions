@@ -35,33 +35,36 @@ written settings document with its added allow rules (broadest first —
 a bare tool name, then wildcard rules — each `repr`-quoted and cut at
 `_MAX_ENTRY_CHARS`), removed deny rules (both counts always stated, zero
 included), a raised `defaultMode` and other changed security keys — or says
-the rules are unknown; and a settings document in a positively-identified
-non-project directory is denied outright.
+the rules are unknown; and a settings document in a scratch directory is
+denied outright.
 
 G1-nonproject is the one branch that denies at every depth and in every
 mode, and it does not break the "never deny on ambiguity" rule above: it
-fires only when the probe POSITIVELY identifies the parent of `.claude` as
-not a project root (`make_project_root_probe`). The probe walks the parent's
-realpath upward and answers True at the first VCS root — a `.git` directory
-holding `HEAD`, a `.git` file starting `gitdir:` (a linked worktree), or a
-`.arc` directory (a mounted arc repository) — and False on reaching `$HOME`
-or a session scratch root (`agentctl.exempt_paths.scratch_roots()`:
-`AGENTCTL_SCRATCH_ROOTS`, else `/tmp`, `$TMPDIR` and the system temp dir)
-first, or `/`. So `~/.arc`, a home-level dotfiles `.git` or a marker at a
-scratch root marks nothing below it, while a real checkout or worktree
-inside scratch still counts. A directory on the way that cannot be inspected
-answers None and keeps the plain G1 `"ask"`. No session loads a settings
-document from a non-project directory as a project's settings, so the only
-use of writing permission rules there is to forge a `--project-settings`
-file; refusing it costs no legitimate work. The agent home and the harness
-config roots stay governed by plain G1.
+fires only when the shared probe (`lib/project_root.make_probe`) POSITIVELY
+places the parent of `.claude` under a session scratch root
+(`agentctl.exempt_paths.scratch_roots()`: `AGENTCTL_SCRATCH_ROOTS`, else
+`/tmp`, `$TMPDIR` and the system temp dir) with no repository root between
+them. A real checkout or worktree inside scratch counts as a project and
+keeps the `"ask"`; so does an unmarked directory elsewhere, which may be a
+project kept outside version control, and a directory the probe cannot
+inspect. The agent home and the harness config roots stay governed by
+plain G1.
 
-Residuals — writes no branch sees, because `lib/bash_write_targets` reads
-only redirections and the destinations of known file commands: a write made
-by an interpreter's inline code (`python3 -c`, `perl -e`, `node -e`), by a
-script file the command runs, or to a target spelled through a variable or
-substitution (`> "$F"`, `cp x "$(dirname …)"`). The harness's own permission
-prompt is the only gate on those.
+Residuals — writes no branch sees: `lib/bash_write_targets` reads only
+redirections and the destinations of `cp`/`mv`/`install`, and
+`is_live_settings` needs a lexical `.claude/settings*.json` path. Unseen:
+moving or copying a whole directory into place (`mv d x/.claude`,
+`cp -r`), a symlink alias of a `.claude` directory, other writers (`ln`,
+`rsync`, `tar -x`, `unzip`, `git clone`/`checkout` of a tree holding the
+file), an interpreter's inline code (`python3 -c`, `perl -e`, `node -e`) or
+a script file the command runs, and a target spelled through a variable or
+substitution (`> "$F"`). For `cp SRC DST` the dialog lists the rules SRC
+holds when the hook runs; SRC can change before the human answers. None of
+these reaches a spawned child: `spawn-specialist.py` starts every child with
+`--setting-sources user` and re-enables project settings only in the
+delivery venue `agentctl dispatch` records, so a settings document planted
+in another directory is never loaded. The harness's own permission prompt
+is the only gate on these writes for the current session.
 
 Turning a G-branch `"ask"` into `"deny"` is `main()`'s concern, not the
 decision functions' — applied once, right before a fire is logged and
@@ -129,8 +132,8 @@ The branches — G1 (three sub-forms: G1-edit, G1-bash, G1-state), G2, G3, G4:
              source is a variable, or any other segment runs a program
              outside `_INERT_PROGRAMS` or writes the source or the target.
   G1-nonproject — a G1-edit or G1-bash fire with any target
-             `<dir>/.claude/settings*.json` whose `<dir>` is positively not a
-             project root (see above): `"deny"`, not `"ask"`. An Edit, Write
+             `<dir>/.claude/settings*.json` whose `<dir>` the probe places in
+             scratch (see above): `"deny"`, not `"ask"`. An Edit, Write
              or MultiEdit that creates a settings document counts as
              widening from `{}`.
   G1-state — an Edit, Write, MultiEdit, NotebookEdit or Bash write target
@@ -213,7 +216,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import exempt_paths  # noqa: E402
-from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, permission_surface, widening_targets  # noqa: E402
+from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, permission_surface, project_root, widening_targets  # noqa: E402
 
 # Security-relevant settings keys other than `permissions` itself (handled
 # separately via `permission_surface.widens`, which fires only on a WIDENING
@@ -842,12 +845,11 @@ _G1_REASONS = {
         "own grant channel (agentctl dispatch) instead of writing the document directly."
     ),
     "G1-nonproject": (
-        "Refused: {parents} not a project root (no VCS marker — a `.git` directory with "
-        "HEAD, a `.git` worktree file or a `.arc` directory — on it or an ancestor below "
-        "$HOME, or it is a scratch/temp directory), so no session loads that file as a "
-        "project's settings — writing permission rules there only forges a project settings "
-        "file. Ask for the permission through the plan's own grant channel (agentctl "
-        "dispatch) instead."
+        "Refused: {parents} in a scratch/temp directory with no repository checkout inside "
+        "it (a `.git` directory with HEAD, a `.git` worktree file whose gitdir holds HEAD, "
+        "or a `.arc` directory), so a settings document there is no project's own grant — "
+        "writing permission rules there only forges one. Ask for the permission through the "
+        "plan's own grant channel (agentctl dispatch) instead."
     ),
 }
 
@@ -865,7 +867,7 @@ def _g1_message(branch: str, changes: list[_SettingsChange], nonproject_parents:
 
 def _non_project_parent(target: str, project_root_probe) -> str | None:
     """The directory holding `target`'s `.claude` directory when
-    `project_root_probe` positively says it is not a project root; None
+    `project_root_probe` places it in scratch (answers False); None
     otherwise — no probe, `target` not shaped `<dir>/.claude/settings*.json`,
     its `.claude` resolving to the agent home or a harness config root
     (governed by plain G1), or a probe that cannot tell."""
@@ -882,7 +884,7 @@ def _non_project_parent(target: str, project_root_probe) -> str | None:
 
 
 def _g1_settings_verdict(branch: str, changes: list[_SettingsChange], project_root_probe) -> tuple[str, str, str]:
-    """`"deny"` when any written document sits in a non-project directory —
+    """`"deny"` when any written document sits in a scratch directory —
     one forged file is enough, whatever else the command writes; `"ask"`
     otherwise, naming every document and what each grants."""
     parents = list(dict.fromkeys(
@@ -1040,59 +1042,8 @@ def decide(
     return decide_detailed(tool_name, tool_input, cwd, permission_mode, read_file, project_root_probe)[0]
 
 
-def _vcs_marker(directory: str) -> bool | None:
-    """True when `directory` is a repository root: a `.git` directory holding
-    `HEAD`, a `.git` file pointing at one (`gitdir:` — a linked worktree), or
-    a `.arc` directory (a mounted arc repository's root; inside the mount the
-    walk always reaches it, so `.arcignore` adds nothing). An empty `.git`
-    directory or a stray `.git` file is no marker. None when a `.git` file
-    cannot be read."""
-    git = os.path.join(directory, ".git")
-    if os.path.isdir(git) and os.path.isfile(os.path.join(git, "HEAD")):
-        return True
-    if os.path.isfile(git):
-        try:
-            with open(git, encoding="utf-8", errors="replace") as fh:
-                if fh.read(4096).startswith("gitdir:"):
-                    return True
-        except OSError:
-            return None
-    return os.path.isdir(os.path.join(directory, ".arc"))
-
-
-def make_project_root_probe(scratch_roots, home: str | None = None):
-    """A `project_root_probe` for `decide_detailed`. Called with a directory,
-    it walks from its realpath up the ancestors: True at the first one that
-    is a repository root (`_vcs_marker`), so a monorepo subproject's own
-    `.claude` counts and a real checkout or worktree inside a scratch
-    directory counts too; False on reaching `home` (default `~`) or one of
-    `scratch_roots` first — `~/.arc` and a home-level dotfiles `.git` mark no
-    project below them, and a scratch directory is no project unless a real
-    repository sits inside it — or `/`; None when a directory on the way
-    cannot be inspected."""
-    stops = {os.path.realpath(root) for root in scratch_roots if root}
-    stops.add(os.path.realpath(home if home is not None else os.path.expanduser("~")))
-
-    def probe(directory: str) -> bool | None:
-        current = os.path.realpath(directory)
-        while current not in stops:
-            if os.path.lexists(current):
-                if not os.path.isdir(current) or not os.access(current, os.R_OK | os.X_OK):
-                    return None
-                marker = _vcs_marker(current)
-                if marker is not False:
-                    return marker
-            parent = os.path.dirname(current)
-            if parent == current:
-                return False
-            current = parent
-        return False
-
-    return probe
-
-
 def _session_scratch_probe():
-    return make_project_root_probe(exempt_paths.scratch_roots())
+    return project_root.make_probe(exempt_paths.scratch_roots())
 
 
 def _log_target(tool_input: dict) -> str | None:
