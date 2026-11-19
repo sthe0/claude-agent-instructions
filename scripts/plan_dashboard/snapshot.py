@@ -849,24 +849,26 @@ def event_view(version_of, directory) -> tuple[bool, object, tuple]:
         return KEPT.trusting, KEPT.covers, version_of(directory)
 
 
-def entries_covered(covers, root: str) -> bool:
-    """Whether the view holds a listing of ``root`` and ``covers`` takes the directory and every name in it:
-    a change to any of them then reaches the view as a mark."""
+def entries_covered(covers, root: str, suffix: str) -> bool:
+    """Whether the view holds a listing of ``root`` and ``covers`` takes the directory and every name in it
+    ending in ``suffix``, the names a reader takes: a change to any of them then reaches the view as a mark.
+    Names the reader does not take (lock, answer and plan files) are outside the watch and outside the pass."""
     with KEPT._lock:
         names = KEPT.listings.get(root)
     if names is None:
         return False
-    return covers is None or (bool(covers(root)) and all(covers(os.path.join(root, name)) for name, _ in names))
+    return covers is None or (bool(covers(root)) and all(
+        covers(os.path.join(root, name)) for name, _ in names if name.endswith(suffix)))
 
 
-def keep_read(root, version: tuple, covers, held, build, kind: str | None = None) -> KeptRead | None:
-    """Keep an event-path pass of a reader over ``root`` that read ``version`` before it, for as long as nothing
-    moves it: the directory and every name in it are covered, no file of ``kind`` was unsettled (a file that
-    crossed the settle boundary after the pass began has no mark behind it yet) and the view still trusts with
-    the cover test the pass ran under. ``build()`` makes the private copy of the result and runs only then;
-    None when the pass is not to be kept."""
+def keep_read(root, version: tuple, covers, held, build, suffix: str, kind: str | None = None) -> KeptRead | None:
+    """Keep an event-path pass of a reader over the ``suffix`` files of ``root`` that read ``version`` before it,
+    for as long as nothing moves it: the directory and every such file are covered, no file of ``kind`` was
+    unsettled (a file that crossed the settle boundary after the pass began has no mark behind it yet) and the
+    view still trusts with the cover test the pass ran under. ``build()`` makes the private copy of the result
+    and runs only then; None when the pass is not to be kept."""
     root = str(root)
-    if not entries_covered(covers, root) or (kind is not None and not listing_settled(kind)):
+    if not entries_covered(covers, root, suffix) or (kind is not None and not listing_settled(kind)):
         return None
     kept = KeptRead(version, covers, held, build(), None if kind is None else OBSERVED.capture(kind))
     with KEPT._lock:
@@ -977,7 +979,7 @@ class BindingScan:
             REUSED.note("binding", kept)
             return copy_binding(kept.value)
         result = self._pass(presumption)
-        kept = keep_read(directory, version, covers, presumption, lambda: copy_binding(result), "binding") if trusting else None
+        kept = keep_read(directory, version, covers, presumption, lambda: copy_binding(result), ".json", "binding") if trusting else None
         with self._lock:
             self.event_kept = kept
         return result

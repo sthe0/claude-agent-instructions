@@ -1073,6 +1073,30 @@ def test_a_state_file_unsettled_during_the_child_pass_is_not_reused(kept_root, m
     assert len(globs) == 1
 
 
+def trust_json_files_only(root) -> None:
+    """The cover test of the real watch: the state root and the ``.json`` files in it, not the lock, answer and
+    plan files that sit beside them."""
+    store.KEPT.trust(lambda path: str(path) == str(root) or str(path).endswith(".json"))
+    for name in ("task.lock", "task.json.answers.jsonl", "plan-version-1.toml"):
+        (root / name).write_text("", encoding="utf-8")
+
+
+def test_a_state_root_holding_unwatched_files_is_not_relisted_on_the_event_path(kept_root, monkeypatch):
+    trust_json_files_only(kept_root.state_root)
+    model._state_listing(kept_root.state_root)
+    listings = count_calls(monkeypatch, store, "listed")
+    model._state_listing(kept_root.state_root)
+    assert listings == []
+
+
+def test_a_state_root_holding_unwatched_files_is_not_globbed_again_on_the_event_path(kept_root, monkeypatch):
+    trust_json_files_only(kept_root.state_root)
+    model.child_index(kept_root.state_root)
+    globs = count_calls(monkeypatch, store.KEPT, "glob")
+    model.child_index(kept_root.state_root)
+    assert globs == []
+
+
 def test_a_child_index_over_an_uncovered_state_file_is_not_reused(kept_root, monkeypatch):
     store.KEPT.trust(lambda path: str(path).startswith(str(kept_root.state_root.parent)) and not str(path).endswith("sibling.json"))
     model.child_index(kept_root.state_root)

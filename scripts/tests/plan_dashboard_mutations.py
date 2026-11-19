@@ -938,7 +938,7 @@ def _unread_rows_blank(original):
 
 def _child_index_kept_uncopied(original):
     def mutated(state_root, version, covers, floor, index):
-        return importlib.import_module(SNAPSHOT).keep_read(state_root, version, covers, floor, lambda: index)
+        return importlib.import_module(SNAPSHOT).keep_read(state_root, version, covers, floor, lambda: index, ".json")
     return mutated
 
 
@@ -948,7 +948,14 @@ def _child_version_read_after_the_pass(original):
     return mutated
 
 
+def _every_name_must_be_covered(original):
+    def mutated(covers, root, suffix):
+        return original(covers, root, "")
+    return mutated
+
+
 MUTATIONS.update({
+    "event-reuse-requires-unwatched-names-covered": ("plan_dashboard.snapshot", "entries_covered", _every_name_must_be_covered),
     "model-child-index-rereads": (MODEL, "child_index", _child_cache_dropped),
     "model-child-index-no-bound": (MODEL, "child_index", _child_index_unbounded),
     "state-listing-event-reuse-off": (MODEL, "state_event_reusable", _always(False)),

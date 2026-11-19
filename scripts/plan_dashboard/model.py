@@ -755,7 +755,7 @@ def _event_state_listing(root: Path) -> dict:
         snapshot.REUSED.note("state", kept)
         return dict(kept.value)
     mtimes = _list_states(root)
-    kept = snapshot.keep_read(root, version, covers, None, lambda: dict(mtimes), "state") if trusting else None
+    kept = snapshot.keep_read(root, version, covers, None, lambda: dict(mtimes), ".json", "state") if trusting else None
     with CACHE_LOCK:
         _STATE_EVENT[str(root)] = kept
     return mtimes
@@ -887,7 +887,7 @@ def child_event_reusable(kept, version, covers, floor) -> bool:
 
 
 def keep_child_index(state_root, version, covers, floor, index):
-    return snapshot.keep_read(state_root, version, covers, floor, lambda: _copy_index(index))
+    return snapshot.keep_read(state_root, version, covers, floor, lambda: _copy_index(index), ".json")
 
 
 def _event_child_index(state_root, floor: float | None) -> dict[str, list[dict]]:

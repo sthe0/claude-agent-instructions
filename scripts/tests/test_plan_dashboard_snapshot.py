@@ -1777,6 +1777,21 @@ def test_an_unchanged_bindings_directory_is_not_reread_on_the_event_path(bound, 
     assert second == first and first[0]
 
 
+def test_a_bindings_directory_holding_unwatched_files_is_not_reread_on_the_event_path(bound, monkeypatch):
+    (bound / "stray.lock").write_text("", encoding="utf-8")
+    store.KEPT.trust(lambda path: str(path) == str(bound) or str(path).endswith(".json"))
+    store.BINDINGS.read()
+    passes, real_pass = [], store.BINDINGS._pass
+
+    def counting(presumption):
+        passes.append(presumption)
+        return real_pass(presumption)
+
+    monkeypatch.setattr(store.BINDINGS, "_pass", counting)
+    store.BINDINGS.read()
+    assert passes == []
+
+
 def test_a_marked_binding_is_seen_by_the_next_read(bound):
     assert store.BINDINGS.read()[0] == {ALPHA: [HARNESS]}
     path = bound / f"{HARNESS}.json"
