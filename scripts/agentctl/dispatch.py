@@ -19,7 +19,7 @@ from typing import Callable
 from lib import argv_text
 from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
 
-from .state import CriterionType, Stage
+from .state import CheckVenue, CriterionType, Stage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SPAWN_CLI = REPO_ROOT / "scripts" / "spawn-specialist.py"
@@ -190,6 +190,21 @@ def subprocess_runner(argv: list[str], cwd: str | None = None, *, timeout: float
     except subprocess.TimeoutExpired:
         return RunResult(-1, stdout="", stderr=f"subprocess_runner: timed out after {timeout}s")
     return RunResult(proc.returncode, proc.stdout, proc.stderr)
+
+
+def venue_project_settings(state) -> tuple[str | None, str | None]:
+    """`(venue, settings)`: the delivery venue dispatch starts a spawned
+    developer in (`resolve_check_venue(DELIVERY)`) and that venue's own
+    `.claude/settings.local.json` when the file exists, forwarded as
+    `--project-settings` so the child inherits the project-scope grants an
+    interactive session there already has. `spawn-specialist.py` accepts a
+    `--project-settings` only when it equals this pair for the session named
+    by `--session`, so dispatch and the spawner read one definition."""
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    if not venue:
+        return None, None
+    candidate = Path(venue) / ".claude" / "settings.local.json"
+    return venue, (str(candidate) if candidate.is_file() else None)
 
 
 _CRITERION_FLAG = {
