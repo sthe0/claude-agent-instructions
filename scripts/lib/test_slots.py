@@ -163,6 +163,27 @@ def _live_pids_with_open(key: tuple[int, int, int]) -> set[int]:
     return found
 
 
+STABLE_READS_MAX = 5
+
+
+def _slot_locks(files: dict[tuple[int, int, int], str], locks_path: str) -> set[tuple[int, tuple[int, int, int]]]:
+    """The granted locks on ``files``, from reads of /proc/locks repeated until two agree.
+
+    /proc/locks is the whole machine's table, served page by page: when another process takes
+    or drops a lock between two pages, one read can skip a row that was there all along. Two
+    consecutive reads that agree are taken as the table; past STABLE_READS_MAX reads the union
+    of all of them is used, so a held slot is never reported free.
+    """
+    seen, previous = set(), None
+    for _ in range(STABLE_READS_MAX):
+        current = {(pid, key) for pid, key in _lock_table(locks_path) if key in files}
+        if current == previous:
+            return current
+        seen |= current
+        previous = current
+    return seen
+
+
 def _holder_pids(directory: str | Path, locks_path: str) -> dict[str, set[int]]:
     """Slot file name -> pids holding it.
 
@@ -171,7 +192,7 @@ def _holder_pids(directory: str | Path, locks_path: str) -> dict[str, set[int]]:
     by the live processes that have the slot file open; when none is found the dead pid stays.
     """
     files = _slot_files(Path(directory))
-    taker = {files[key]: (pid, key) for pid, key in _lock_table(locks_path) if key in files}
+    taker = {files[key]: (pid, key) for pid, key in sorted(_slot_locks(files, locks_path))}
     holders = {}
     for name, (pid, key) in taker.items():
         holders[name] = {pid} if os.path.exists(f"/proc/{pid}") else (_live_pids_with_open(key) or {pid})
