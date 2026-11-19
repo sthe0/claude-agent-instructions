@@ -757,6 +757,16 @@ def test_context_growth_without_a_transcript_says_nothing(tmp_path, monkeypatch)
     assert mod.check_context_growth(turn(session_id="s-1")) == []
 
 
+def test_context_size_is_the_last_usage_even_when_it_lies_blocks_before_the_end(tmp_path):
+    """The read goes backwards in blocks; the answer must equal a full forward read."""
+    transcript = _transcript(tmp_path, [10_000, 130_000])
+    with transcript.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "user", "message": {"content": "x" * 500}}) + "\n")
+        fh.write("not json\n")
+    assert mod._last_usage(str(transcript), block_size=16)["input_tokens"] == 130_000
+    assert mod.live_context_tokens(str(transcript)) == 130_000
+
+
 def test_context_growth_bands_are_overridable(tmp_path, monkeypatch):
     monkeypatch.setenv("CC_CONTEXT_NUDGE_BANDS", "1000,2000")
     out = _growth(monkeypatch, _transcript(tmp_path, [1_500]), str(uuid.uuid4()), tmp_path / "state")
