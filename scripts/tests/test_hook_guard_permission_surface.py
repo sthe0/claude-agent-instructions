@@ -38,6 +38,7 @@ _SPEC.loader.exec_module(guard)
 
 decide = guard.decide
 decide_detailed = guard.decide_detailed
+make_probe = guard.project_root.make_probe
 
 
 def _read_file_map(mapping: dict[str, str]):
@@ -411,10 +412,10 @@ def test_g1_bash_denies_when_one_of_several_targets_is_in_a_non_project(tmp_path
     real = tmp_path / "real" / ".claude" / "settings.local.json"
     fake = tmp_path / "fake" / ".claude" / "settings.local.json"
     command = f"cp {source} {real} && cp {source} {fake}"
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", _read_file_map({}), probe)
     assert (decision, branch) == ("deny", "G1-nonproject")
-    assert f"{tmp_path / 'fake'} is not a project root" in message
+    assert f"{tmp_path / 'fake'} is in a scratch/temp directory" in message
 
 
 def test_g1_bash_rules_are_unknown_when_an_earlier_segment_writes_the_source(tmp_path):
@@ -524,15 +525,24 @@ def _fake_project_settings_write(tmp_path):
     return {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(git push:*)"]}}'}
 
 
-def test_g1_nonproject_denies_a_write_into_a_directory_with_no_vcs_marker(tmp_path):
-    probe = guard.make_project_root_probe(scratch_roots=())
+def test_g1_nonproject_denies_a_write_into_an_unmarked_scratch_directory(tmp_path):
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, message = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
     assert (decision, branch) == ("deny", "G1-nonproject")
     assert message.startswith("The agent is granting itself permissions")
     assert "'Bash(git push:*)'" in message
-    assert f"{tmp_path / 'fake'} is not a project root" in message
+    assert f"{tmp_path / 'fake'} is in a scratch/temp directory" in message
+
+
+def test_g1_nonproject_keeps_ask_for_an_unmarked_directory_outside_scratch(tmp_path):
+    (tmp_path / "fake").mkdir()
+    probe = make_probe(scratch_roots=(), home=str(tmp_path))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("ask", "G1-edit")
 
 
 def _git_dir(directory):
@@ -542,7 +552,7 @@ def _git_dir(directory):
 
 def test_g1_nonproject_keeps_ask_when_the_parent_holds_a_git_dir(tmp_path):
     _git_dir(tmp_path / "fake")
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, _ = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
@@ -551,7 +561,7 @@ def test_g1_nonproject_keeps_ask_when_the_parent_holds_a_git_dir(tmp_path):
 
 def test_g1_nonproject_denies_when_the_parent_holds_only_an_empty_git_dir(tmp_path):
     (tmp_path / "fake" / ".git").mkdir(parents=True)
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, _ = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
@@ -559,19 +569,41 @@ def test_g1_nonproject_denies_when_the_parent_holds_only_an_empty_git_dir(tmp_pa
 
 
 def test_g1_nonproject_keeps_ask_for_a_linked_worktree_git_file(tmp_path):
+    _git_dir(tmp_path / "main")
+    (tmp_path / "main" / ".git" / "worktrees" / "fake").mkdir(parents=True)
+    (tmp_path / "main" / ".git" / "worktrees" / "fake" / "HEAD").write_text("ref: refs/heads/topic\n")
     (tmp_path / "fake").mkdir()
-    (tmp_path / "fake" / ".git").write_text("gitdir: /elsewhere/.git/worktrees/fake\n")
-    probe = guard.make_project_root_probe(scratch_roots=())
-    decision, _, _ = decide_detailed(
+    (tmp_path / "fake" / ".git").write_text(f"gitdir: {tmp_path}/main/.git/worktrees/fake\n")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
-    assert decision == "ask"
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def test_g1_nonproject_denies_a_git_file_whose_gitdir_dangles(tmp_path):
+    (tmp_path / "fake").mkdir()
+    (tmp_path / "fake" / ".git").write_text("gitdir: /elsewhere/.git/worktrees/fake\n")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("deny", "G1-nonproject")
+
+
+def test_project_root_probe_takes_a_relative_gitdir_from_the_git_files_directory(tmp_path):
+    (tmp_path / "wt").mkdir()
+    (tmp_path / "admin").mkdir()
+    (tmp_path / "admin" / "HEAD").write_text("ref: refs/heads/topic\n")
+    (tmp_path / "wt" / ".git").write_text("gitdir: ../admin\n")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    assert probe(str(tmp_path / "wt")) is True
 
 
 def test_g1_nonproject_denies_when_the_parent_holds_a_stray_git_file(tmp_path):
     (tmp_path / "fake").mkdir()
     (tmp_path / "fake" / ".git").write_text("not a worktree pointer\n")
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, _, _ = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
@@ -581,7 +613,7 @@ def test_g1_nonproject_denies_when_the_parent_holds_a_stray_git_file(tmp_path):
 def test_g1_nonproject_denies_when_only_an_arcignore_marks_the_parent(tmp_path):
     (tmp_path / "fake").mkdir()
     (tmp_path / "fake" / ".arcignore").write_text("")
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, _, _ = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
@@ -591,8 +623,14 @@ def test_g1_nonproject_denies_when_only_an_arcignore_marks_the_parent(tmp_path):
 def test_project_root_probe_stops_at_home_before_a_home_level_marker(tmp_path):
     (tmp_path / ".arc").mkdir()
     (tmp_path / "fake").mkdir()
-    probe = guard.make_project_root_probe(scratch_roots=(), home=str(tmp_path))
-    assert probe(str(tmp_path / "fake")) is False
+    probe = make_probe(scratch_roots=(), home=str(tmp_path))
+    assert probe(str(tmp_path / "fake")) is None
+
+
+def test_project_root_probe_answers_none_on_reaching_the_filesystem_root(tmp_path):
+    (tmp_path / "fake").mkdir()
+    probe = make_probe(scratch_roots=(), home="/nonexistent-home")
+    assert probe(str(tmp_path / "fake")) is None
 
 
 def test_project_root_probe_compares_home_by_realpath(tmp_path):
@@ -600,15 +638,15 @@ def test_project_root_probe_compares_home_by_realpath(tmp_path):
     (tmp_path / "home" / ".arc").mkdir()
     (tmp_path / "home" / "fake").mkdir()
     (tmp_path / "home-link").symlink_to(tmp_path / "home")
-    probe = guard.make_project_root_probe(scratch_roots=(), home=str(tmp_path / "home-link"))
-    assert probe(str(tmp_path / "home" / "fake")) is False
+    probe = make_probe(scratch_roots=(), home=str(tmp_path / "home-link"))
+    assert probe(str(tmp_path / "home" / "fake")) is None
 
 
 def test_project_root_probe_finds_the_arc_mount_root_through_a_symlinked_mount(tmp_path):
     (tmp_path / "store" / ".arc").mkdir(parents=True)
     (tmp_path / "store" / "sub").mkdir()
     (tmp_path / "mount").symlink_to(tmp_path / "store")
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=())
     assert probe(str(tmp_path / "mount" / "sub")) is True
 
 
@@ -621,11 +659,11 @@ def test_session_scratch_probe_reads_the_configured_scratch_roots(tmp_path, monk
 
 
 def test_g1_nonproject_keeps_ask_for_a_subproject_inside_a_checkout(tmp_path):
-    (tmp_path / ".arc").mkdir()
-    (tmp_path / "fake").mkdir()
-    probe = guard.make_project_root_probe(scratch_roots=())
+    (tmp_path / "repo" / ".arc").mkdir(parents=True)
+    (tmp_path / "repo" / "fake").mkdir()
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, _, _ = decide_detailed(
-        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+        "Write", _fake_project_settings_write(tmp_path / "repo"), str(tmp_path), "default", _read_file_map({}), probe,
     )
     assert decision == "ask"
 
@@ -633,7 +671,7 @@ def test_g1_nonproject_keeps_ask_for_a_subproject_inside_a_checkout(tmp_path):
 def test_g1_nonproject_denies_below_a_scratch_root_even_when_the_root_holds_a_marker(tmp_path):
     _git_dir(tmp_path)
     (tmp_path / "fake").mkdir()
-    probe = guard.make_project_root_probe(scratch_roots=(str(tmp_path),))
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, _ = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
@@ -642,7 +680,7 @@ def test_g1_nonproject_denies_below_a_scratch_root_even_when_the_root_holds_a_ma
 
 def test_g1_nonproject_keeps_ask_for_a_real_checkout_inside_a_scratch_directory(tmp_path):
     _git_dir(tmp_path / "fake")
-    probe = guard.make_project_root_probe(scratch_roots=(str(tmp_path),))
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, _ = decide_detailed(
         "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
     )
@@ -661,7 +699,7 @@ def test_g1_nonproject_denies_a_bash_copy_into_a_fake_project(tmp_path):
     source = tmp_path / "mine.json"
     command = f"mkdir -p {tmp_path}/fake/.claude && cp {source} {tmp_path}/fake/.claude/settings.local.json"
     read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(rm:*)"]}}'})
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file, probe)
     assert (decision, branch) == ("deny", "G1-nonproject")
     assert "'Bash(rm:*)'" in message
@@ -671,7 +709,7 @@ def test_g1_nonproject_leaves_the_personal_claude_dir_to_plain_g1(tmp_path, monk
     monkeypatch.setenv("HOME", str(tmp_path))
     target = tmp_path / ".claude" / "settings.json"
     tool_input = {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
-    probe = guard.make_project_root_probe(scratch_roots=())
+    probe = make_probe(scratch_roots=(str(tmp_path),))
     decision, branch, _ = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}), probe)
     assert (decision, branch) == ("ask", "G1-edit")
 
@@ -683,7 +721,7 @@ def test_g1_nonproject_leaves_a_symlink_to_the_personal_claude_dir_to_plain_g1(t
     (tmp_path / "fake" / ".claude").symlink_to(tmp_path / ".claude")
     target = tmp_path / "fake" / ".claude" / "settings.json"
     tool_input = {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
-    probe = guard.make_project_root_probe(scratch_roots=(), home="/nonexistent-home")
+    probe = make_probe(scratch_roots=(str(tmp_path),), home="/nonexistent-home")
     decision, branch, _ = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}), probe)
     assert (decision, branch) == ("ask", "G1-edit")
 
