@@ -1213,7 +1213,7 @@ def _method_statement_plan_pass_refusal(args, state: SessionState, method_runner
         return None
     found = method_statement.site_defects(
         method_statement.plan_statements(doc, None if stage_index is None else {stage_index}),
-        runner=method_runner)
+        runner=method_runner, stop_on_unread=True)
     if not found:
         return None
     lines = [method_statement.defect_line(f) for f in found]

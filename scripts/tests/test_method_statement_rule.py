@@ -361,6 +361,13 @@ def test_question_in_a_session_whose_plan_is_old_form_not_judged(ostore, tmp_pat
     assert _raise_question(ostore, judge).ok and judge.calls == []
 
 
+def test_question_in_a_session_whose_plan_states_no_order_not_judged(ostore, tmp_path):
+    _plan_only_session(ostore, _write_plan(tmp_path / "plan.toml", omit=("order",)))
+    judge = Judge(answering(M.METHOD))
+
+    assert _raise_question(ostore, judge).ok and judge.calls == []
+
+
 def test_question_in_a_session_whose_plan_is_new_form_is_judged(ostore, tmp_path):
     _plan_only_session(ostore, _plan_file(tmp_path, name="new"))
     judge = Judge(answering(M.METHOD, place=M.QUESTION))
