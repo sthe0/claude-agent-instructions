@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from lib.telemetry import store
-from telemetry_import_support import _gz_tar, _sha, at, bash_call, bash_result, world  # noqa: F401
+from telemetry_import_support import _gz_tar, _sha, at, bash_call, bash_result, put, world  # noqa: F401
 from telemetry_live_support import start, tasks
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -36,10 +36,6 @@ bench = _load("telemetry-bench")
 
 
 # --- the record ------------------------------------------------------------------------------
-
-def put(table, *rows):
-    outcome = store.insert_rows(table, rows, deadline_s=60)
-    assert outcome["failed"] == 0 and outcome["deferred"] == 0
 
 
 def event(session, kind, seconds, fields, provenance) -> str:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import sqlite3
 import tarfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,32 @@ BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 def at(seconds: float) -> str:
     """An ISO timestamp `seconds` after the fixed base."""
     return (BASE + timedelta(seconds=seconds)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def put(table: str, *rows) -> None:
+    """Insert fixture rows into the test's record, failing the test with the store's own error.
+
+    `store.insert_rows` is fail-open: an error becomes a bare `failed` count with its cause lost,
+    so a fixture that could not be written fails far from the reason. Here only the busy case
+    keeps its fail-open meaning (reported as deferred); every other error raises as itself.
+    The swap of `store._guarded` is process-global, so call this only from the test's own thread."""
+    def strict(run, on_deferred, on_failed):
+        try:
+            return run()
+        except store._Deferred:
+            return on_deferred()
+        except sqlite3.OperationalError as exc:
+            if store._is_busy(exc):
+                return on_deferred()
+            raise
+
+    real = store._guarded
+    store._guarded = strict
+    try:
+        outcome = store.insert_rows(table, rows, deadline_s=60)
+    finally:
+        store._guarded = real
+    assert outcome["failed"] == 0 and outcome["deferred"] == 0, outcome
 
 
 def line(obj) -> bytes:
