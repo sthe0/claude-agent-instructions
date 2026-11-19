@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -119,3 +121,49 @@ def test_build_child_settings_merges_project_deny_alongside_plans_deny(tmp_path)
         "developer", plans_directory=plans_directory, project_settings_file=project_path,
     )
     assert "Bash(curl:*)" in settings["permissions"]["deny"]
+
+
+# --- accepted_project_settings: only the child's own project's local file ---
+
+def _local_settings_of(directory: Path) -> str:
+    return os.path.realpath(directory / ".claude" / "settings.local.json")
+
+
+def _git_repo(path: Path) -> Path:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    return path
+
+
+def test_accepted_project_settings_names_the_workdirs_own_local_file(tmp_path):
+    workdir = tmp_path / "proj"
+    workdir.mkdir()
+    assert _local_settings_of(workdir) in MOD.accepted_project_settings(str(workdir))
+
+
+def test_accepted_project_settings_refuses_a_scratch_dir_beside_the_workdir(tmp_path):
+    workdir = tmp_path / "proj"
+    workdir.mkdir()
+    assert _local_settings_of(tmp_path / "scratch" / "x") not in MOD.accepted_project_settings(str(workdir))
+
+
+def test_accepted_project_settings_refuses_the_parent_of_a_workdir_outside_vcs(tmp_path):
+    workdir = tmp_path / "proj"
+    workdir.mkdir()
+    assert _local_settings_of(tmp_path) not in MOD.accepted_project_settings(str(workdir))
+
+
+def test_accepted_project_settings_includes_ancestors_up_to_the_git_root(tmp_path):
+    repo = _git_repo(tmp_path / "repo")
+    workdir = repo / "service" / "api"
+    workdir.mkdir(parents=True)
+    accepted = MOD.accepted_project_settings(str(workdir))
+    assert _local_settings_of(repo / "service") in accepted
+    assert _local_settings_of(repo) in accepted
+
+
+def test_accepted_project_settings_stops_at_the_git_root(tmp_path):
+    repo = _git_repo(tmp_path / "repo")
+    workdir = repo / "service"
+    workdir.mkdir()
+    assert _local_settings_of(tmp_path) not in MOD.accepted_project_settings(str(workdir))
