@@ -512,7 +512,7 @@ def _degrade_length(data):
      ("--min-found", "0.85", "--max-flagged", "0.10", "--min-runs", "3")),
     ("small-tasks", "passing-small-tasks.json", _degrade_small_tasks, SMALL_ARGS),
     ("link-reading", "passing-link-reading.json", _degrade_link, ()),
-])
+], ids=["orders", "length", "stage-briefs", "plan-reviews", "small-tasks", "link-reading"])
 def test_check_below_threshold(ev, tmp_path, kind, results, change, args):
     assert _check(ev, kind, _edited(tmp_path, results, change), *args) == 1
 
