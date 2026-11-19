@@ -128,8 +128,17 @@ def parse_reply(text: str) -> dict:
     return {"verdict": verdict, "reason": str(obj.get("reason", ""))}
 
 
+def defect_row(place: str) -> list[str]:
+    """What a verdict means at `place`: the verdicts that are defects there. Two places with the same row
+    read a statement the same way, so one verdict serves both."""
+    return sorted(DEFECT_VERDICTS.get(place, frozenset()))
+
+
 def inputs_text(text: str, place: str) -> str:
-    return json.dumps({"place": place, "text": text, "rule": RULE_TEXT}, sort_keys=True)
+    """Everything a stored verdict rests on: the statement, what a verdict means where it stands (the
+    defect row, not the place's name), the rule, the prompt wrapper and the judge model."""
+    return json.dumps({"row": defect_row(place), "text": text, "rule": RULE_TEXT, "prompt": _PROMPT,
+                       "model": GJ._JUDGE_MODEL}, sort_keys=True)
 
 
 def judge(text: str, place: str, *, runner=None, cache=None) -> dict:
@@ -156,39 +165,61 @@ def is_defect(verdict: str, place: str) -> bool:
     return verdict in DEFECT_VERDICTS.get(place, frozenset())
 
 
-def findings(statements, *, runner=None, cache=None) -> list[Finding]:
-    """The verdict on every statement that is judged (a blank one and a sub-plan one are not)."""
+def findings(statements, *, runner=None, cache=None, stop_on_unread=False) -> list[Finding]:
+    """The verdict on every statement that is judged (a blank one and a sub-plan one are not). With
+    `stop_on_unread` the list ends at the first statement the judge could not read: a judge that did not
+    answer once is not asked again."""
     out = []
     for s in statements:
         if not (s.text or "").strip() or s.place == SUB_PLAN:
             continue
         reply = judge(s.text, s.place, runner=runner, cache=cache)
         out.append(Finding(s.label, s.place, reply["verdict"], reply["reason"]))
+        if stop_on_unread and reply["verdict"] == COULD_NOT_READ:
+            break
     return out
 
 
-def defects(statements, *, runner=None, cache=None) -> list[Finding]:
-    return [f for f in findings(statements, runner=runner, cache=cache) if is_defect(f.verdict, f.place)]
+def defects(statements, *, runner=None, cache=None, stop_on_unread=False) -> list[Finding]:
+    return [f for f in findings(statements, runner=runner, cache=cache, stop_on_unread=stop_on_unread)
+            if is_defect(f.verdict, f.place)]
 
 
 def cache_dir():
-    """Where the production sites keep a read verdict, by the digest of the statement, the place and the
-    rule: the same text at the same place is judged once."""
+    """Where the production sites keep a read verdict, by the digest of `inputs_text`: the same statement
+    read the same way, by the same prompt and model, is judged once."""
     return GJ.agentctl_dir() / "method-statement-cache"
 
 
-def site_defects(statements, *, runner=None) -> list[Finding]:
+def site_defects(statements, *, runner=None, stop_on_unread=False) -> list[Finding]:
     """The defects in `statements`, as every production site asks for them: judged through the digest
     cache, `runner` being the method judge's own (the live host-model runner when none)."""
-    return defects(statements, runner=runner, cache=cache_dir())
+    return defects(statements, runner=runner, cache=cache_dir(), stop_on_unread=stop_on_unread)
+
+
+_UNREAD_ADVICE = {
+    CUSTOMER_SIDE: "repeat the order review",
+    EXECUTOR_SIDE: "repeat the order review or the executor revision",
+    QUESTION: "raise the question again",
+    BRIEF: "repeat the dispatch",
+    STAGE_DESCRIPTION: "repeat the plan review",
+}
+_NAME_THE_RESULT = "name the result in the terms of the activity, and put a requirement on the build in a binding condition"
+_METHOD_ADVICE = {
+    CUSTOMER_SIDE: "how the work is done is the executor's to decide; state the result the customer needs instead",
+    QUESTION: "how the work is done is the executor's to decide; ask about the result in the customer's terms",
+    EXECUTOR_SIDE: "a method belongs to the executor's sub-plan (means, method, procedure), not to this side",
+    BRIEF: "a method belongs to the stage's sub-plan (means, method, procedure); name the result here",
+    STAGE_DESCRIPTION: "a method belongs to the stage's sub-plan (means, method, procedure); name the result here",
+}
 
 
 def _advice(finding: Finding) -> str:
     if finding.verdict == COULD_NOT_READ:
-        return "the judge did not answer; repeat the review"
-    if finding.place == EXECUTOR_SIDE:
-        return "a method belongs to the executor's sub-plan (means, method, procedure), not to this side"
-    return "name the result in the terms of the activity, and put a requirement on the build in a binding condition"
+        return f"the judge did not answer; {_UNREAD_ADVICE.get(finding.place, 'repeat the review')}"
+    if finding.verdict == METHOD:
+        return _METHOD_ADVICE.get(finding.place, _NAME_THE_RESULT)
+    return _NAME_THE_RESULT
 
 
 def defect_line(finding: Finding) -> str:
@@ -230,10 +261,11 @@ def order_statements(order) -> list[Statement]:
     return out
 
 
-def question_statements(text: str, kind: str, order) -> list[Statement]:
+def question_statements(text: str, kind: str, order, *, sourced: bool = False) -> list[Statement]:
     """The question to the user as a statement; the `binding_conditions` kind is exempt. `order` is the
-    session's own: a session with no order yet is judged, one whose order is in the old form is not."""
-    if order is not None and not plan_mod.is_two_sided(order):
+    session's own and `sourced` says the session has an order draft or a plan: a session with neither is
+    judged, one with either is judged only when that order is in the new form."""
+    if sourced and not plan_mod.is_two_sided(order):
         return []
     if kind == BINDING_CONDITIONS_KIND and binding_exempt():
         return []
@@ -241,7 +273,8 @@ def question_statements(text: str, kind: str, order) -> list[Statement]:
 
 
 def stage_statements(stage, place: str) -> list[Statement]:
-    """The prose of a stage description outside its sub-plan, labelled by field."""
+    """The prose of a stage description outside its sub-plan, labelled by field, and the binding-condition
+    records the stage carries beside it when they are not exempt (no stage field carries them yet)."""
     fields = (
         ("title", stage.title),
         ("result", stage.subject.result),
@@ -252,7 +285,11 @@ def stage_statements(stage, place: str) -> list[Statement]:
         ("done criterion", stage.criterion.done_criterion),
         ("observation", stage.criterion.observation),
     )
-    return [Statement(f"stage {stage.index} {name}", place, text or "") for name, text in fields]
+    out = [Statement(f"stage {stage.index} {name}", place, text or "") for name, text in fields]
+    if not binding_exempt():
+        for b in getattr(stage, "binding_conditions", ()) or ():
+            out.append(Statement(f"stage {stage.index} binding condition {b.id}", place, b.text))
+    return out
 
 
 def brief_statements(doc, stage_index: int) -> list[Statement]:
@@ -260,13 +297,7 @@ def brief_statements(doc, stage_index: int) -> list[Statement]:
     if not plan_mod.is_two_sided(doc.meta.order):
         return []
     stage = next((s for s in doc.stages if s.index == stage_index), None)
-    if stage is None:
-        return []
-    out = stage_statements(stage, BRIEF)
-    if not binding_exempt():
-        for b in getattr(stage, "binding_conditions", ()) or ():
-            out.append(Statement(f"stage {stage_index} binding condition {b.id}", BRIEF, b.text))
-    return out
+    return [] if stage is None else stage_statements(stage, BRIEF)
 
 
 def plan_statements(doc, stages=None) -> list[Statement]:

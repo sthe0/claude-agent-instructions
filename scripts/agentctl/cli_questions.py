@@ -206,7 +206,9 @@ def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None,
     kind = getattr(args, "kind", None) or ""
     question_text = gates.QUESTION_KIND_TEXTS.get(kind, args.question or "")
     found = method_statement.site_defects(
-        method_statement.question_statements(question_text, kind, _session_order(state)),
+        method_statement.question_statements(
+            question_text, kind, _session_order(state),
+            sourced=bool(getattr(state, "order_draft_path", None) or getattr(state, "plan_path", None))),
         runner=method_runner)
     if found:
         return Directive(

@@ -13,6 +13,7 @@ from . import (
     continuations,
     gates,
     grants as _grants,
+    method_statement,
     order_approvals,
     permissions,
     plan_resources,
@@ -1272,22 +1273,53 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     return directive
 
 
-def _brief_method_refusal(state, stage, method_runner) -> Directive | None:
+def _unread_brief_refusal(state, stage, doc, unread, by: str) -> Directive | None:
+    """The refusal when the method-statement judge did not answer for the brief. It is not a defect of
+    the brief, so it names the repeat, not a fix. Only the user lets a dispatch through unread, naming
+    themselves with `--unread-brief-by` (the order's customer when it declares one); an agent never does."""
+    if by and by.casefold() != AGENT_ACTOR:
+        customer = (doc.meta.order.customer_id if doc.meta.order is not None else "") or ""
+        if not customer or by == customer:
+            return None
+        return Directive(
+            False, state.node, "judge_unavailable",
+            f"--unread-brief-by {by!r} does not match the order's customer {customer!r}: only the "
+            "customer lets a dispatch through a brief the judge did not read")
+    line = method_statement.defect_line(unread)
+    return Directive(
+        False, state.node, "judge_unavailable",
+        f"dispatch refused: the method-statement judge did not answer for the brief of stage "
+        f"{stage.index} ({line}). Nothing in the brief needs fixing: repeat the dispatch. Only the user can "
+        "let this one dispatch through without the reading, with --unread-brief-by <their name>; "
+        "an agent cannot",
+        data={"problems": [line]})
+
+
+def _brief_method_refusal(state, stage, method_runner, unread_by: str = "") -> Directive | None:
     """A refusal to dispatch a stage whose brief states a method or how the product is built where only
-    the result may stand (the method-statement rule at the brief site). A plan on an old-form order, or
-    one that does not load here, is not judged: other checks meet those."""
+    the result may stand (the method-statement rule at the brief site), or whose brief the judge did not
+    read. A plan on an old-form order, or one that does not load here, is not judged: other checks meet
+    those."""
     try:
         doc = load_plan(state.plan_path or "")
     except (OSError, PlanError):
         return None
-    lines = render.brief_site_defects(doc, stage.index, runner=method_runner)
-    if not lines:
+    found = render.brief_site_findings(doc, stage.index, runner=method_runner)
+    lines = [method_statement.defect_line(f) for f in found if f.verdict != method_statement.COULD_NOT_READ]
+    if lines:
+        return Directive(
+            False, state.node, "fix_brief",
+            f"dispatch refused: the brief of stage {stage.index} breaks the method-statement rule: "
+            + "; ".join(lines) + ". The brief is the stage's text in the plan: change it through a replan "
+            "(then review the new plan), not at the dispatch",
+            data={"problems": lines})
+    unread = next((f for f in found if f.verdict == method_statement.COULD_NOT_READ), None)
+    if unread is None:
         return None
-    return Directive(
-        False, state.node, "fix_brief",
-        f"dispatch refused: the brief of stage {stage.index} breaks the method-statement rule: "
-        + "; ".join(lines),
-        data={"problems": lines})
+    refusal = _unread_brief_refusal(state, stage, doc, unread, unread_by)
+    if refusal is None:
+        state.log("dispatch_unread_brief_let_through", stage=stage.index, by=unread_by)
+    return refusal
 
 
 def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
@@ -1313,10 +1345,12 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
         directive = _try_reattest(state, stage, store, runner)
         if directive is not None:
             return directive
-    brief_refusal = _brief_method_refusal(state, stage, method_runner)
-    if brief_refusal is not None:
-        return brief_refusal
     dry_run = bool(getattr(args, "dry_run", False))
+    if not dry_run:
+        brief_refusal = _brief_method_refusal(
+            state, stage, method_runner, (getattr(args, "unread_brief_by", None) or "").strip())
+        if brief_refusal is not None:
+            return brief_refusal
     # Tier resolution order: explicit --budget flag > the stage's declared
     # Actor.cost_tier > the "medium" default — same precedence on the argparse
     # path (getattr(args, "budget", None)) and any in-process Namespace caller
@@ -2181,6 +2215,9 @@ def register(sub, add):
                          "the already-approved stage — never a scope or done-criterion change; "
                          "long text as '@<path>' (forwarded, resolved by the specialist itself)")
     sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--unread-brief-by", default=None,
+                    help="the user's name: let this one dispatch through a brief the method-statement "
+                         "judge did not answer for (never a brief it found defective); an agent cannot")
     # Stage 6, OPT-IN: re-enter a stage recorded PASSED and re-armed by a
     # substantive replan without paying for a full (re-)spawn, when the replan
     # left the stage's operative surface untouched AND its own control passes

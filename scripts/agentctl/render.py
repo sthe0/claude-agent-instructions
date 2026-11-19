@@ -1352,14 +1352,22 @@ def _method_rule_section(doc: PlanDoc, *, order_node: bool) -> list[str]:
     return lines
 
 
-def brief_site_defects(doc: PlanDoc, stage_index: int, *, runner=None) -> list[str]:
-    """The method-statement defects in the brief of `stage_index`, one line each: the brief's own text
-    judged at the place brief, without the binding-condition records it carries beside it. Empty for
-    a stage of a plan on an old-form order, which is never judged."""
+def brief_site_findings(doc: PlanDoc, stage_index: int, *, runner=None) -> list:
+    """The method-statement defects in the brief of `stage_index`: the brief's own text judged at the
+    place brief, without the binding-condition records it carries beside it. The list ends at the first
+    statement the judge could not read. Empty for a stage of a plan on an old-form order, which is never
+    judged."""
     from . import method_statement
 
-    return [method_statement.defect_line(f) for f in method_statement.site_defects(
-        method_statement.brief_statements(doc, stage_index), runner=runner)]
+    return method_statement.site_defects(
+        method_statement.brief_statements(doc, stage_index), runner=runner, stop_on_unread=True)
+
+
+def brief_site_defects(doc: PlanDoc, stage_index: int, *, runner=None) -> list[str]:
+    """`brief_site_findings`, one line each."""
+    from . import method_statement
+
+    return [method_statement.defect_line(f) for f in brief_site_findings(doc, stage_index, runner=runner)]
 
 
 def render_unit_review_bundle(

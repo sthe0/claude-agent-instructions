@@ -1193,13 +1193,46 @@ def _grounding_pass_refusal(args, state: SessionState, store: StateStore, runner
                      data={"problems": blockers})
 
 
+def _method_statement_plan_pass_refusal(args, state: SessionState, method_runner) -> Directive | None:
+    """A refusal of a whole-plan or stage-scoped `pass` on a plan of a new-form order while a stage
+    description says how the work is done or how the product is built (the reading a pair or unit review
+    gets from `field_place_concerns`); a description the judge could not read is a defect. A plan on an
+    order in the old form is not judged."""
+    if args.verdict != gates._PLAN_REVIEW_PASS:
+        return None
+    scope = (getattr(args, "scope", None) or "").strip()
+    stage_index = plan_review_scope_stage_index(scope) if scope else None
+    if scope and stage_index is None:
+        return None
+    target = getattr(args, "target", None) or state.plan_path
+    if not target:
+        return None
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError):
+        return None
+    found = method_statement.site_defects(
+        method_statement.plan_statements(doc, None if stage_index is None else {stage_index}),
+        runner=method_runner)
+    if not found:
+        return None
+    lines = [method_statement.defect_line(f) for f in found]
+    return Directive(
+        False, state.node, "fix_plan",
+        "plan-review refuses pass: the method-statement rule finds a stage description that says how the "
+        "work is done where only the result may stand: " + "; ".join(lines),
+        data={"problems": lines})
+
+
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None, method_runner=None) -> Directive:
     """Record a thinker review of a plan version (`_record_plan_review`), after refusing a `pass` that
-    leaves an un-overridden grounding defect standing. `method_runner` is the method-statement judge's own
-    runner, apart from `runner` (the grounding judge's)."""
+    leaves an un-overridden grounding defect or a method-statement defect standing. `method_runner` is
+    the method-statement judge's own runner, apart from `runner` (the grounding judge's)."""
     state = _require(store, args.session)
     warnings: list[str] = []
     refusal = _grounding_pass_refusal(args, state, store, runner, warnings)
+    if refusal is None:
+        refusal = _method_statement_plan_pass_refusal(args, state, method_runner)
     d = (refusal if refusal is not None
          else _record_plan_review(args, store=store, runner=runner, method_runner=method_runner))
     return _with_advisories(d, warnings)

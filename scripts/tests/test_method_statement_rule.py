@@ -345,6 +345,31 @@ def test_question_naming_an_old_form_plan_is_judged_by_the_sessions_own_order(os
     assert _stored_questions(ostore) == []
 
 
+def _plan_only_session(store, plan_path):
+    _start(store)
+    state = store.load(SESSION)
+    plugins.activate(state, "premise")
+    state.plan_path = str(plan_path)
+    store.save(state)
+    assert not state.order_draft_path
+
+
+def test_question_in_a_session_whose_plan_is_old_form_not_judged(ostore, tmp_path):
+    _plan_only_session(ostore, _plan_file(tmp_path, two_sided=False, name="old"))
+    judge = Judge(answering(M.METHOD))
+
+    assert _raise_question(ostore, judge).ok and judge.calls == []
+
+
+def test_question_in_a_session_whose_plan_is_new_form_is_judged(ostore, tmp_path):
+    _plan_only_session(ostore, _plan_file(tmp_path, name="new"))
+    judge = Judge(answering(M.METHOD, place=M.QUESTION))
+
+    refused = _raise_question(ostore, judge, question="Should we use a queue with two workers?")
+
+    assert not refused.ok and judge.places == {M.QUESTION}
+
+
 def test_question_before_any_order_draft_is_judged(ostore):
     _start(ostore)
     state = ostore.load(SESSION)
@@ -404,15 +429,20 @@ def test_executor_revision_after_a_review_pass_is_judged(ostore, tmp_path):
 # --- the brief site, stage descriptions and plan review ---------------------------------------------
 
 
-def _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, method_runner):
-    """Dispatch the active stage of a session whose plan is in the new form; `(directive, spawns)`."""
+def _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, method_runner, *, two_sided=True,
+                               dry_run=False, before=None, **extra):
+    """Dispatch the active stage of a session whose plan is in the new form (or the old one); `(directive,
+    spawns)`. `before(plan_path)` runs first (a reading the plan review made); `extra` are more arguments."""
     sid = "brief-site"
     _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
-    state.plan_path = str(_plan_file(tmp_path))
+    plan_path = _plan_file(tmp_path, two_sided=two_sided)
+    state.plan_path = str(plan_path)
     store.save(state)
+    if before is not None:
+        before(plan_path)
     spawned = []
-    directive = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+    directive = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium", dry_run=dry_run, **extra),
                                  store=store, runner=_capture_runner(spawned), method_runner=method_runner)
     return directive, spawned
 
@@ -425,6 +455,7 @@ def test_dispatch_refuses_a_brief_that_states_a_method(store, venued_fixtures_di
     assert not refused.ok and refused.action == "fix_brief" and spawned == []
     assert "stage 1" in refused.detail and "states a method" in refused.detail
     assert refused.data["problems"] and judge.places == {M.BRIEF}
+    assert "through a replan" in refused.detail
 
 
 def test_dispatch_spawns_a_brief_that_states_the_result(store, venued_fixtures_dir, tmp_path):
@@ -433,6 +464,120 @@ def test_dispatch_spawns_a_brief_that_states_the_result(store, venued_fixtures_d
     directive, spawned = _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, judge)
 
     assert directive.ok and len(spawned) == 1 and judge.places == {M.BRIEF}
+
+
+def test_dispatch_where_the_judge_does_not_answer_is_its_own_refusal(store, venued_fixtures_dir, tmp_path):
+    judge = Judge(fail=True)
+
+    refused, spawned = _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, judge)
+
+    assert not refused.ok and refused.action == "judge_unavailable" and spawned == []
+    assert "Nothing in the brief needs fixing: repeat the dispatch" in refused.detail
+    assert "replan" not in refused.detail and refused.data["problems"]
+    assert len(judge.calls) == 1
+
+
+def test_dispatch_stops_asking_after_a_defect_is_found_and_the_judge_goes_quiet(
+        store, venued_fixtures_dir, tmp_path):
+    answers = iter([M.METHOD])
+    calls = []
+
+    def runner(argv, timeout=None, stdin=None):
+        calls.append(stdin)
+        verdict = next(answers, None)
+        if verdict is None:
+            return SimpleNamespace(returncode=1, stdout="", stderr="unavailable", timed_out=False)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"verdict": verdict, "reason": "stub"}),
+                               stderr="", timed_out=False)
+
+    refused, spawned = _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, runner)
+
+    assert refused.action == "fix_brief" and spawned == [] and len(calls) == 2
+    assert all("could not read" not in line for line in refused.data["problems"])
+
+
+@pytest.mark.parametrize("by, outcome", [("user", "spawns"), ("agent", "refused"), ("Agent", "refused"),
+                                         ("alice", "refused")])
+def test_only_the_user_lets_an_unread_brief_through(store, venued_fixtures_dir, tmp_path, by, outcome):
+    judge = Judge(fail=True)
+
+    directive, spawned = _dispatch_on_new_form_plan(
+        store, venued_fixtures_dir, tmp_path, judge, unread_brief_by=by)
+
+    if outcome == "spawns":
+        assert directive.ok and len(spawned) == 1
+    else:
+        assert not directive.ok and directive.action == "judge_unavailable" and spawned == []
+
+
+@pytest.mark.parametrize("by, customer, let_through", [
+    ("agent", "", False), ("AGENT", "", False), ("", "", False), ("alice", "", True),
+    ("alice", "user", False), ("user", "user", True),
+])
+def test_unread_brief_override_is_the_customers_and_never_the_agents(by, customer, let_through):
+    from agentctl import cli_dispatch
+
+    doc = SimpleNamespace(meta=SimpleNamespace(order=SimpleNamespace(customer_id=customer)))
+    unread = M.Finding("stage 1 title", M.BRIEF, M.COULD_NOT_READ, "no answer")
+
+    refusal = cli_dispatch._unread_brief_refusal(
+        SimpleNamespace(node="EXECUTING"), SimpleNamespace(index=1), doc, unread, by)
+
+    assert (refusal is None) == let_through
+    assert refusal is None or refusal.action == "judge_unavailable"
+
+
+def test_a_user_cannot_let_a_defective_brief_through(store, venued_fixtures_dir, tmp_path):
+    judge = Judge(answering(M.METHOD, place=M.BRIEF))
+
+    refused, spawned = _dispatch_on_new_form_plan(
+        store, venued_fixtures_dir, tmp_path, judge, unread_brief_by="user")
+
+    assert refused.action == "fix_brief" and spawned == []
+
+
+def test_dispatch_serves_a_reading_the_plan_review_made(store, venued_fixtures_dir, tmp_path):
+    def read_at_plan_review(plan_path):
+        M.site_defects(M.plan_statements(load_plan(plan_path)), runner=Judge())
+
+    judge = Judge(answering(M.METHOD))
+
+    directive, spawned = _dispatch_on_new_form_plan(
+        store, venued_fixtures_dir, tmp_path, judge, before=read_at_plan_review)
+
+    assert directive.ok and len(spawned) == 1 and judge.calls == []
+
+
+def test_dispatch_refuses_on_a_defect_the_plan_review_read(store, venued_fixtures_dir, tmp_path):
+    def read_at_plan_review(plan_path):
+        M.site_defects(M.plan_statements(load_plan(plan_path)),
+                       runner=Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION)))
+
+    judge = Judge()
+
+    refused, spawned = _dispatch_on_new_form_plan(
+        store, venued_fixtures_dir, tmp_path, judge, before=read_at_plan_review)
+
+    assert refused.action == "fix_brief" and spawned == [] and judge.calls == []
+    assert "through a replan" in refused.detail
+
+
+def test_dispatch_on_an_old_form_plan_makes_no_judge_call(store, venued_fixtures_dir, tmp_path):
+    judge = Judge(answering(M.METHOD))
+
+    directive, spawned = _dispatch_on_new_form_plan(
+        store, venued_fixtures_dir, tmp_path, judge, two_sided=False)
+
+    assert directive.ok and len(spawned) == 1 and judge.calls == []
+
+
+def test_dispatch_dry_run_makes_no_judge_call_and_writes_no_cache(store, venued_fixtures_dir, tmp_path):
+    judge = Judge(answering(M.METHOD))
+
+    directive, spawned = _dispatch_on_new_form_plan(
+        store, venued_fixtures_dir, tmp_path, judge, dry_run=True)
+
+    assert directive.ok and judge.calls == [] and not M.cache_dir().exists()
 
 
 def test_brief_site_reports_method(tmp_path):
@@ -532,12 +677,16 @@ def test_how_built_in_a_result_reaches_the_recorded_review(tmp_path):
     assert refusal == "" and [p.severity for p in parsed] == ["blocking"]
 
 
-def test_binding_conditions_field_raises_no_plan_review_concern(tmp_path):
-    path = _plan_file(tmp_path, beside=BESIDE)
-    judge = Judge(answering(M.METHOD, containing="no change to the release branch"))
+def test_binding_conditions_a_stage_carries_raise_no_plan_review_concern(tmp_path, monkeypatch):
+    path = _plan_file(tmp_path)
+    doc = load_plan(path)
+    doc.stages[0].binding_conditions = [SimpleNamespace(id="B1", text=BINDING_TEXT)]
+    topo = _topo()
+    monkeypatch.setattr(topo.plan, "load_plan", lambda _path: doc)
+    judge = Judge(answering(M.METHOD, containing=BINDING_TEXT))
 
-    assert _topo().field_place_concerns(str(path), "unit:1", runner=judge) == []
-    assert not any(BINDING_TEXT in text for text in judge.texts)
+    assert topo.field_place_concerns(str(path), "unit:1", runner=judge) == []
+    assert judge.calls and not any(BINDING_TEXT in text for text in judge.texts)
 
 
 def test_whole_plan_review_prompt_carries_rule(tmp_path):
@@ -643,14 +792,122 @@ def test_production_sites_judge_a_statement_once(ostore, tmp_path):
     assert _raise_question(ostore, Judge(), question="Who cuts the release today?").ok
 
 
-def test_defect_advice_follows_the_verdict_and_the_place():
-    method = M.defect_line(M.Finding("customer side step", M.CUSTOMER_SIDE, M.METHOD, "names a tool"))
-    unread = M.defect_line(M.Finding("customer side step", M.CUSTOMER_SIDE, M.COULD_NOT_READ, "no answer"))
-    executor = M.defect_line(M.Finding("proposal P1", M.EXECUTOR_SIDE, M.METHOD, "names a tool"))
+@pytest.mark.parametrize("verdict, place, advice", [
+    (M.COULD_NOT_READ, M.CUSTOMER_SIDE, "repeat the order review"),
+    (M.COULD_NOT_READ, M.EXECUTOR_SIDE, "repeat the order review or the executor revision"),
+    (M.COULD_NOT_READ, M.QUESTION, "raise the question again"),
+    (M.COULD_NOT_READ, M.BRIEF, "repeat the dispatch"),
+    (M.COULD_NOT_READ, M.STAGE_DESCRIPTION, "repeat the plan review"),
+    (M.METHOD, M.CUSTOMER_SIDE, "how the work is done is the executor's to decide"),
+    (M.METHOD, M.QUESTION, "how the work is done is the executor's to decide"),
+    (M.METHOD, M.EXECUTOR_SIDE, "a method belongs to the executor's sub-plan"),
+    (M.METHOD, M.BRIEF, "a method belongs to the stage's sub-plan"),
+    (M.METHOD, M.STAGE_DESCRIPTION, "a method belongs to the stage's sub-plan"),
+    (M.HOW_BUILT, M.CUSTOMER_SIDE, "put a requirement on the build in a binding condition"),
+    (M.HOW_BUILT, M.QUESTION, "put a requirement on the build in a binding condition"),
+    (M.HOW_BUILT, M.BRIEF, "put a requirement on the build in a binding condition"),
+    (M.HOW_BUILT, M.STAGE_DESCRIPTION, "put a requirement on the build in a binding condition"),
+])
+def test_defect_advice_follows_the_verdict_and_the_place(verdict, place, advice):
+    line = M.defect_line(M.Finding("a statement", place, verdict, "the reason"))
 
-    assert "binding condition" in method
-    assert "binding condition" not in unread and "judge did not answer" in unread and "repeat the review" in unread
-    assert "sub-plan" in executor and "binding condition" not in executor
+    assert advice in line
+    assert ("binding condition" in line) == (verdict == M.HOW_BUILT)
+    assert ("the judge did not answer" in line) == (verdict == M.COULD_NOT_READ)
+
+
+def test_the_judge_stops_at_its_first_unanswered_statement_when_asked():
+    statements = [M.Statement(f"s{i}", M.BRIEF, f"text {i}") for i in range(4)]
+    judge = Judge(fail=True)
+
+    found = M.findings(statements, runner=judge, stop_on_unread=True)
+
+    assert [f.verdict for f in found] == [M.COULD_NOT_READ] and len(judge.calls) == 1
+    assert len(M.findings(statements, runner=Judge(fail=True))) == 4
+
+
+def test_a_verdict_serves_every_place_with_the_same_defect_row(tmp_path):
+    cache = tmp_path / "cache"
+    first = M.judge("use a queue", M.STAGE_DESCRIPTION, runner=Judge(answering(M.METHOD)), cache=cache)
+    judge = Judge()
+
+    served = M.judge("use a queue", M.BRIEF, runner=judge, cache=cache)
+    other_row = M.judge("use a queue", M.EXECUTOR_SIDE, runner=judge, cache=cache)
+
+    assert first["verdict"] == served["verdict"] == M.METHOD
+    assert other_row["verdict"] == M.NEITHER and judge.places == {M.EXECUTOR_SIDE}
+
+
+def test_a_changed_prompt_does_not_read_an_old_verdict(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    M.judge("use a queue", M.QUESTION, runner=Judge(answering(M.METHOD)), cache=cache)
+    assert M.judge("use a queue", M.QUESTION, runner=Judge(fail=True), cache=cache)["verdict"] == M.METHOD
+
+    monkeypatch.setattr(M, "_PROMPT", M._PROMPT + "\nAnswer briefly.\n")
+
+    assert M.judge("use a queue", M.QUESTION, runner=Judge(fail=True), cache=cache)["verdict"] == M.COULD_NOT_READ
+
+
+def test_a_changed_judge_model_does_not_read_an_old_verdict(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    M.judge("use a queue", M.QUESTION, runner=Judge(answering(M.METHOD)), cache=cache)
+
+    monkeypatch.setattr(M.GJ, "_JUDGE_MODEL", "another-model")
+
+    assert M.judge("use a queue", M.QUESTION, runner=Judge(fail=True), cache=cache)["verdict"] == M.COULD_NOT_READ
+
+
+# --- a whole-plan pass -----------------------------------------------------------------------------
+
+
+def _whole_plan_pass(store, path, method_runner, *, scope=""):
+    return cli.cmd_plan_review(
+        ns(session=SESSION, scope=scope, target=str(path), verdict="pass", reviewer="thinker", concerns=None,
+           note="", plan_digest=None, customer_questions=None, transcript=None),
+        store=store, method_runner=method_runner)
+
+
+@pytest.mark.parametrize("scope", ["", "stage:1"])
+def test_a_pass_on_a_new_form_plan_is_refused_on_a_defect(ostore, tmp_path, scope):
+    _start(ostore)
+    path = _plan_file(tmp_path)
+
+    unread = _whole_plan_pass(ostore, path, Judge(fail=True), scope=scope)
+    method = _whole_plan_pass(ostore, path, Judge(answering(M.METHOD, place=M.STAGE_DESCRIPTION)), scope=scope)
+
+    assert not method.ok and method.action == "fix_plan" and "states a method" in method.detail
+    assert "stage 1" in method.detail and not unread.ok and unread.action == "fix_plan"
+    assert "could not read" in unread.detail
+
+
+def test_a_pass_on_a_new_form_plan_reads_the_stage_descriptions(ostore, tmp_path):
+    _start(ostore)
+    judge = Judge()
+
+    passed = _whole_plan_pass(ostore, _plan_file(tmp_path), judge)
+
+    assert passed.action != "fix_plan" and judge.places == {M.STAGE_DESCRIPTION}
+
+
+def test_a_pass_on_an_old_form_plan_is_not_judged(ostore, tmp_path):
+    _start(ostore)
+    judge = Judge(answering(M.METHOD))
+
+    passed = _whole_plan_pass(ostore, _plan_file(tmp_path, two_sided=False, name="old"), judge)
+
+    assert passed.action != "fix_plan" and judge.calls == []
+
+
+def test_a_revise_is_not_refused_on_a_defect(ostore, tmp_path):
+    _start(ostore)
+    judge = Judge(answering(M.METHOD))
+
+    revised = cli.cmd_plan_review(
+        ns(session=SESSION, scope="", target=str(_plan_file(tmp_path)), verdict="revise", reviewer="thinker",
+           concerns=["blocking: stage:1 a concern"], note="", plan_digest=None, customer_questions=None,
+           transcript=None), store=ostore, method_runner=judge)
+
+    assert revised.action != "fix_plan" and judge.calls == []
 
 
 # --- the eval harness -------------------------------------------------------------------------------
