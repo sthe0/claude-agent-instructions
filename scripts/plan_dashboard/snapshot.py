@@ -38,6 +38,7 @@ import os
 import stat as stat_module
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
@@ -379,7 +380,8 @@ class ReuseCensus:
     """Which readers served a result, or an entry, kept from an earlier cycle, in each stat-path cycle (by
     ``KEPT.generation``) and in each event-path cycle (by the token ``begin_event_cycle`` gave it; the tokens
     start at ``EVENT_CYCLE_BASE``, above every generation). Only the last ``KEEP`` of each are held; it is read
-    for reporting and decides nothing."""
+    for reporting and decides nothing. An event cycle is open until the next one begins, so a read that runs
+    between cycles (a worker of the previous cycle, the start-up read) is noted under the latest one."""
 
     KEEP = 64
 
@@ -1480,7 +1482,7 @@ class TranscriptListing:
             self.cycle = (generation, roots, result)
             return result
 
-    def _event_index(self, roots: tuple) -> dict[str, tuple[Path, ...]]:
+    def _event_index(self, roots: tuple) -> Mapping[str, tuple[Path, ...]]:
         """The event path's index, immutable and shared: the kept one while no root's version moved and no
         project directory or file in one was marked; else the project directories that were marked, are new or
         were not kept are listed again, the rest keep their stems, and the merge is made again."""

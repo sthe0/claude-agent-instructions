@@ -1821,6 +1821,18 @@ def test_marked_since_is_none_after_a_trust_change(listing):
     assert store.KEPT.marked_since(listing.root, token) is None
 
 
+def test_marked_since_is_none_after_the_log_overflowed(listing):
+    token = store.KEPT.mark_token()
+    store.KEPT.mark([listing.root / f"n{number}.json" for number in range(store.MARK_LOG_MAX + 1)])
+    assert store.KEPT.marked_since(listing.root, token) is None
+
+
+def test_marked_under_names_the_child_directory_a_path_was_marked_in(listing):
+    token = store.KEPT.mark_token()
+    store.KEPT.mark([listing.root / "project" / "a.jsonl"])
+    assert store.KEPT.marked_under(listing.root, token) == {"project"}
+
+
 def count_fetches(monkeypatch) -> list[str]:
     """The paths ``IdentityCache.fetch`` is asked for from now on."""
     fetched, real_fetch = [], store.IdentityCache.fetch
