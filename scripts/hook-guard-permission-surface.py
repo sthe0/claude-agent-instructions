@@ -16,13 +16,40 @@ replacement the abandonment leaf calls for: NO cross-invocation state, NO
 UNKNOWN=>deny — every branch fires only on POSITIVE identification, and
 anything ambiguous, unreadable or unparsable ALLOWS.
 
-`decide(tool_name, tool_input, cwd, permission_mode, read_file)` and
-`decide_detailed` read no transcript, no session state, no environment
-variable, and no filesystem beyond the injected `read_file` — both return
-only `"allow"` or `"ask"`, never `"deny"`. `permission_mode` does not change
-the returned decision — it is accepted for interface parity with that
-decision table, not consulted, since the guard's own answer to "is this a
-G-target" never depends on which mode the session is in.
+`decide(tool_name, tool_input, cwd, permission_mode, read_file,
+project_root_probe=None)` and `decide_detailed` read no transcript, no session
+state, and no filesystem beyond the injected `read_file` and
+`project_root_probe`. Without a probe both return only `"allow"` or `"ask"`;
+with one they may also return `"deny"` on the G1-nonproject branch below.
+`permission_mode` does not change the returned decision — it is accepted for
+interface parity with that decision table, not consulted, since the guard's
+own answer to "is this a G-target" never depends on which mode the session is
+in.
+
+Difficulty removed (G1-nonproject, informative G1 reasons): on 2026-11-12 and
+2026-11-19 a root agent created `<scratchpad>/issue3/.claude/settings.local.json`,
+copied its own allow rules into it and passed that path to
+`spawn-specialist.py --project-settings`. G1-bash fired `"ask"`, but the dialog said only
+"Bash command writes into the live-loaded settings document <path>" — neither
+the rules being granted nor that the directory is no project — and a human
+approved it without knowing what they approved. Every G1 reason now opens
+with "The agent is granting itself permissions" and the exact added
+`permissions.allow` rules (removed deny rules, a raised `defaultMode`, other
+changed security keys), or says the rules are unknown; and a settings
+document whose `.claude` directory sits in a positively-identified
+non-project directory is denied outright.
+
+G1-nonproject is the one branch that denies at every depth and in every
+mode, and it does not break the "never deny on ambiguity" rule above: it
+fires only when the probe POSITIVELY identifies the parent of `.claude` as
+not a project root (`make_project_root_probe`: a session scratch/temp
+directory, or no `.git`/`.arc`/`.arcignore` marker on it or any ancestor —
+the root of a mounted arc repository carries `.arc`). An uninspectable directory on the way
+answers None and keeps the plain G1 `"ask"`. No session loads a settings document from such
+a directory as a project's settings, so the only use of writing permission
+rules there is to forge a `--project-settings` file; refusing it costs no
+legitimate work. The agent home and the harness config roots stay governed
+by plain G1.
 
 Turning a G-branch `"ask"` into `"deny"` is `main()`'s concern, not the
 decision functions' — applied once, right before a fire is logged and
@@ -81,7 +108,13 @@ The branches — G1 (three sub-forms: G1-edit, G1-bash, G1-state), G2, G3, G4:
              targets`) that is a live-loaded settings document. No diff check:
              a shell write into a live settings document has no readable
              "before" the way an Edit's `old_string` does, so any such write
-             fires.
+             fires. When the written bytes come from one readable file
+             (`cp SRC DST`, `cat SRC > DST`), that file is read through
+             `read_file` only to name the granted rules in the reason.
+  G1-nonproject — a G1-edit or G1-bash fire whose target is
+             `<dir>/.claude/settings*.json` with `<dir>` positively not a
+             project root (see above): `"deny"`, not `"ask"`. A Write that
+             creates a settings document counts as widening from `{}`.
   G1-state — an Edit, Write, MultiEdit, NotebookEdit or Bash write target
              under agentctl's own state directory
              (`widening_targets.is_agentctl_state_path`) — writing there could
@@ -157,7 +190,7 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, permission_surface, widening_targets  # noqa: E402
@@ -367,7 +400,11 @@ def _bash_write_targets(command: str, cwd: str) -> list[str]:
     return bash_write_targets.command_write_targets(command, eff_cwd)
 
 
-def _g1_edit(tool_input: dict, read_file) -> str | None:
+_SettingsChange = tuple[str, str, str]
+"""`(target, old_text, new_text)` of a G1-edit fire."""
+
+
+def _g1_edit(tool_input: dict, read_file) -> _SettingsChange | None:
     file_path = tool_input.get("file_path")
     if not isinstance(file_path, str) or not file_path:
         return None
@@ -383,7 +420,7 @@ def _g1_edit(tool_input: dict, read_file) -> str | None:
     if new_text is None:
         return None
     if _security_relevant_diff(old_text, new_text):
-        return file_path
+        return file_path, old_text, new_text
     return None
 
 
@@ -394,10 +431,46 @@ def _g1_bash(command: str, cwd: str) -> str | None:
     return None
 
 
-def _g1_write(tool_input: dict, read_file) -> str | None:
+def _read_baseline(read_file, path: str) -> str | None:
+    """`path`'s current text through `read_file`; `"{}"` when the file does
+    not exist yet, since creating a settings document widens from an empty
+    one; None when there is no reader or the file cannot be read."""
+    if read_file is None:
+        return None
+    try:
+        text = read_file(path)
+    except FileNotFoundError:
+        return "{}"
+    except Exception:
+        return None
+    return text if isinstance(text, str) else None
+
+
+def _g1_bash_written_text(command: str, cwd: str, target: str, read_file) -> str | None:
+    """The text a G1-bash command writes into `target` when it copies one
+    readable file there (`cp SRC DST`, `cat SRC > DST`), else None."""
+    if read_file is None:
+        return None
+    eff_cwd = git_cwd.effective_git_cwd(command, cwd)
+    for seg in bash_write_targets.segments(command):
+        if target not in bash_write_targets.segment_write_target(seg, eff_cwd):
+            continue
+        source = bash_write_targets.single_content_source(seg, eff_cwd)
+        if source is None:
+            return None
+        try:
+            text = read_file(source)
+        except Exception:
+            return None
+        return text if isinstance(text, str) else None
+    return None
+
+
+def _g1_write(tool_input: dict, read_file) -> _SettingsChange | None:
     """Same G1-edit predicate as `_g1_edit`, for a Write tool_use — Write
     already supplies the whole `after` text directly as `content`, so no
-    old_string/new_string reconstruction is needed."""
+    old_string/new_string reconstruction is needed. A Write that creates the
+    document diffs against `{}`."""
     file_path = tool_input.get("file_path")
     if not isinstance(file_path, str) or not file_path:
         return None
@@ -406,14 +479,11 @@ def _g1_write(tool_input: dict, read_file) -> str | None:
     new_text = tool_input.get("content")
     if not isinstance(new_text, str):
         return None
-    try:
-        old_text = read_file(file_path)
-    except Exception:
-        return None
-    if not isinstance(old_text, str):
+    old_text = _read_baseline(read_file, file_path)
+    if old_text is None:
         return None
     if _security_relevant_diff(old_text, new_text):
-        return file_path
+        return file_path, old_text, new_text
     return None
 
 
@@ -429,7 +499,7 @@ def _apply_multi_edit(old_text: str, edits: list) -> str | None:
     return text
 
 
-def _g1_multi_edit(tool_input: dict, read_file) -> str | None:
+def _g1_multi_edit(tool_input: dict, read_file) -> _SettingsChange | None:
     """Same G1-edit predicate, for a MultiEdit tool_use — its `edits` array
     is applied in order to reconstruct the after-text `_apply_edit` would
     otherwise produce from a single old_string/new_string pair."""
@@ -451,7 +521,7 @@ def _g1_multi_edit(tool_input: dict, read_file) -> str | None:
     if new_text is None:
         return None
     if _security_relevant_diff(old_text, new_text):
-        return file_path
+        return file_path, old_text, new_text
     return None
 
 
@@ -667,7 +737,81 @@ def _g4_pending_action(session: str | None, read_file) -> str | None:
     return None
 
 
-def _g1_edit_message(target: str) -> str:
+_MAX_LISTED_ENTRIES = 20
+
+
+def _string_entries(perms: dict, key: str) -> list[str]:
+    value = perms.get(key)
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _listed(entries: list[str]) -> str:
+    shown = ", ".join(f"`{e}`" for e in entries[:_MAX_LISTED_ENTRIES])
+    hidden = len(entries) - _MAX_LISTED_ENTRIES
+    return f"{shown}, ... and {hidden} more" if hidden > 0 else shown
+
+
+def _changed_security_keys(old_doc: dict, new_doc: dict, old_perms: dict, new_perms: dict) -> list[str]:
+    changed = [key for key in _OTHER_SECURITY_KEYS if old_doc.get(key) != new_doc.get(key)]
+    old_env = old_doc.get("env") if isinstance(old_doc.get("env"), dict) else {}
+    new_env = new_doc.get("env") if isinstance(new_doc.get("env"), dict) else {}
+    changed += sorted(
+        f"env.{key}" for key in set(old_env) | set(new_env)
+        if _is_security_relevant_env_key(key) and old_env.get(key) != new_env.get(key)
+    )
+    if _bypass_permissions_widens(
+        old_perms.get("disableBypassPermissionsMode"), new_perms.get("disableBypassPermissionsMode")
+    ):
+        changed.append("permissions.disableBypassPermissionsMode")
+    if _enable_all_mcp_widens(old_doc.get("enableAllProjectMcpServers"), new_doc.get("enableAllProjectMcpServers")):
+        changed.append("enableAllProjectMcpServers")
+    if _enabled_mcp_servers_widens(old_doc.get("enabledMcpjsonServers"), new_doc.get("enabledMcpjsonServers")):
+        changed.append("enabledMcpjsonServers")
+    return changed
+
+
+def _grant_summary(old_text: str, new_text: str) -> str | None:
+    """What going from `old_text` to `new_text` grants, in words a human
+    approving the dialog can check: the added `permissions.allow` rules
+    (always counted, listed up to `_MAX_LISTED_ENTRIES`), removed
+    `permissions.deny` rules, a raised `defaultMode`, other changed security
+    keys. None when either side is not a JSON object."""
+    try:
+        old_doc = json.loads(old_text)
+        new_doc = json.loads(new_text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(old_doc, dict) or not isinstance(new_doc, dict):
+        return None
+    old_perms = old_doc.get("permissions") if isinstance(old_doc.get("permissions"), dict) else {}
+    new_perms = new_doc.get("permissions") if isinstance(new_doc.get("permissions"), dict) else {}
+    old_allow = set(_string_entries(old_perms, "allow"))
+    new_deny = set(_string_entries(new_perms, "deny"))
+    allow_added = [e for e in dict.fromkeys(_string_entries(new_perms, "allow")) if e not in old_allow]
+    deny_removed = [e for e in dict.fromkeys(_string_entries(old_perms, "deny")) if e not in new_deny]
+
+    parts = [f"{len(allow_added)} added permissions.allow rule(s)" + (f": {_listed(allow_added)}" if allow_added else "")]
+    if deny_removed:
+        parts.append(f"{len(deny_removed)} removed permissions.deny rule(s): {_listed(deny_removed)}")
+    old_mode, new_mode = old_perms.get("defaultMode"), new_perms.get("defaultMode")
+    if _default_mode_widens(old_mode, new_mode):
+        parts.append(f"permissions.defaultMode raised from {old_mode or 'unset'} to {new_mode or 'unset'}")
+    changed = _changed_security_keys(old_doc, new_doc, old_perms, new_perms)
+    if changed:
+        parts.append(f"changed security-relevant key(s): {', '.join(changed)}")
+    return "; ".join(parts)
+
+
+def _grant_statement(target: str, summary: str | None) -> str:
+    if summary is None:
+        return (
+            f"The agent is granting itself permissions by writing the settings "
+            f"document {target}; rules unknown — the agent did not show them."
+        )
+    return f"The agent is granting itself permissions by writing the settings document {target}: {summary}."
+
+
+def _g1_edit_message(target: str, summary: str | None) -> str:
     keys = (
         "permissions/"
         + "/".join(_OTHER_SECURITY_KEYS)
@@ -676,19 +820,59 @@ def _g1_edit_message(target: str) -> str:
         "enabledMcpjsonServers"
     )
     return (
-        f"Edit widens the live-loaded settings document {target} on a "
-        f"security-relevant key ({keys}; {_SETTINGS_REFERENCE_URL}). Route "
-        f"this through the plan's own grant channel (agentctl dispatch) "
-        f"instead of editing the document directly."
+        f"{_grant_statement(target, summary)} The edit widens this live-loaded "
+        f"settings document on a security-relevant key ({keys}; "
+        f"{_SETTINGS_REFERENCE_URL}). Route this through the plan's own grant "
+        f"channel (agentctl dispatch) instead of editing the document directly."
     )
 
 
-def _g1_bash_message(target: str) -> str:
+def _g1_bash_message(target: str, summary: str | None) -> str:
     return (
-        f"Bash command writes into the live-loaded settings document "
-        f"{target}. Route this through the plan's own grant channel "
-        f"(agentctl dispatch) instead of writing the document directly."
+        f"{_grant_statement(target, summary)} The Bash command writes into this "
+        f"live-loaded settings document. Route this through the plan's own grant "
+        f"channel (agentctl dispatch) instead of writing the document directly."
     )
+
+
+def _g1_nonproject_message(target: str, parent: str, summary: str | None) -> str:
+    return (
+        f"{_grant_statement(target, summary)} Refused: {parent} is not a project "
+        f"root (no .git/.arc/.arcignore marker, or a scratch/temp directory), so "
+        f"no session loads this file as a project's settings — writing permission "
+        f"rules there only forges a project settings file. Ask for the permission "
+        f"through the plan's own grant channel (agentctl dispatch) instead."
+    )
+
+
+def _non_project_parent(target: str, project_root_probe) -> str | None:
+    """The directory holding `target`'s `.claude` directory when
+    `project_root_probe` positively says it is not a project root; None
+    otherwise — no probe, `target` not shaped `<dir>/.claude/settings*.json`,
+    its `.claude` being the agent home or a harness config root (governed by
+    plain G1), or a probe that cannot tell."""
+    if project_root_probe is None:
+        return None
+    path = PurePosixPath(os.path.normpath(os.path.expanduser(target)))
+    if path.parent.name.casefold() != ".claude":
+        return None
+    governed = (config_root.agent_home(), config_root.harness_config_root(), Path.home() / ".claude")
+    claude_dir = os.path.normpath(str(path.parent))
+    if any(claude_dir == os.path.normpath(str(root)) for root in governed):
+        return None
+    parent = str(path.parent.parent)
+    return parent if project_root_probe(parent) is False else None
+
+
+def _g1_settings_verdict(
+    branch: str, target: str, summary: str | None, project_root_probe,
+) -> tuple[str, str, str]:
+    parent = _non_project_parent(target, project_root_probe)
+    if parent is not None:
+        return "deny", "G1-nonproject", _g1_nonproject_message(target, parent, summary)
+    if branch == "G1-bash":
+        return "ask", branch, _g1_bash_message(target, summary)
+    return "ask", branch, _g1_edit_message(target, summary)
 
 
 def _g1_state_message(target: str) -> str:
@@ -755,12 +939,14 @@ def decide_detailed(
     cwd: str,
     permission_mode: str | None,
     read_file,
+    project_root_probe=None,
 ) -> tuple[str, str | None, str | None]:
     """`(decision, branch, message)` at the G-branch level — `decision` is
-    always `"allow"` or `"ask"`, never `"deny"` (see module docstring: turning
-    an `"ask"` into a `"deny"` at depth >= 1 is `main()`'s concern, not this
-    function's). `permission_mode` is accepted, never consulted (see module
-    docstring). Any unexpected shape or internal exception allows.
+    `"allow"` or `"ask"`, and `"deny"` only on G1-nonproject, which needs a
+    `project_root_probe` (see module docstring: turning an `"ask"` into a
+    `"deny"` at depth >= 1 is `main()`'s concern, not this function's).
+    `permission_mode` is accepted, never consulted (see module docstring).
+    Any unexpected shape or internal exception allows.
 
     `decide()` is the thin single-value wrapper `main()` and every test that
     only needs the verdict use; `replay-permission-guard.py` imports THIS
@@ -771,34 +957,13 @@ def decide_detailed(
     depth-based rule `main()` does."""
     del permission_mode
     try:
-        if tool_name == "Edit":
-            target = _g1_edit(tool_input, read_file)
-            if target:
-                return "ask", "G1-edit", _g1_edit_message(target)
-            target = _g1_state_edit(tool_input)
-            if target:
-                return "ask", "G1-state", _g1_state_message(target)
-            target = _g3_edit(tool_input)
-            if target:
-                return "ask", "G3", _g3_message(target)
-            return "allow", None, None
-
-        if tool_name == "Write":
-            target = _g1_write(tool_input, read_file)
-            if target:
-                return "ask", "G1-edit", _g1_edit_message(target)
-            target = _g1_state_edit(tool_input)
-            if target:
-                return "ask", "G1-state", _g1_state_message(target)
-            target = _g3_edit(tool_input)
-            if target:
-                return "ask", "G3", _g3_message(target)
-            return "allow", None, None
-
-        if tool_name == "MultiEdit":
-            target = _g1_multi_edit(tool_input, read_file)
-            if target:
-                return "ask", "G1-edit", _g1_edit_message(target)
+        if tool_name in _G1_EDIT_DETECTORS:
+            change = _G1_EDIT_DETECTORS[tool_name](tool_input, read_file)
+            if change:
+                target, old_text, new_text = change
+                return _g1_settings_verdict(
+                    "G1-edit", target, _grant_summary(old_text, new_text), project_root_probe,
+                )
             target = _g1_state_edit(tool_input)
             if target:
                 return "ask", "G1-state", _g1_state_message(target)
@@ -822,7 +987,10 @@ def decide_detailed(
                 return "allow", None, None
             target = _g1_bash(command, cwd)
             if target:
-                return "ask", "G1-bash", _g1_bash_message(target)
+                written = _g1_bash_written_text(command, cwd, target, read_file)
+                baseline = _read_baseline(read_file, target) if written is not None else None
+                summary = _grant_summary(baseline, written) if baseline is not None else None
+                return _g1_settings_verdict("G1-bash", target, summary, project_root_probe)
             target = _g1_state_bash(command, cwd)
             if target:
                 return "ask", "G1-state", _g1_state_message(target)
@@ -843,16 +1011,66 @@ def decide_detailed(
         return "allow", None, None
 
 
+_G1_EDIT_DETECTORS = {"Edit": _g1_edit, "Write": _g1_write, "MultiEdit": _g1_multi_edit}
+
+
 def decide(
     tool_name: str,
     tool_input: dict,
     cwd: str,
     permission_mode: str | None,
     read_file,
+    project_root_probe=None,
 ) -> str:
-    """`"allow"` or `"ask"` — see module docstring; `main()` is the only place
-    a `"deny"` is produced."""
-    return decide_detailed(tool_name, tool_input, cwd, permission_mode, read_file)[0]
+    """`decide_detailed`'s decision alone — see module docstring."""
+    return decide_detailed(tool_name, tool_input, cwd, permission_mode, read_file, project_root_probe)[0]
+
+
+def _is_same_or_under(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+_PROJECT_MARKERS = frozenset({".git", ".arc", ".arcignore"})
+
+
+def make_project_root_probe(scratch_roots, scratch_prefixes=()):
+    """A `project_root_probe` for `decide_detailed`. Called with a directory,
+    it answers False when the directory resolves under one of
+    `scratch_roots` or starts with one of `scratch_prefixes` (a session
+    scratchpad is never a project, whatever markers it holds); True when the
+    directory or an existing ancestor holds a VCS marker (`.git`, `.arc` — the
+    marker at a mounted arc repository's root — or `.arcignore`), so a monorepo subproject's own
+    `.claude` counts; False when nothing up to `/` holds one; None when a
+    directory on the way cannot be inspected."""
+    roots = [os.path.realpath(r) for r in scratch_roots if r]
+    prefixes = tuple(scratch_prefixes)
+
+    def probe(directory: str) -> bool | None:
+        current = os.path.realpath(directory)
+        if any(_is_same_or_under(current, root) for root in roots) or current.startswith(prefixes):
+            return False
+        while True:
+            if os.path.lexists(current):
+                if not os.path.isdir(current) or not os.access(current, os.R_OK | os.X_OK):
+                    return None
+                try:
+                    if _PROJECT_MARKERS & set(os.listdir(current)):
+                        return True
+                except OSError:
+                    return None
+            parent = os.path.dirname(current)
+            if parent == current:
+                return False
+            current = parent
+
+    return probe
+
+
+def _session_scratch_probe():
+    return make_project_root_probe(
+        scratch_roots=("/tmp", os.environ.get("TMPDIR")),
+        scratch_prefixes=("/place/vartmp/claude-",),
+    )
 
 
 def _log_target(tool_input: dict) -> str | None:
@@ -907,12 +1125,12 @@ def main() -> int:
 
     try:
         decision, branch, message = decide_detailed(
-            tool_name, tool_input, cwd, permission_mode, _real_read_file,
+            tool_name, tool_input, cwd, permission_mode, _real_read_file, _session_scratch_probe(),
         )
     except Exception:
         return 0
 
-    if decision == "ask" and _recursion_depth() >= 1:
+    if decision in ("ask", "deny") and _recursion_depth() >= 1:
         decision = "deny"
         message = _with_permission_request_hint(message or f"{branch} widening detected")
 
