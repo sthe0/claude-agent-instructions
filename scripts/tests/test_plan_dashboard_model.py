@@ -1060,3 +1060,22 @@ def test_a_mark_during_the_child_pass_is_not_reused(kept_root, monkeypatch):
     model.child_index(kept_root.state_root)
     model.child_index(kept_root.state_root)
     assert len(passes) == 2
+
+
+def test_a_state_file_unsettled_during_the_child_pass_is_not_reused(kept_root, monkeypatch):
+    monkeypatch.setattr(store, "now_ns", time.time_ns)
+    (kept_root.state_root / "fresh.json").write_text(
+        json.dumps({"session_id": "fresh", "parent_link": {"parent_session": "parent", "stage_index": 2}}),
+        encoding="utf-8")
+    model.child_index(kept_root.state_root)
+    globs = count_calls(monkeypatch, store.KEPT, "glob")
+    model.child_index(kept_root.state_root)
+    assert len(globs) == 1
+
+
+def test_a_child_index_over_an_uncovered_state_file_is_not_reused(kept_root, monkeypatch):
+    store.KEPT.trust(lambda path: str(path).startswith(str(kept_root.state_root.parent)) and not str(path).endswith("sibling.json"))
+    model.child_index(kept_root.state_root)
+    globs = count_calls(monkeypatch, store.KEPT, "glob")
+    model.child_index(kept_root.state_root)
+    assert len(globs) == 1

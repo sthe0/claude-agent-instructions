@@ -880,8 +880,9 @@ def child_version(state_root) -> tuple[int, int]:
 
 
 def child_event_reusable(kept, version, covers, floor) -> bool:
-    """The kept event-path index is what a pass would make: the state root's version and the cover test are
-    those it was made under, and so is the floor."""
+    """The kept event-path index is what a pass at this floor made: the state root's version and the cover test
+    are those it was made under, and so is the floor (callers with another floor each make a pass). A state file
+    unsettled during the pass bumps the root's version, so such a pass is not served again."""
     return snapshot.view_unchanged(kept, version, covers) and kept.held == floor
 
 

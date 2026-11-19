@@ -956,6 +956,7 @@ MUTATIONS.update({
     "child-pass-reuse-ignores-mark": (MODEL, "child_version", _always((0, 0))),
     "child-pass-reuse-shared-result": (MODEL, "keep_child_index", _child_index_kept_uncopied),
     "child-pass-version-after-pass": (MODEL, "keep_child_index", _child_version_read_after_the_pass),
+    "event-reuse-ignores-uncovered-entries": ("plan_dashboard.snapshot", "entries_covered", _always(True)),
 })
 
 TUI_MUTATIONS.update({
