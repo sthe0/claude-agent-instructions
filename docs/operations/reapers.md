@@ -292,6 +292,41 @@ The lineage is the root and every descendant: a session whose `parent_link` name
 
 Residuals, named rather than hidden: the retention is judged from state-file mtimes, because the `resolve` history event carries no timestamp, so anything that rewrites a state file (a reopen, a repair) restarts the retention for its lineage; a process in another PID or mount namespace is invisible to the sweep, as for `temp-residue`; a mount that appears between the re-judgment and the deletion would be entered, since `liveness.remove_tree` does not check `st_dev`.
 
+## Disk-usage report
+
+Source: `scripts/disk-usage-report.py`, logic in `scripts/lib/disk_report.py`, neutral naming rows in `scripts/lib/disk_report_names.default.toml`, tests in `scripts/tests/test_disk_usage_report.py`. A reaper removes what it can prove dead; this tool answers the question before it: where the used space of the volume sits, and how much of it nothing accounts for. It is read-only: it deletes, moves and changes nothing, needs no sudo, and changes no reaper opt-in, limit or timer. Its only writes are the two report files in `--out-dir`.
+
+```
+python3 scripts/disk-usage-report.py --out-dir <dir> [--root /] [--names <file>] [--deadline-min 60] [--min-bytes N] [--max-depth 4] [--temp-root <dir>]...
+```
+
+**Walk.** One streamed `ionice -c3 nice -n19 du -x -B1 -0 --max-depth=D` over the *roots*: the children of `--root`, of the home directory and of each of its ancestors. The home directory, its ancestors and `/` are never roots themselves (their own inode bytes appear as entries, so the total matches). A candidate that is a mount point, lies on another device or is excluded is listed under `excluded` and not walked; a mount whose type starts with `fuse` is also listed under `fuse_mounts`. Sizes are allocated bytes (GiB = 2^30). Hard links are counted once within the run; symlinks are not followed. The tool refuses to start when `ionice` is missing, takes a deadline of 1 to 60 minutes, and on a timeout keeps the partial output and says so. A mount is excluded, never entered.
+
+**Entries.** Each entry above `--min-bytes` carries a label, a kind and a *reaper status*. Named entries come from the naming table; the rest are unnamed, and the unnamed children of one parent that fall under the threshold are folded into one entry for that parent. Folded entries and the home-ancestor entries are therefore not disjoint from the others; the report's totals are computed from the walk, not from summing the listed entries.
+
+**Reaper status.** First match wins:
+
+| Status | Meaning |
+|---|---|
+| `none` | the naming row names no reaper |
+| `not-registered` | the row names a reaper that is not discovered on this machine |
+| `report-only` | the row marks the reaper `reaper_mode = "report-only"` (it reports, never deletes) |
+| `registered-opt-in-off` | the row's `opt_in_key` is set (not `none`) and that key is not `true` in the opt-in file |
+| `registered-unconfigured` | a parameter listed in the row's `needs_params` (for example a retention) is unset |
+| `reclaimed` | registered, opted in and configured: a pass reclaims what it can prove dead |
+
+Registration is read in-process (`reaper.registry.discover`, the function `hook-reaper.py --list` uses), opt-in and parameters from `reaper.opt_in`. An `opt_in_key` of `none`, or an absent one, skips the opt-in test, and the parameters are then looked up under the reaper's name.
+
+**Temp section.** Per temp root (the session temp dir from `TMPDIR`/`TEMP`/`TMP`, else `/tmp`, and `/tmp` when distinct; override with `--temp-root`), the bytes of residue kinds (the `temp-residue` patterns) and of everything else outside them, by kind, so a reader sees how much is abandoned residue and how much is not the reaper's.
+
+**Unknown remainder, and the bound.** The share of used space the report cannot attribute is the sum of (a) paths unread or not reached (unreadable directories, excluded mounts, a deadline), (b) the gap `Used − walk total`, floored at 0, and (c) walked entries with no name. `bound_pct = (max(b,0)+c) / Used × 100`; the report is considered complete when it is at most 10.0 and prints the figure either way.
+
+**Outputs.** `disk-usage-<date>[-n].json` (schema `disk-usage-report/1`, including the `launch` record: the `du` argv prefix, the names sources and the tool's sha256) and `disk-usage-<date>[-n].md`. Files are created exclusively; a second run on the same date takes the next `-n`.
+
+**Machine naming table.** `<reaper plugin dir>/disk-report/names.toml` (`${CLAUDE_REAPER_PLUGIN_DIR:-<config root>/reaper-plugins}`), or `--names`. Each `[[entry]]` has `path` (a leading `~` is the home directory), `label`, `kind` and optionally `reaper` (the reaper name that owns the path), `reaper_mode`, `opt_in_key` and `needs_params` (see the status table). A row replaces a default row of the same path and adds its own; the default table names only what any Linux machine holds.
+
+Residuals: the walk is one snapshot of a live volume, so a file that grows or vanishes during it lands in (b); an entry readable only by another user is counted in (a); space held by a deleted file that a process keeps open is reported separately (`b_deleted_open_bytes`, recorded and not subtracted) and is not part of the walk.
+
 ## Cleanup at `resolve`, not by a reaper
 
 A reaper handles residue nobody reclaimed. The workspaces of a task that finished normally are reclaimed at its end instead: `agentctl resolve` removes the clean, landed workspaces the task registered (`scripts/agentctl/workspace_cleanup.py`, report in `data['workspace_cleanup']`). Whatever it keeps (dirty, unlanded, protected, a failed teardown) stays with a stated reason and remains for the `git-worktrees` reaper above. The rule, the registry and the controls are in `scripts/agentctl/README.md` § Workspace cleanup on `resolve`. A task that never reaches `resolve` registers its workspaces and loses nothing: they stay for the reaper.

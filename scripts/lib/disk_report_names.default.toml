@@ -1,0 +1,113 @@
+# Neutral OS naming rows for scripts/disk-usage-report.py. A machine table at
+# <reaper plugin dir>/disk-report/names.toml overrides a row of the same path and adds its own.
+# Rows here name only what any Linux machine holds; no machine, organization or tool-specific path.
+
+[[entry]]
+path = "/usr"
+label = "operating system and packages"
+kind = "os"
+
+[[entry]]
+path = "/bin"
+label = "operating system binaries"
+kind = "os"
+
+[[entry]]
+path = "/sbin"
+label = "operating system binaries"
+kind = "os"
+
+[[entry]]
+path = "/lib"
+label = "operating system libraries"
+kind = "os"
+
+[[entry]]
+path = "/lib64"
+label = "operating system libraries"
+kind = "os"
+
+[[entry]]
+path = "/etc"
+label = "system configuration"
+kind = "os"
+
+[[entry]]
+path = "/boot"
+label = "kernel and boot files"
+kind = "os"
+
+[[entry]]
+path = "/opt"
+label = "optional software installed outside the package manager"
+kind = "tool-data"
+
+[[entry]]
+path = "/var/log"
+label = "system logs"
+kind = "system-logs"
+
+[[entry]]
+path = "/var/cache"
+label = "system package and service caches"
+kind = "cache"
+
+[[entry]]
+path = "/var/lib/apt"
+label = "package manager state"
+kind = "os"
+
+[[entry]]
+path = "/var/lib/dpkg"
+label = "package manager state"
+kind = "os"
+
+[[entry]]
+path = "/var/lib/docker"
+label = "container storage"
+kind = "container"
+
+[[entry]]
+path = "/var/lib/containers"
+label = "container storage"
+kind = "container"
+
+[[entry]]
+path = "/var/lib/snapd"
+label = "snap packages"
+kind = "os"
+
+[[entry]]
+path = "/var/lib/systemd"
+label = "service data"
+kind = "service-data"
+
+[[entry]]
+path = "/var/spool"
+label = "service queues"
+kind = "service-data"
+
+[[entry]]
+path = "/swapfile"
+label = "swap file"
+kind = "swap"
+
+[[entry]]
+path = "/swap.img"
+label = "swap file"
+kind = "swap"
+
+[[entry]]
+path = "/var/crash"
+label = "crash dumps"
+kind = "system-logs"
+
+[[entry]]
+path = "/tmp"
+label = "temporary files"
+kind = "temp"
+
+[[entry]]
+path = "/var/tmp"
+label = "temporary files"
+kind = "temp"
