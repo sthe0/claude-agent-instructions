@@ -1,0 +1,10 @@
+{
+  "kind": "link-reading",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "results": [
+    {"id": "l1", "required": true, "read": true},
+    {"id": "l2", "required": true, "read": true},
+    {"id": "l3", "required": true, "read": true},
+    {"id": "l4", "required": false, "read": false}
+  ]
+}

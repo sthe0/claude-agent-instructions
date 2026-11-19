@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from . import controls, gates, plugins_premise, premise, advisor
+from . import controls, gates, method_statement, plugins_premise, premise, advisor
 from .directive import Directive
 from .dispatch import Runner
 from .plan import (
     META_PART,
     PlanDoc,
+    load_order_draft,
     load_plan,
     plan_stage_digests,
     stage_part,
@@ -81,6 +82,20 @@ def _materiality_doc(state, named_plan) -> "tuple[PlanDoc | None, str]":
         return load_plan(plan_path), ""
     except (OSError, PlanError):
         return None, ""
+
+
+def _session_order(state, doc):
+    """The order a question is raised under: the plan's, else the session's order draft; None when
+    the session has neither."""
+    if doc is not None and doc.meta.order is not None:
+        return doc.meta.order
+    path = getattr(state, "order_draft_path", None)
+    if not path:
+        return None
+    try:
+        return load_order_draft(path)[0].meta.order
+    except (OSError, PlanError):
+        return None
 
 
 def _materiality_advisories(control: str, question: str, doc, state, runner) -> list[str]:
@@ -183,13 +198,21 @@ def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None)
                 f"--control names no control of this plan — {problem}",
                 data={"control": control},
             )
+    kind = getattr(args, "kind", None) or ""
+    question_text = gates.QUESTION_KIND_TEXTS.get(kind, args.question or "")
+    found = method_statement.defects(
+        method_statement.question_statements(question_text, kind, _session_order(state, doc)),
+        runner=runner)
+    if found:
+        return Directive(
+            False, state.node, "noop",
+            "question refused before it reaches the user: "
+            + "; ".join(method_statement.defect_line(f) for f in found),
+            data={"problems": [method_statement.defect_line(f) for f in found]})
     questions = premise.questions_from_dicts(bag.get("questions", []))
     questions = [q for q in questions if q.id != args.id]
-    kind = getattr(args, "kind", None) or ""
     questions.append(premise.Question(
-        id=args.id, target=args.target,
-        question=gates.QUESTION_KIND_TEXTS.get(kind, args.question or ""),
-        control=control or "", kind=kind))
+        id=args.id, target=args.target, question=question_text, control=control or "", kind=kind))
     bag["questions"] = premise.questions_to_dicts(questions)
     state.log("question_raise", question=args.id, target=args.target)
     store.save(state)

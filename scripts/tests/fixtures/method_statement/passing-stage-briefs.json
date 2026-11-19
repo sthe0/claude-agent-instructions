@@ -1,0 +1,13 @@
+{
+  "kind": "stage-briefs",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "runs": 3,
+  "results": [
+    {"id": "b1", "label": "method", "reported": ["method", "method", "method"]},
+    {"id": "b2", "label": "method", "reported": ["method", "method", "method"]},
+    {"id": "b3", "label": "how_built", "reported": ["how_built", "how_built", "how_built"]},
+    {"id": "b4", "label": "how_built", "reported": ["how_built", "how_built", "how_built"]},
+    {"id": "b5", "label": "neither", "reported": ["neither", "neither", "neither"]},
+    {"id": "b6", "label": "neither", "reported": ["neither", "neither", "neither"]}
+  ]
+}

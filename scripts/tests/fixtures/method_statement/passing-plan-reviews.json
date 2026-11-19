@@ -1,0 +1,17 @@
+{
+  "kind": "plan-reviews",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "runs": 3,
+  "results": [
+    {"id": "p1", "label": "method", "reported": ["method", "method", "method"]},
+    {"id": "p2", "label": "method", "reported": ["method", "method", "method"]},
+    {"id": "p2b", "label": "method", "reported": ["method", "method", "method"]},
+    {"id": "p2c", "label": "method", "reported": ["method", "method", "neither"]},
+    {"id": "p3", "label": "how_built", "reported": ["how_built", "how_built", "how_built"]},
+    {"id": "p4", "label": "how_built", "reported": ["how_built", "how_built", "how_built"]},
+    {"id": "p5", "label": "neither", "reported": ["neither", "neither", "neither"]},
+    {"id": "p6", "label": "neither", "reported": ["neither", "neither", "neither"]},
+    {"id": "p7", "label": "neither", "reported": ["neither", "neither", "neither"]},
+    {"id": "p8", "label": "neither", "reported": ["neither", "neither", "neither"]}
+  ]
+}

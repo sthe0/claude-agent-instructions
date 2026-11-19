@@ -1,0 +1,26 @@
+{
+  "kind": "length",
+  "set_name": "typical-orders.json",
+  "set_sha256": "bcfce285cb01c5069b7986bbb65f3c4ca17b980bdd9b4a2043a4aee791709330",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "runs": [
+    {"orders": [
+      {"id": "o1", "included": true, "old_chars": 44, "new_chars": 44},
+      {"id": "o2", "included": true, "old_chars": 47, "new_chars": 42},
+      {"id": "o3", "included": true, "old_chars": 20, "new_chars": 89},
+      {"id": "o4", "included": false, "old_chars": 1, "new_chars": 1}
+    ]},
+    {"orders": [
+      {"id": "o1", "included": true, "old_chars": 44, "new_chars": 44},
+      {"id": "o2", "included": true, "old_chars": 47, "new_chars": 42},
+      {"id": "o3", "included": true, "old_chars": 20, "new_chars": 89},
+      {"id": "o4", "included": false, "old_chars": 1, "new_chars": 1}
+    ]},
+    {"orders": [
+      {"id": "o1", "included": true, "old_chars": 44, "new_chars": 44},
+      {"id": "o2", "included": true, "old_chars": 47, "new_chars": 42},
+      {"id": "o3", "included": true, "old_chars": 20, "new_chars": 89},
+      {"id": "o4", "included": false, "old_chars": 1, "new_chars": 1}
+    ]}
+  ]
+}

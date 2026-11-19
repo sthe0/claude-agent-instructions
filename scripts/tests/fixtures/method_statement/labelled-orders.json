@@ -1,0 +1,11 @@
+{
+  "items": [
+    {"id": "m1", "label": "method", "text": "We will first survey the schema, then write a migration script and run it in three batches."},
+    {"id": "m2", "label": "method", "text": "Use a queue with two workers to process the uploads."},
+    {"id": "h1", "label": "how_built", "text": "The report is a Python module that reads a CSV file and renders it with a template engine."},
+    {"id": "h2", "label": "how_built", "text": "The service is a REST endpoint backed by a Postgres table."},
+    {"id": "n1", "label": "neither", "text": "The user needs the monthly totals of each account in one place."},
+    {"id": "n2", "label": "neither", "text": "Done when a new customer can open an account without calling support, checked by a session with a person who has not seen the form."},
+    {"id": "n3", "label": "neither", "text": "The user cannot tell which of their orders are late."}
+  ]
+}

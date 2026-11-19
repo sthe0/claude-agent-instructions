@@ -566,6 +566,26 @@ def _live_judges_off_by_default(monkeypatch):
     monkeypatch.setenv("AGENTCTL_LIVE_JUDGES", "0")
 
 
+class _NeitherRunner:
+    """Stand-in for the live host-model runner of the method-statement judge: every statement is
+    `neither`, so no test reaches a model and none meets a defect it did not plant."""
+
+    def __call__(self, argv, timeout=None, stdin=None):
+        import types
+
+        return types.SimpleNamespace(returncode=0, stdout='{"verdict": "neither", "reason": ""}',
+                                     stderr="", timed_out=False)
+
+
+@pytest.fixture(autouse=True)
+def _method_statement_judge_neither_by_default(monkeypatch):
+    """Default the method-statement judge's runner to a stub that answers `neither`. A test whose
+    subject is the judge injects its own runner at the call, or replaces `default_runner`."""
+    from agentctl import method_statement
+
+    monkeypatch.setattr(method_statement, "default_runner", lambda: _NeitherRunner())
+
+
 @pytest.fixture(autouse=True)
 def _child_contour_linking_on_by_default(monkeypatch):
     """Keep child-contour linking ON for the suite at large, although config.md ships

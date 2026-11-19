@@ -1,0 +1,16 @@
+{
+  "kind": "orders",
+  "set_name": "labelled-orders.json",
+  "set_sha256": "b6836f31f075ff4a4e8740c27cc56432354a8cb538dcaa834286e3474dbb693a",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "runs": 3,
+  "results": [
+    {"id": "m1", "label": "method", "reported": ["method", "method", "method"]},
+    {"id": "m2", "label": "method", "reported": ["method", "method", "method"]},
+    {"id": "h1", "label": "how_built", "reported": ["how_built", "how_built", "how_built"]},
+    {"id": "h2", "label": "how_built", "reported": ["how_built", "how_built", "how_built"]},
+    {"id": "n1", "label": "neither", "reported": ["neither", "neither", "neither"]},
+    {"id": "n2", "label": "neither", "reported": ["neither", "neither", "neither"]},
+    {"id": "n3", "label": "neither", "reported": ["neither", "neither", "neither"]}
+  ]
+}

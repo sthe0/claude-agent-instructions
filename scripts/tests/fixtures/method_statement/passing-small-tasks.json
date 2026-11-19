@@ -1,0 +1,19 @@
+{
+  "kind": "small-tasks",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "runs": 1,
+  "config_root": "scripts/tests/fixtures/method_statement/config-root",
+  "instruction_digests": {"CLAUDE.md": "1d85647223d792149d6dd20425e8f1fba81305370ad6e48e76e6ec2f9f9eee1b"},
+  "results": [
+    {"id": "t01", "expected": "small", "reported": ["small"]},
+    {"id": "t02", "expected": "small", "reported": ["small"]},
+    {"id": "t03", "expected": "small", "reported": ["small"]},
+    {"id": "t04", "expected": "small", "reported": ["small"]},
+    {"id": "t05", "expected": "small", "reported": ["small"]},
+    {"id": "t06", "expected": "substantive", "reported": ["substantive"]},
+    {"id": "t07", "expected": "substantive", "reported": ["substantive"]},
+    {"id": "t08", "expected": "substantive", "reported": ["substantive"]},
+    {"id": "t09", "expected": "substantive", "reported": ["substantive"]},
+    {"id": "t10", "expected": "substantive", "reported": ["substantive"]}
+  ]
+}

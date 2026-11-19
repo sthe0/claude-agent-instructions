@@ -464,7 +464,13 @@ def _order_review_type_from_session(mp):
                lambda state, doc: state.overall_criterion_type, raising=True)
 
 
+def _binding_conditions_judged(mp):
+    """The binding-condition record and the `binding_conditions` question kind reach the method-statement judge."""
+    mp.setattr("agentctl.method_statement.binding_exempt", lambda: False, raising=True)
+
+
 MUTANTS = {
+    "binding_conditions_judged": _binding_conditions_judged,
     "order_criterion_type_not_adopted": _order_criterion_type_not_adopted,
     "order_review_type_from_session": _order_review_type_from_session,
     "no_search_record": _no_search_record,

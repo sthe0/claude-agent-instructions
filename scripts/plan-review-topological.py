@@ -61,7 +61,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from agentctl import plan  # noqa: E402 - protocol tokens are read as plan.X at call time
+from agentctl import method_statement, plan  # noqa: E402 - protocol tokens are read as plan.X at call time
 from agentctl.config import Thresholds, parse_config_md  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.render import build_site_prompt, topo_unit_refusal  # noqa: E402
@@ -235,6 +235,27 @@ def record_argv(sid: "str | None", plan_path: str, pair: str, verdict: str, dige
     for question in questions or []:
         argv += ["--customer-question", question]
     return argv
+
+
+def field_place_concerns(plan_path: str, pair: str, *, runner=None) -> list[str]:
+    """The method-statement defects in the stage descriptions of `pair` (a pair id or `unit:<n>`) as
+    `blocking: stage:<n> ...` concerns. The place of each statement is fixed by its field: the prose
+    of a stage description is judged, its sub-plan (means, method, procedure) is not. A plan on an
+    order in the old form is not judged and yields none, nor does a file that does not load as a plan
+    (the engine refuses its record)."""
+    try:
+        doc = plan.load_plan(plan_path)
+    except plan.PlanError:
+        return []
+    if not plan.is_two_sided(doc.meta.order):
+        return []
+    nodes = [plan.parse_unit(doc, pair)] if plan.is_unit_id(pair) else list(plan.parse_pair(doc, pair))
+    stages = {int(n) for n in nodes if n != plan.PAIR_BASE_NODE}
+    return [
+        plan.format_concern(plan.SEVERITY_BLOCKING, "",
+                            f"stage:{finding.label.split()[1]} {method_statement.defect_line(finding)}")
+        for finding in method_statement.defects(method_statement.plan_statements(doc, stages), runner=runner)
+    ]
 
 
 # --- parsing the spawner's output ----------------------------------------------
@@ -620,20 +641,23 @@ class Driver:
         except TopoRefused as exc:
             self.refuse(pair, str(exc))
             return
-        self.results.append(PairResult(pair, parsed.verdict, parsed.digest, cost, duration, pulls, transcript))
+        extra = [] if self.draft else field_place_concerns(self.plan_path, pair)
+        verdict = "revise" if extra else parsed.verdict
+        self.results.append(PairResult(pair, verdict, parsed.digest, cost, duration, pulls, transcript))
         emit(
-            f"TOPO-PAIR: pair={pair} verdict={parsed.verdict} digest={parsed.digest} "
+            f"TOPO-PAIR: pair={pair} verdict={verdict} digest={parsed.digest} "
             f"cost_usd={'NA' if cost is None else f'{cost:.4f}'} "
             f"duration_ms={'NA' if duration is None else duration} "
             f"pulls={'NA' if pulls is None else pulls} transcript={transcript or 'NA'}"
         )
         recorded = self.engine(
-            record_argv(self.sid, self.plan_path, pair, parsed.verdict, parsed.digest,
-                        parsed.concerns, parsed.questions, draft=self.draft, transcript=transcript)
+            record_argv(self.sid, self.plan_path, pair, verdict, parsed.digest,
+                        [*parsed.concerns, *extra], parsed.questions, draft=self.draft,
+                        transcript=transcript)
         )
         if not recorded.get("ok"):
             self.refuse(pair, f"engine refused the record: {recorded.get('detail', '')}")
-        elif parsed.verdict == "revise":
+        elif verdict == "revise":
             self.level_revise = True
 
     def run_level(self, rows: list[dict]) -> None:

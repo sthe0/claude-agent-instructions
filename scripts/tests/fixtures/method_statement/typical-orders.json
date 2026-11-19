@@ -1,0 +1,8 @@
+{
+  "items": [
+    {"id": "o1", "included": true, "old": "The user needs monthly totals in the report.", "new": "The user needs monthly totals in the report."},
+    {"id": "o2", "included": true, "old": "The orders list shows the status of each order.", "new": "The orders list shows each order's status."},
+    {"id": "o3", "included": true, "old": "The export finishes.", "new": "The export finishes within a minute of the request, and the user is told when it is done."},
+    {"id": "o4", "included": false, "old": "x", "new": "x"}
+  ]
+}

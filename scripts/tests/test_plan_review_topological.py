@@ -692,6 +692,16 @@ def test_td13_the_canonical_header_never_leaks_into_the_parse(make_rig):
     assert flags(recorded, "--concern") == ["blocking: C1: real"]
 
 
+def test_a_pass_on_a_plan_with_a_method_statement_defect_is_recorded_as_revise(make_rig, monkeypatch):
+    defect = "blocking: stage:1 stage 1 title states a method"
+    rig = make_rig(FakeEngine([["a"]]))
+    monkeypatch.setattr(rig.drv, "field_place_concerns", lambda plan_path, pair, **kw: [defect])
+    rig.specs = {"a": {"verdict": "pass"}}
+    rig.run()
+    recorded = next(argv for argv, _ in rig.engine.calls if "--verdict" in argv)
+    assert flag(recorded, "--verdict") == "revise" and defect in flags(recorded, "--concern")
+
+
 def test_td13_a_pass_block_records_no_concerns(make_rig):
     rig, rc, out, recorded = run_one(
         make_rig, canonical_stdout(review_original("pass", SHA_OF_PLAN)))

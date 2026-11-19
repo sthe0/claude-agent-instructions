@@ -166,6 +166,7 @@
 "scripts/mandate_cycle/notifiers.py" = { disposition = "not-canon", category = "not-canon", reason = "cycle digest files in the mandate dir under the config root" }
 "scripts/offload-large.sh" = { disposition = "not-canon", category = "not-canon", reason = "tees a command's output into /tmp/cc-scratch" }
 "scripts/wait-for-pid.sh" = { disposition = "not-canon", category = "not-canon", reason = "polls kill -0 and reads ps output; writes only diagnostic messages to stderr, no file" }
+"scripts/method-statement-eval.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the result file named by --out, outside the repo" }
 "scripts/plan-review-topological.py" = { disposition = "not-canon", category = "not-canon", reason = "per-run review files in a scratch dir" }
 "scripts/policy-scorecard.py" = { disposition = "not-canon", category = "not-canon", reason = "scorecard output and ledger copies under ~/.local" }
 "scripts/probe-hook-decision-semantics.py" = { disposition = "not-canon", category = "not-canon", reason = "probes in a temp dir and removes it" }

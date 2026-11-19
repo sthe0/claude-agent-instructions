@@ -1231,6 +1231,7 @@ def render_pair_review_bundle(
         lines.extend(_prior_review_section(history))
 
     lines.extend(_grounding_verdict_section(doc))
+    lines.extend(_method_rule_section(doc, order_node=base == PAIR_BASE_NODE))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
@@ -1337,6 +1338,30 @@ def _grounding_verdict_section(doc: PlanDoc) -> list[str]:
     return ["## Grounding verdicts", "", *lines, ""] if lines else []
 
 
+def _method_rule_section(doc: PlanDoc, *, order_node: bool) -> list[str]:
+    """The method-statement rule for a reviewer of a plan on a new-form order, and for the order's own
+    reviewer (`order_node`) the type-entry reading too; empty for an order in the old form, whose plans
+    are reviewed as they always were."""
+    from . import method_statement
+
+    if not is_two_sided(doc.meta.order):
+        return []
+    lines = ["## Method-statement rule", "", method_statement.RULE_TEXT, ""]
+    if order_node:
+        lines.extend([method_statement.TYPE_ENTRY_READING, ""])
+    return lines
+
+
+def brief_site_defects(doc: PlanDoc, stage_index: int, *, runner=None) -> list[str]:
+    """The method-statement defects in the brief of `stage_index`, one line each: the brief's own text
+    judged at the place brief, without the binding-condition records it carries beside it. Empty for
+    a stage of a plan on an old-form order, which is never judged."""
+    from . import method_statement
+
+    return [method_statement.defect_line(f) for f in method_statement.defects(
+        method_statement.brief_statements(doc, stage_index), runner=runner)]
+
+
 def render_unit_review_bundle(
     doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
     agreed_understanding: "str | None" = None,
@@ -1382,6 +1407,7 @@ def render_unit_review_bundle(
         lines.extend(_prior_review_section(history, "unit"))
 
     lines.extend(_grounding_verdict_section(doc))
+    lines.extend(_method_rule_section(doc, order_node=node == PAIR_BASE_NODE))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
