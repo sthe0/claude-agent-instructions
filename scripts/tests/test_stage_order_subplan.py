@@ -590,7 +590,9 @@ def test_a_good_record_is_stored_at_submit_with_all_its_elements_and_its_buildin
 
 from agentctl import cli_review, method_statement as M, render  # noqa: E402
 from agentctl.plan import load_plan  # noqa: E402
-from test_method_statement_rule import Judge, _plan_file, answering  # noqa: E402
+from test_method_statement_rule import (  # noqa: E402
+    Judge, _dispatch_on_new_form_plan, _plan_file, answering,
+)
 
 PLACE_TEXT = "the release engine, relied on by stage 2"
 HOW_BUILT_TEXT = "the release command is a shell script"
@@ -689,9 +691,36 @@ def _plan_review_args(path):
     return Namespace(verdict="pass", scope="", target=str(path))
 
 
-@pytest.mark.parametrize("flow", ["old-form", "no-order", "child-contour"])
-def test_a_flow_that_never_meets_the_description_guard_makes_no_judge_call(
-        tmp_path, monkeypatch, flow):
+def test_description_every_prose_field_judged(tmp_path):
+    doc = _described_doc(tmp_path, knowledge="what is known", preconditions="stage 0 done")
+    statements = M.description_statements(doc, 1)
+    labels = [s.label for s in statements]
+    for field in ("title", "place", "result", "material", "invariants", "knowledge",
+                  "preconditions", "done criterion"):
+        assert f"stage 1 {field}" in labels, labels
+    assert {s.place for s in statements} == {M.STAGE_DESCRIPTION}
+    assert not any("binding condition" in label for label in labels)
+
+
+def test_description_no_order_not_judged(tmp_path, monkeypatch):
+    _assert_flow_makes_no_judge_call(tmp_path, monkeypatch, "no-order")
+
+
+def test_description_dry_run_not_judged(store, venued_fixtures_dir, tmp_path):
+    judge = Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION))
+
+    directive, _ = _dispatch_on_new_form_plan(
+        store, venued_fixtures_dir, tmp_path, judge, dry_run=True)
+
+    assert directive.ok and directive.action == "preview"
+    assert judge.calls == [] and not M.cache_dir().exists()
+
+
+def test_description_child_contour_not_judged(tmp_path, monkeypatch):
+    _assert_flow_makes_no_judge_call(tmp_path, monkeypatch, "child-contour")
+
+
+def _assert_flow_makes_no_judge_call(tmp_path, monkeypatch, flow):
     path = _plan_file(tmp_path, two_sided=False)
     assert not plan.is_two_sided(load_plan(path).meta.order)
     if flow == "no-order":
@@ -729,7 +758,7 @@ def test_the_plan_review_pass_refuses_a_described_stage_the_judge_cannot_read(tm
     assert clean is None
 
 
-def test_the_whole_verb_sequence_reads_the_description_at_the_review(store, tmp_path):
+def test_stage_order_verb_sequence_to_review(store, tmp_path):
     accepted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT)
     assert accepted.ok, accepted.data.get("problems")
     state = store.load("w")

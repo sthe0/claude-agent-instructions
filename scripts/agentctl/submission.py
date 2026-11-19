@@ -1461,7 +1461,7 @@ def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) ->
 def _sub_plan_record_violations(record, ctx: StageOrderContext) -> list[str]:
     prefix = f"sub-plan record of stage {record.stage}"
     if record.stage <= 0:
-        return [f"the sub-plan record names no parent stage (`stage = <n>`)"] + _sub_plan_text_violations(
+        return ["the sub-plan record names no parent stage (`stage = <n>`)"] + _sub_plan_text_violations(
             record, "the sub-plan record")
     out: list[str] = []
     if ctx.expected_stage is not None and record.stage != ctx.expected_stage:
