@@ -84,18 +84,23 @@ def _materiality_doc(state, named_plan) -> "tuple[PlanDoc | None, str]":
         return None, ""
 
 
-def _session_order(state, doc):
-    """The order a question is raised under: the plan's, else the session's order draft; None when
-    the session has neither."""
-    if doc is not None and doc.meta.order is not None:
-        return doc.meta.order
+def _session_order(state):
+    """The session's own order: its order draft, else the order its own plan carries; None while it has
+    neither. Never the order of a plan a call merely names (`--plan`): that would let a question
+    be raised against any plan whose order is in the old form."""
     path = getattr(state, "order_draft_path", None)
-    if not path:
-        return None
-    try:
-        return load_order_draft(path)[0].meta.order
-    except (OSError, PlanError):
-        return None
+    if path:
+        try:
+            return load_order_draft(path)[0].meta.order
+        except (OSError, PlanError):
+            pass
+    plan_path = getattr(state, "plan_path", None)
+    if plan_path:
+        try:
+            return load_plan(plan_path).meta.order
+        except (OSError, PlanError):
+            pass
+    return None
 
 
 def _materiality_advisories(control: str, question: str, doc, state, runner) -> list[str]:
@@ -148,7 +153,7 @@ def cmd_question_enumerate_retired(args, *, store: StateStore, runner: Runner | 
     raise SystemExit(2)
 
 
-def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None, method_runner=None) -> Directive:
     """Record (or re-declare) one OPEN question arising during plan construction.
     Permissive exactly like ledger-add about its TARGET: a malformed one is stored
     as-is and the GATE (premise.validate_questions) reports it, so the moment-of-
@@ -200,9 +205,9 @@ def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None)
             )
     kind = getattr(args, "kind", None) or ""
     question_text = gates.QUESTION_KIND_TEXTS.get(kind, args.question or "")
-    found = method_statement.defects(
-        method_statement.question_statements(question_text, kind, _session_order(state, doc)),
-        runner=runner)
+    found = method_statement.site_defects(
+        method_statement.question_statements(question_text, kind, _session_order(state)),
+        runner=method_runner)
     if found:
         return Directive(
             False, state.node, "noop",

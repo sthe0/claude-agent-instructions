@@ -1358,7 +1358,7 @@ def brief_site_defects(doc: PlanDoc, stage_index: int, *, runner=None) -> list[s
     a stage of a plan on an old-form order, which is never judged."""
     from . import method_statement
 
-    return [method_statement.defect_line(f) for f in method_statement.defects(
+    return [method_statement.defect_line(f) for f in method_statement.site_defects(
         method_statement.brief_statements(doc, stage_index), runner=runner)]
 
 
@@ -1977,6 +1977,7 @@ def build_site_prompt(
                     "",
                 ])
             if kind == "whole-plan-review":
+                parts.extend(_method_rule_section(doc, order_node=True))
                 parts.extend([
                     "## Plan digest", "",
                     f"The plan file itself is `{_POINTER_PREFIX}{source.plan_sha256}` in the view "

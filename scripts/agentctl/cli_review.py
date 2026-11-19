@@ -1057,14 +1057,14 @@ def _order_review_criterion_type(state: SessionState, doc) -> str:
     return gates.order_criterion_type(state, doc)
 
 
-def _method_statement_pass_refusal(args, state: SessionState, doc, runner: Runner | None) -> Directive | None:
+def _method_statement_pass_refusal(args, state: SessionState, doc, method_runner) -> Directive | None:
     """A refusal of an order-review `pass` while a statement of the order's own text says how the
     work is done in a place that may not (the method-statement rule): the judge reads the order's text
     only, never the records kept beside it, and a statement it could not read is a defect. An order in
     the old form is not judged."""
     if args.verdict != gates._PLAN_REVIEW_PASS:
         return None
-    found = method_statement.defects(method_statement.order_statements(doc.meta.order), runner=runner)
+    found = method_statement.site_defects(method_statement.order_statements(doc.meta.order), runner=method_runner)
     if not found:
         return None
     return Directive(
@@ -1077,7 +1077,7 @@ def _method_statement_pass_refusal(args, state: SessionState, doc, runner: Runne
 
 
 def _cmd_order_review(args, state: SessionState, *, store: StateStore,
-                      runner: Runner | None = None) -> Directive:
+                      method_runner=None) -> Directive:
     """`plan-review --scope order`: record a review of an order draft's UNDERSTANDING.
 
     The record is bound to the engine's own digest of the draft (`understanding_digest`),
@@ -1111,7 +1111,7 @@ def _cmd_order_review(args, state: SessionState, *, store: StateStore,
         list(getattr(args, "customer_questions", None) or []))
     if question_texts is None:
         return Directive(False, state.node, "noop", question_error)
-    refusal_directive = _method_statement_pass_refusal(args, state, doc, runner)
+    refusal_directive = _method_statement_pass_refusal(args, state, doc, method_runner)
     if refusal_directive is not None:
         return refusal_directive
     reviewer = (getattr(args, "reviewer", "") or "").strip()
@@ -1193,17 +1193,20 @@ def _grounding_pass_refusal(args, state: SessionState, store: StateStore, runner
                      data={"problems": blockers})
 
 
-def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None, method_runner=None) -> Directive:
     """Record a thinker review of a plan version (`_record_plan_review`), after refusing a `pass` that
-    leaves an un-overridden grounding defect standing."""
+    leaves an un-overridden grounding defect standing. `method_runner` is the method-statement judge's own
+    runner, apart from `runner` (the grounding judge's)."""
     state = _require(store, args.session)
     warnings: list[str] = []
     refusal = _grounding_pass_refusal(args, state, store, runner, warnings)
-    d = refusal if refusal is not None else _record_plan_review(args, store=store, runner=runner)
+    d = (refusal if refusal is not None
+         else _record_plan_review(args, store=store, runner=runner, method_runner=method_runner))
     return _with_advisories(d, warnings)
 
 
-def _record_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+def _record_plan_review(args, *, store: StateStore, runner: Runner | None = None,
+                        method_runner=None) -> Directive:
     """Record a thinker review of a plan version, backing the plan-review gate.
 
     The COGNITION (the thinker's reasoning) happens in the thinker leaf; this only
@@ -1234,7 +1237,7 @@ def _record_plan_review(args, *, store: StateStore, runner: Runner | None = None
         _note_mandated_review(state)
     _book_and_judge(state, store, args, effort_segments.ACT_PLAN_REVIEW)
     if scope == ORDER_REVIEW_SCOPE:
-        return _cmd_order_review(args, state, store=store, runner=runner)
+        return _cmd_order_review(args, state, store=store, method_runner=method_runner)
     target = getattr(args, "target", None) or state.plan_path
     if not target:
         return Directive(

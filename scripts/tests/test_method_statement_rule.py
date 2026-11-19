@@ -22,14 +22,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentctl import cli, method_statement, plugins, render
-from agentctl.plan import load_plan
+from agentctl import cli, cli_order, cli_review, method_statement, plugins, render
+from agentctl.plan import load_plan, review_pairs
 from order_agreement_mutants import mutant  # noqa: F401  (autouse fixture)
 from test_meta_order import _write_plan
 from test_order_phase import (  # noqa: F401  (home and ostore are fixtures)
     BUDGET, SESSION, SIDES, _draft, _start, _submit, home, ostore,
 )
-from test_order_two_sides import BESIDE
+from test_dispatch_host import _capture_runner, _to_executing
+from test_order_two_sides import BESIDE, _agree_two_sided, _replacing, _sides
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "method_statement"
@@ -82,7 +83,7 @@ def _review(store, runner=None, verdict="pass", target=None):
     return cli.cmd_plan_review(
         ns(session=SESSION, scope="order", target=target, verdict=verdict, reviewer="thinker", concerns=None,
            note="", plan_digest=None, customer_questions=None, transcript=None),
-        store=store, runner=runner)
+        store=store, method_runner=runner)
 
 
 def _submitted(store, tmp_path, **draft_kw):
@@ -90,8 +91,8 @@ def _submitted(store, tmp_path, **draft_kw):
     assert _submit(store, _draft(tmp_path, **draft_kw)).ok
 
 
-def _plan_file(tmp_path, *, two_sided=True, beside=""):
-    directory = tmp_path / "plan"
+def _plan_file(tmp_path, *, two_sided=True, beside="", name="plan"):
+    directory = tmp_path / name
     directory.mkdir()
     path = Path(_write_plan(directory / "plan.toml"))
     if two_sided:
@@ -109,7 +110,8 @@ def _topo():
 
 def _raise_question(store, runner, *, question="Which tool should we use?", kind=None):
     return cli.cmd_question_raise(
-        ns(session=SESSION, id="Q1", target="goal", question=question, kind=kind), store=store, runner=runner)
+        ns(session=SESSION, id="Q1", target="goal", question=question, kind=kind), store=store,
+        method_runner=runner)
 
 
 def _premise_session(store, tmp_path, **draft_kw):
@@ -156,7 +158,7 @@ def test_how_built_on_executor_side_in_place(ostore, tmp_path):
     assert M.EXECUTOR_SIDE in judge.places
 
 
-def test_past_order_how_built_is_customer_side(ostore, tmp_path):
+def test_past_order_how_built_is_customer_side(ostore, ev, tmp_path):
     _submitted(ostore, tmp_path)
     judge = Judge(answering(M.HOW_BUILT, containing="cutting a release"))
 
@@ -164,6 +166,30 @@ def test_past_order_how_built_is_customer_side(ostore, tmp_path):
 
     assert not refused.ok and "customer side step" in refused.detail
     assert (M.CUSTOMER_SIDE, "cutting a release") in judge.calls
+
+    def past_order_judge(how_built_place):
+        def verdict(place, text):
+            if "queue" in text or "migration" in text:
+                return M.METHOD
+            if ("Python module" in text or "Postgres" in text) and place == how_built_place:
+                return M.HOW_BUILT
+            return M.NEITHER
+        return Judge(verdict)
+
+    def evaluated(how_built_place):
+        out = tmp_path / f"result-{how_built_place}.json"
+        run = ["run", "--kind", "orders", "--set", _fx("labelled-orders.json"), "--runs", "3", "--out", str(out),
+               "--commit", "abc1234"]
+        assert ev.main(run, runner=past_order_judge(how_built_place), out=_Sink()) == 0
+        sink = _Sink()
+        code = ev.main(["check", "--kind", "orders", "--results", str(out), *ORDERS_ARGS], out=sink)
+        return code, "".join(sink.lines)
+
+    in_place_code, in_place = evaluated(M.EXECUTOR_SIDE)
+    defect_code, defect = evaluated(M.CUSTOMER_SIDE)
+
+    assert in_place_code == 1 and "found share of how_built 0.000" in in_place
+    assert defect_code == 0 and "found how_built: 1.000" in defect
 
 
 # --- order review -----------------------------------------------------------------------------------
@@ -305,7 +331,108 @@ def test_question_on_an_old_form_order_not_judged(ostore, tmp_path):
     assert _raise_question(ostore, judge).ok and judge.calls == []
 
 
+def test_question_naming_an_old_form_plan_is_judged_by_the_sessions_own_order(ostore, tmp_path):
+    _premise_session(ostore, tmp_path)
+    old_plan = _plan_file(tmp_path, two_sided=False, name="old")
+    judge = Judge(answering(M.METHOD, place=M.QUESTION))
+
+    refused = cli.cmd_question_raise(
+        ns(session=SESSION, id="Q1", target="goal", question="Should we use a queue with two workers?",
+           kind=None, plan=str(old_plan)),
+        store=ostore, method_runner=judge)
+
+    assert not refused.ok and "states a method" in refused.detail and judge.places == {M.QUESTION}
+    assert _stored_questions(ostore) == []
+
+
+def test_question_before_any_order_draft_is_judged(ostore):
+    _start(ostore)
+    state = ostore.load(SESSION)
+    plugins.activate(state, "premise")
+    ostore.save(state)
+    assert not state.order_draft_path and not state.plan_path
+    judge = Judge(answering(M.METHOD, place=M.QUESTION))
+
+    refused = _raise_question(ostore, judge, question="Should we use a queue with two workers?")
+
+    assert not refused.ok and judge.places == {M.QUESTION}
+    assert _stored_questions(ostore) == []
+
+
+def test_method_judge_has_its_own_runner(ostore, tmp_path):
+    _premise_session(ostore, tmp_path)
+    other = []
+
+    def other_judge(argv, timeout=None, stdin=None):
+        other.append(stdin)
+        return SimpleNamespace(returncode=1, stdout="", stderr="unavailable", timed_out=False)
+
+    method_judge = Judge()
+    raised = cli.cmd_question_raise(
+        ns(session=SESSION, id="Q1", target="goal", question="Who cuts the release today?", kind=None),
+        store=ostore, runner=other_judge, method_runner=method_judge)
+    reviewed = cli.cmd_plan_review(
+        ns(session=SESSION, scope="order", target=None, verdict="pass", reviewer="thinker", concerns=None,
+           note="", plan_digest=None, customer_questions=None, transcript=None),
+        store=ostore, runner=other_judge, method_runner=method_judge)
+
+    assert raised.ok and reviewed.ok and len(method_judge.calls) >= 2
+    assert not any("stands in the place" in (stdin or "") for stdin in other)
+
+
+def test_executor_revision_after_a_review_pass_is_judged(ostore, tmp_path):
+    _agree_two_sided(ostore, tmp_path)
+    assert ostore.load(SESSION).order_reviews[-1].verdict == "pass"
+    revised = _sides(tmp_path, "revised.toml",
+                     replace=_replacing("proposals", "tag releases automatically", "tag on every merge"))
+    judge = Judge(answering(M.METHOD, place=M.EXECUTOR_SIDE, containing="tag on every merge"))
+
+    def revise(runner):
+        return cli_order.cmd_order_executor_revise(
+            ns(session=SESSION, plan=str(revised), why="the way it is built changed", by="agent"),
+            store=ostore, method_runner=runner)
+
+    refused = revise(judge)
+
+    assert not refused.ok and "proposal P1" in refused.detail and "states a method" in refused.detail
+    assert "sub-plan" in refused.detail and ostore.load(SESSION).executor_side_revisions == []
+    revised = _sides(tmp_path, "revised-again.toml",
+                     replace=_replacing("proposals", "tag releases automatically", "tag on every push"))
+    assert revise(Judge()).ok and len(ostore.load(SESSION).executor_side_revisions) == 1
+
+
 # --- the brief site, stage descriptions and plan review ---------------------------------------------
+
+
+def _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, method_runner):
+    """Dispatch the active stage of a session whose plan is in the new form; `(directive, spawns)`."""
+    sid = "brief-site"
+    _to_executing(store, sid, venued_fixtures_dir)
+    state = store.load(sid)
+    state.plan_path = str(_plan_file(tmp_path))
+    store.save(state)
+    spawned = []
+    directive = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+                                 store=store, runner=_capture_runner(spawned), method_runner=method_runner)
+    return directive, spawned
+
+
+def test_dispatch_refuses_a_brief_that_states_a_method(store, venued_fixtures_dir, tmp_path):
+    judge = Judge(answering(M.METHOD, place=M.BRIEF))
+
+    refused, spawned = _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, judge)
+
+    assert not refused.ok and refused.action == "fix_brief" and spawned == []
+    assert "stage 1" in refused.detail and "states a method" in refused.detail
+    assert refused.data["problems"] and judge.places == {M.BRIEF}
+
+
+def test_dispatch_spawns_a_brief_that_states_the_result(store, venued_fixtures_dir, tmp_path):
+    judge = Judge()
+
+    directive, spawned = _dispatch_on_new_form_plan(store, venued_fixtures_dir, tmp_path, judge)
+
+    assert directive.ok and len(spawned) == 1 and judge.places == {M.BRIEF}
 
 
 def test_brief_site_reports_method(tmp_path):
@@ -320,11 +447,22 @@ def test_brief_site_reports_method(tmp_path):
 
 
 def test_how_built_in_brief_is_defect(tmp_path):
+    requirement = "the release command is a shell script"
     doc = load_plan(_plan_file(tmp_path))
+    doc.stages[0].title = requirement
+    judge = Judge(answering(M.HOW_BUILT, place=M.BRIEF, containing=requirement))
 
-    lines = render.brief_site_defects(doc, 1, runner=Judge(answering(M.HOW_BUILT, place=M.BRIEF)))
+    lines = render.brief_site_defects(doc, 1, runner=judge)
 
-    assert lines and all("states how the product is built" in line for line in lines)
+    assert len(lines) == 1 and "stage 1 title (brief)" in lines[0] and "states how the product is built" in lines[0]
+    assert judge.texts.count(requirement) == 1
+
+    carried = load_plan(_plan_file(tmp_path, name="carried"))
+    carried.stages[0].binding_conditions = [SimpleNamespace(id="B1", text=requirement)]
+    beside = Judge(answering(M.HOW_BUILT, place=M.BRIEF, containing=requirement))
+
+    assert render.brief_site_defects(carried, 1, runner=beside) == []
+    assert requirement not in beside.texts
 
 
 def test_brief_binding_conditions_not_judged(tmp_path):
@@ -355,7 +493,7 @@ def test_sub_plan_fields_are_not_judged(tmp_path):
 def test_plan_review_prompt_carries_rule(tmp_path):
     path = _plan_file(tmp_path)
     doc = load_plan(path)
-    old_doc = load_plan(_plan_file(tmp_path / "old", two_sided=False)) if (tmp_path / "old").mkdir() is None else None
+    old_doc = load_plan(_plan_file(tmp_path, two_sided=False, name="old"))
 
     base = render.render_unit_review_bundle(doc, "unit:base", plan_sha256="0" * 64)
     stage = render.render_unit_review_bundle(doc, "unit:1", plan_sha256="0" * 64)
@@ -372,16 +510,69 @@ def test_plan_review_prompt_carries_rule(tmp_path):
     assert concerns and all(c.startswith("blocking: stage:1 ") for c in concerns)
 
 
+def test_how_built_in_a_result_reaches_the_recorded_review(tmp_path):
+    topo = _topo()
+    result_line = 'expected_result_image = "The seam requires a typed order of a substantive plan."'
+    method_line = 'method = "run"'
+    path = _plan_file(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    assert result_line in text and method_line in text
+    path.write_text(text.replace(result_line, 'expected_result_image = "the release command is a shell script"')
+                    .replace(method_line, 'method = "write the release command as a shell script"'), encoding="utf-8")
+    judge = Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION, containing="shell script"))
+
+    concerns = topo.field_place_concerns(str(path), "unit:1", runner=judge)
+
+    assert len(concerns) == 1 and concerns[0].startswith("blocking: stage:1 stage 1 result (stage description)")
+    assert "states how the product is built" in concerns[0]
+    assert not any("write the release command" in judged for judged in judge.texts)
+    argv = topo.record_argv(None, str(path), "unit:1", "revise", "0" * 64, concerns)
+    recorded = [argv[i + 1] for i, token in enumerate(argv) if token == "--concern"]
+    parsed, refusal = cli_review._parse_review_concerns(SimpleNamespace(concern_ledger={}), recorded, "revise")
+    assert refusal == "" and [p.severity for p in parsed] == ["blocking"]
+
+
+def test_binding_conditions_field_raises_no_plan_review_concern(tmp_path):
+    path = _plan_file(tmp_path, beside=BESIDE)
+    judge = Judge(answering(M.METHOD, containing="no change to the release branch"))
+
+    assert _topo().field_place_concerns(str(path), "unit:1", runner=judge) == []
+    assert not any(BINDING_TEXT in text for text in judge.texts)
+
+
+def test_whole_plan_review_prompt_carries_rule(tmp_path):
+    new_form = _plan_file(tmp_path)
+    old_form = _plan_file(tmp_path, two_sided=False, name="old")
+
+    new_site = render.build_site_prompt("whole-plan-review", new_form, view_root=tmp_path / "views")
+    old_site = render.build_site_prompt("whole-plan-review", old_form, view_root=tmp_path / "views")
+
+    assert M.RULE_TEXT in new_site.text and M.TYPE_ENTRY_READING in new_site.text
+    assert M.RULE_TEXT not in old_site.text and M.TYPE_ENTRY_READING not in old_site.text
+
+
+def _two_stage_plan(tmp_path, name="two"):
+    """A new-form plan whose stage 2 relies on stage 1: review pairs `base-1` and `2-1`."""
+    path = _plan_file(tmp_path, name=name)
+    text = path.read_text(encoding="utf-8")
+    start, end = text.index("[[stage]]"), text.index("[meta.order.customer_side]")
+    second = text[start:end].replace("index = 1\n", "index = 2\ndepends_on = [1]\n", 1)
+    path.write_text(text[:end] + second + text[end:], encoding="utf-8")
+    return path
+
+
 def test_type_entry_reading_in_order_prompt(tmp_path):
-    doc = load_plan(_plan_file(tmp_path))
+    doc = load_plan(_two_stage_plan(tmp_path))
+    pair_ids = review_pairs(doc)
+    stage_pair = "2-1"
 
     unit = render.render_unit_review_bundle(doc, "unit:base", plan_sha256="0" * 64)
-    pair = render.render_pair_review_bundle(doc, "base-1", plan_sha256="0" * 64, view_dir=tmp_path)
-    stage_pair = render.render_pair_review_bundle(doc, "1-base", plan_sha256="0" * 64, view_dir=tmp_path) \
-        if "1-base" in __import__("agentctl.plan", fromlist=["plan"]).review_pairs(doc) else ""
+    order_pair = render.render_pair_review_bundle(doc, "base-1", plan_sha256="0" * 64, view_dir=tmp_path)
+    other_pair = render.render_pair_review_bundle(doc, stage_pair, plan_sha256="0" * 64, view_dir=tmp_path)
 
-    assert M.TYPE_ENTRY_READING in unit and M.TYPE_ENTRY_READING in pair
-    assert M.TYPE_ENTRY_READING not in stage_pair
+    assert "base-1" in pair_ids and stage_pair in pair_ids
+    assert M.TYPE_ENTRY_READING in unit and M.TYPE_ENTRY_READING in order_pair
+    assert M.TYPE_ENTRY_READING not in other_pair
 
 
 # --- the judge --------------------------------------------------------------------------------------
@@ -411,6 +602,55 @@ def test_blank_statements_are_not_judged():
 
     assert M.findings([M.Statement("blank", M.QUESTION, "  "), M.Statement("sub", M.SUB_PLAN, "text")],
                       runner=judge) == [] and judge.calls == []
+
+
+def test_the_judge_is_told_the_customers_labelling_criterion():
+    prompts = []
+
+    def runner(argv, timeout=None, stdin=None):
+        prompts.append(stdin)
+        return SimpleNamespace(returncode=0, stdout='{"verdict": "neither", "reason": "stub"}', stderr="",
+                               timed_out=False)
+
+    M.judge("the monthly totals of each account", M.CUSTOMER_SIDE, runner=runner)
+
+    [prompt] = prompts
+    for criterion in (
+        "labelled by the terms it is stated in, never by who said it",
+        "stated in terms of the customer's own activity, is external to the executor's planned activity, "
+        "and stays valid whatever the executor chooses",
+        "Stated in terms of the product's internals",
+        "it is a HOW-BUILT statement",
+        "Stated in terms of the executor's process or means",
+        "it is a METHOD",
+        "an acceptance check with its reason",
+    ):
+        assert criterion in prompt, criterion
+
+
+def test_production_sites_judge_a_statement_once(ostore, tmp_path):
+    _premise_session(ostore, tmp_path)
+    question = "Should we use a queue with two workers?"
+
+    first = _raise_question(ostore, Judge(answering(M.METHOD, place=M.QUESTION)), question=question)
+    again = _raise_question(ostore, Judge(fail=True), question=question)
+
+    assert not first.ok and not again.ok
+    assert "states a method" in again.detail and "could not read" not in again.detail
+    assert M.cache_dir().parent == M.GJ.agentctl_dir()
+    unread = Judge(fail=True)
+    assert _raise_question(ostore, unread, question="Who cuts the release today?").ok is False
+    assert _raise_question(ostore, Judge(), question="Who cuts the release today?").ok
+
+
+def test_defect_advice_follows_the_verdict_and_the_place():
+    method = M.defect_line(M.Finding("customer side step", M.CUSTOMER_SIDE, M.METHOD, "names a tool"))
+    unread = M.defect_line(M.Finding("customer side step", M.CUSTOMER_SIDE, M.COULD_NOT_READ, "no answer"))
+    executor = M.defect_line(M.Finding("proposal P1", M.EXECUTOR_SIDE, M.METHOD, "names a tool"))
+
+    assert "binding condition" in method
+    assert "binding condition" not in unread and "judge did not answer" in unread and "repeat the review" in unread
+    assert "sub-plan" in executor and "binding condition" not in executor
 
 
 # --- the eval harness -------------------------------------------------------------------------------
@@ -458,7 +698,7 @@ def _edited(tmp_path, name, change) -> str:
     return str(out)
 
 
-def _labelled(counts: dict[str, tuple[int, int]], *, runs=3) -> dict:
+def _labelled(counts: dict[str, tuple[int, int]], *, runs=3, kind="orders") -> dict:
     """Results with `counts[label] = (items, found per item out of `runs`)`: that many items of the
     label, each found in the given number of runs and reported `neither` in the rest."""
     rows = []
@@ -466,7 +706,7 @@ def _labelled(counts: dict[str, tuple[int, int]], *, runs=3) -> dict:
         for i in range(items):
             rows.append({"id": f"{label}{i}", "label": label,
                          "reported": [label] * found + [M.NEITHER] * (runs - found)})
-    return {"results": rows}
+    return {"kind": kind, "results": rows}
 
 
 @pytest.mark.parametrize("kind,results,args", [
@@ -542,7 +782,7 @@ def test_trial_found_only_under_its_own_label(ev, tmp_path):
 
 
 def test_stage_briefs_check_per_label(ev, tmp_path):
-    data = _labelled({M.METHOD: (5, 3), M.HOW_BUILT: (2, 1), M.NEITHER: (3, 3)})
+    data = _labelled({M.METHOD: (5, 3), M.HOW_BUILT: (2, 1), M.NEITHER: (3, 3)}, kind="stage-briefs")
     out = tmp_path / "briefs.json"
     out.write_text(json.dumps(data), encoding="utf-8")
     sink = _Sink()
@@ -587,6 +827,45 @@ def test_check_refuses_changed_instruction_digests(ev, tmp_path):
     assert _check(ev, "small-tasks", results, *args) == 0
 
     (root / "CLAUDE.md").write_text("changed instructions\n", encoding="utf-8")
+
+    assert _check(ev, "small-tasks", results, *args) == 1
+
+
+def test_check_refuses_a_result_of_another_kind(ev):
+    assert _check(ev, "orders", _fx("passing-results.json"), *ORDERS_ARGS) == 0
+    assert _check(ev, "stage-briefs", _fx("passing-results.json"), *ORDERS_ARGS) == 1
+    assert _check(ev, "plan-reviews", _fx("passing-results.json"), "--min-found", "0.85", "--max-flagged", "0.10",
+                  "--min-runs", "3") == 1
+
+
+def test_check_with_a_set_refuses_rows_that_are_not_the_sets(ev, tmp_path):
+    args = (*ORDERS_ARGS, "--set", _fx("labelled-orders.json"))
+    assert _check(ev, "orders", _fx("passing-results.json"), *args) == 0
+
+    def relabel(data):
+        row = data["results"][0]
+        row["label"] = M.HOW_BUILT if row["label"] == M.METHOD else M.METHOD
+
+    assert _check(ev, "orders", _edited(tmp_path, "passing-results.json", lambda d: d["results"].pop(0)), *args) == 1
+    assert _check(ev, "orders", _edited(tmp_path, "passing-results.json", relabel), *args) == 1
+    assert _check(ev, "orders", _edited(tmp_path, "passing-results.json",
+                                        lambda d: d["results"].append(dict(d["results"][0], id="extra"))), *args) == 1
+
+
+def test_check_refuses_a_changed_imported_instruction_file(ev, tmp_path):
+    root = tmp_path / "config-root"
+    shutil.copytree(FIXTURES / "config-root", root)
+    claude = root / "CLAUDE.md"
+    claude.write_text(claude.read_text(encoding="utf-8") + "\n@~/.claude-agent/config.md\n", encoding="utf-8")
+    (root / "config.md").write_text("small-change-max-lines 200\n", encoding="utf-8")
+    digests = ev.instruction_digests(root)
+    assert sorted(digests) == ["CLAUDE.md", "config.md"]
+    results = _edited(tmp_path, "passing-small-tasks.json",
+                      lambda d: d.update(config_root=str(root), instruction_digests=digests))
+    args = ("--config-root", str(root), "--min-share", "0.90", "--min-items", "10")
+    assert _check(ev, "small-tasks", results, *args) == 0
+
+    (root / "config.md").write_text("small-change-max-lines 20\n", encoding="utf-8")
 
     assert _check(ev, "small-tasks", results, *args) == 1
 

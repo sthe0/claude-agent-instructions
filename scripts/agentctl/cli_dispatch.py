@@ -16,6 +16,7 @@ from . import (
     order_approvals,
     permissions,
     plan_resources,
+    render,
     resource_estimation,
     resources as _resources,
     runtime_host,
@@ -1264,14 +1265,33 @@ def _end_child_run(store: StateStore, state: SessionState, run: dict,
 
 
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
-                 perm_checker=None) -> Directive:
-    directive = _dispatch(args, store=store, runner=runner, perm_checker=perm_checker)
+                 perm_checker=None, method_runner=None) -> Directive:
+    directive = _dispatch(args, store=store, runner=runner, perm_checker=perm_checker,
+                          method_runner=method_runner)
     judge_on_parent(args.session, effort_segments.ACT_DESCENDANT_DISPATCH, store=store, rows=_cost_rows(args))
     return directive
 
 
+def _brief_method_refusal(state, stage, method_runner) -> Directive | None:
+    """A refusal to dispatch a stage whose brief states a method or how the product is built where only
+    the result may stand (the method-statement rule at the brief site). A plan on an old-form order, or
+    one that does not load here, is not judged: other checks meet those."""
+    try:
+        doc = load_plan(state.plan_path or "")
+    except (OSError, PlanError):
+        return None
+    lines = render.brief_site_defects(doc, stage.index, runner=method_runner)
+    if not lines:
+        return None
+    return Directive(
+        False, state.node, "fix_brief",
+        f"dispatch refused: the brief of stage {stage.index} breaks the method-statement rule: "
+        + "; ".join(lines),
+        data={"problems": lines})
+
+
 def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
-              perm_checker=None) -> Directive:
+              perm_checker=None, method_runner=None) -> Directive:
     state = _require(store, args.session)
     _fire_refusal = _judge_and_refuse(state, store, args, effort_segments.ACT_DISPATCH, "dispatch")
     if _fire_refusal is not None:
@@ -1293,6 +1313,9 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
         directive = _try_reattest(state, stage, store, runner)
         if directive is not None:
             return directive
+    brief_refusal = _brief_method_refusal(state, stage, method_runner)
+    if brief_refusal is not None:
+        return brief_refusal
     dry_run = bool(getattr(args, "dry_run", False))
     # Tier resolution order: explicit --budget flag > the stage's declared
     # Actor.cost_tier > the "medium" default — same precedence on the argparse

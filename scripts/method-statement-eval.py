@@ -18,15 +18,17 @@ the reported verdict is the item's own label, and a neither item is flagged on a
 
 small-tasks: items {"id", "text", "expected": small|substantive}; `run` asks the host model, with the
 CLAUDE.md under --config-root in the prompt, and `check` compares the share that agree with the expected
-class and refuses a result recorded under another root or other instruction digests.
+class and refuses a result recorded under another root or other instruction digests (those of CLAUDE.md
+and of every file under the root that it imports, transitively).
 link-reading: {"results": [{"id", "required", "read"}]}; every item that required reading a linked record
 must have read it. Recorded from a reviewer session, so there is no `run` for it.
 length: {"runs": [{"orders": [{"id", "included", "old_chars", "new_chars"}]}]}; an order whose new rendering
 is longer than the old by more than --tolerance-chars passes only when --excess-readings holds an
 `irreducible` reading of it.
 
-Pins, accepted by every `check`: --set (the result's recorded set sha256 must equal the file's),
---set-digest-file (sha256sum format, looked up by the set's base name), --commit.
+Pins, accepted by every `check`: --set (the result's recorded set sha256 must equal the file's, and its
+rows must be the set's items with the set's labels), --set-digest-file (sha256sum format, looked up by
+the set's base name), --commit. A result whose recorded `kind` is not the `--kind` asked for is refused.
 
 Exit codes: 0 met; 1 below a threshold, a pin differs, or an excess is unread or removable; 2 usage
 error or unreadable input.
@@ -36,6 +38,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +53,8 @@ LABELLED_KINDS = {"orders": method_statement.CUSTOMER_SIDE, "stage-briefs": meth
                   "plan-reviews": method_statement.STAGE_DESCRIPTION}
 DEFECT_LABELS = (method_statement.METHOD, method_statement.HOW_BUILT)
 INSTRUCTION_FILES = ("CLAUDE.md",)
+AGENT_HOME_PREFIX = "~/.claude-agent/"
+IMPORT_TOKEN = re.compile(r"(?:^|(?<=\s))@(\S+)")
 SMALL, SUBSTANTIVE = "small", "substantive"
 REPO_ROOT = SCRIPTS_DIR.parent
 
@@ -85,8 +90,31 @@ def head_commit() -> str:
     return out.stdout.strip()
 
 
+def _imported_files(config_root: Path, text: str) -> list[str]:
+    """The files under `config_root` that `text` imports with `@<path>` (a path relative to the root, or
+    under the agent home `~/.claude-agent/`); an `@` token that names no file there is not an import."""
+    found = []
+    for token in IMPORT_TOKEN.findall(text):
+        relative = token[len(AGENT_HOME_PREFIX):] if token.startswith(AGENT_HOME_PREFIX) else token
+        path = (config_root / relative).resolve()
+        if path.is_file() and path.is_relative_to(config_root.resolve()):
+            found.append(str(path.relative_to(config_root.resolve())))
+    return found
+
+
 def instruction_digests(config_root: Path) -> dict:
-    return {name: sha256_file(config_root / name) for name in INSTRUCTION_FILES if (config_root / name).is_file()}
+    """The digest of each instruction file under `config_root`: `CLAUDE.md` and, transitively, every
+    file it imports there."""
+    digests: dict = {}
+    pending = [name for name in INSTRUCTION_FILES if (config_root / name).is_file()]
+    while pending:
+        name = pending.pop()
+        if name in digests:
+            continue
+        digests[name] = sha256_file(config_root / name)
+        text = (config_root / name).read_text(encoding="utf-8", errors="replace")
+        pending.extend(_imported_files(config_root, text))
+    return dict(sorted(digests.items()))
 
 
 # --- run -------------------------------------------------------------------------------------------
@@ -246,10 +274,11 @@ def check_small_tasks(results: dict, args, out: list) -> None:
     recorded = results.get("instruction_digests")
     if not isinstance(recorded, dict) or not recorded:
         raise Unmet("the result records no instruction digests")
-    for name, digest in recorded.items():
-        path = root / name
-        if not path.is_file() or sha256_file(path) != digest:
-            raise Unmet(f"instruction file {name} under {args.config_root} differs from the one the result was recorded with")
+    current = instruction_digests(root)
+    differing = sorted(name for name in {*recorded, *current} if recorded.get(name) != current.get(name))
+    if differing:
+        raise Unmet(f"instruction file {', '.join(differing)} under {args.config_root} differs from the one "
+                    "the result was recorded with")
     rows = results.get("results")
     if not isinstance(rows, list):
         raise Usage("the result holds no items")
@@ -312,9 +341,37 @@ CHECKS = {"orders": check_labelled, "stage-briefs": check_labelled, "plan-review
           "small-tasks": check_small_tasks, "link-reading": check_link_reading, "length": check_length}
 
 
+def check_set_rows(results: dict, args) -> None:
+    """Refuse a result whose rows are not the set's items with the set's labels: a dropped, an added or a
+    relabelled row would turn the thresholds into a statement about another set."""
+    set_items = {it.get("id"): it for it in _items(Path(args.set))}
+    if args.kind == "length":
+        runs = results.get("runs")
+        row_sets = [(f"run {i}", run.get("orders", [])) for i, run in enumerate(runs or [], start=1)]
+    else:
+        row_sets = [("results", results.get("results") or [])]
+    for where, rows in row_sets:
+        ids = [r.get("id") for r in rows]
+        if len(ids) != len(set(ids)) or set(ids) != set(set_items):
+            missing = sorted(map(str, set(set_items) - set(ids)))
+            extra = sorted(map(str, set(ids) - set(set_items)))
+            raise Unmet(f"{where} are not the items of {args.set} (missing {missing}, not in the set {extra})")
+        for r in rows:
+            item = set_items[r["id"]]
+            for key in ("label", "expected"):
+                if key in item and r.get(key) != item[key]:
+                    raise Unmet(f"{where} item {r['id']} has {key} {r.get(key)!r}, the set has {item[key]!r}")
+            if args.kind == "length" and bool(r.get("included")) != bool(item.get("included", True)):
+                raise Unmet(f"{where} item {r['id']} differs from the set in `included`")
+
+
 def run_check(args) -> list:
     results = load_json(args.results)
+    if results.get("kind") != args.kind:
+        raise Unmet(f"the result records kind {results.get('kind')!r}, not {args.kind!r}")
     check_pins(results, args)
+    if args.set:
+        check_set_rows(results, args)
     out: list = []
     CHECKS[args.kind](results, args, out)
     return out

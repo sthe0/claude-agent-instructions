@@ -58,11 +58,15 @@ DEFECT_VERDICTS = {
 BINDING_CONDITIONS_KIND = "binding_conditions"
 
 RULE_TEXT = (
-    "Method-statement rule. A statement of the work is one of: a METHOD (a decision on how to act: which "
-    "approach, which steps, which instrument to choose), a HOW-BUILT statement (a statement of how the "
-    "product is made or what it is made of), or NEITHER (the result the user needs, named in the terms of "
-    "their own activity; an acceptance check with its reason is neither, even when it names a means, "
-    "because it says how the result is observed and not how it is made). Where a statement stands "
+    "Method-statement rule. A statement of the work is labelled by the terms it is stated in, never by "
+    "who said it: a statement of the user's is labelled the same way as one of the agent's. It is NEITHER "
+    "only when it is stated in terms of the customer's own activity, is external to the executor's "
+    "planned activity, and stays valid whatever the executor chooses (the result the customer needs; an "
+    "acceptance check with its reason is the customer's own activity of accepting the result, so it is "
+    "neither even when it names a means). Stated in terms of the product's internals (how the product is "
+    "made or what it is made of) it is a HOW-BUILT statement. Stated in terms of the executor's process "
+    "or means (a decision on how to act: which approach, which steps, which instrument to choose) it is "
+    "a METHOD. Where a statement stands "
     "decides what its verdict means: on the customer side of an order, in a question to the user, in a "
     "stage brief and in a stage description, both a method and a how-built statement are defects (name "
     "the product as the result the parent needs; what the parent requires of the build is set as a "
@@ -167,6 +171,26 @@ def defects(statements, *, runner=None, cache=None) -> list[Finding]:
     return [f for f in findings(statements, runner=runner, cache=cache) if is_defect(f.verdict, f.place)]
 
 
+def cache_dir():
+    """Where the production sites keep a read verdict, by the digest of the statement, the place and the
+    rule: the same text at the same place is judged once."""
+    return GJ.agentctl_dir() / "method-statement-cache"
+
+
+def site_defects(statements, *, runner=None) -> list[Finding]:
+    """The defects in `statements`, as every production site asks for them: judged through the digest
+    cache, `runner` being the method judge's own (the live host-model runner when none)."""
+    return defects(statements, runner=runner, cache=cache_dir())
+
+
+def _advice(finding: Finding) -> str:
+    if finding.verdict == COULD_NOT_READ:
+        return "the judge did not answer; repeat the review"
+    if finding.place == EXECUTOR_SIDE:
+        return "a method belongs to the executor's sub-plan (means, method, procedure), not to this side"
+    return "name the result in the terms of the activity, and put a requirement on the build in a binding condition"
+
+
 def defect_line(finding: Finding) -> str:
     if finding.verdict == COULD_NOT_READ:
         what = "the method-statement judge could not read it"
@@ -176,8 +200,7 @@ def defect_line(finding: Finding) -> str:
         what = "it states how the product is built"
     where = finding.place.replace("_", " ")
     return (f"{finding.label} ({where}): {what}" + (f" — {finding.reason}" if finding.reason else "")
-            + "; name the result in the terms of the activity, and put a requirement on the build "
-            "in a binding condition")
+            + f"; {_advice(finding)}")
 
 
 # --- the statements of each place ------------------------------------------------------------------
@@ -208,8 +231,9 @@ def order_statements(order) -> list[Statement]:
 
 
 def question_statements(text: str, kind: str, order) -> list[Statement]:
-    """The question to the user as a statement; the `binding_conditions` kind is exempt."""
-    if not plan_mod.is_two_sided(order):
+    """The question to the user as a statement; the `binding_conditions` kind is exempt. `order` is the
+    session's own: a session with no order yet is judged, one whose order is in the old form is not."""
+    if order is not None and not plan_mod.is_two_sided(order):
         return []
     if kind == BINDING_CONDITIONS_KIND and binding_exempt():
         return []

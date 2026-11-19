@@ -254,7 +254,7 @@ def field_place_concerns(plan_path: str, pair: str, *, runner=None) -> list[str]
     return [
         plan.format_concern(plan.SEVERITY_BLOCKING, "",
                             f"stage:{finding.label.split()[1]} {method_statement.defect_line(finding)}")
-        for finding in method_statement.defects(method_statement.plan_statements(doc, stages), runner=runner)
+        for finding in method_statement.site_defects(method_statement.plan_statements(doc, stages), runner=runner)
     ]
 
 

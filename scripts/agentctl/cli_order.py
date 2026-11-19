@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 from lib import ask_evidence, config_root
-from . import answer_ledger, delivery, effort_segments, gates
+from . import answer_ledger, delivery, effort_segments, gates, method_statement
 from .directive import Directive
 from .dispatch import Runner, subprocess_runner
 from .plan import (
@@ -512,11 +512,13 @@ def _agreed_change(moved: list[str], beside: dict, agreement: OrderAgreement) ->
     return None
 
 
-def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None = None,
+                              method_runner=None) -> Directive:
     """Record a revision of the executor side of the agreed order, with no new agreement.
 
     The revised draft must keep the agreed digest (so the customer side and every acceptance check
-    are as the user agreed them) and pass the executor-side checks order-submit runs. Writes the
+    are as the user agreed them) and pass the executor-side checks order-submit runs, and its
+    executor-side text must meet the method-statement rule (the judge `method_runner` reads it). Writes the
     typed revision record (what changed, why, by, the earlier and the new executor-side digest)
     and never moves the agreed digest."""
     state = _require(store, args.session)
@@ -546,6 +548,10 @@ def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None 
             "order-agree), not a revision", moved=moved)
     problems = _order_draft_violations(doc, state)
     problems.extend(_executor_side_violations(doc.meta, state))
+    executor_text = [s for s in method_statement.order_statements(doc.meta.order)
+                     if s.place == method_statement.EXECUTOR_SIDE]
+    problems.extend(method_statement.defect_line(f)
+                    for f in method_statement.site_defects(executor_text, runner=method_runner))
     if problems:
         return refuse("the revised executor side is not fit: " + "; ".join(problems), problems=problems)
     earlier = state.executor_side_revisions[-1] if state.executor_side_revisions else None
