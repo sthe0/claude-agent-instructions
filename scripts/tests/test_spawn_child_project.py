@@ -333,8 +333,9 @@ def test_child_in_the_parents_own_project_outside_a_dispatched_venue_is_refused(
     result = _spawn(tmp_path, home, ["--workdir", str(world.project)], project_dir=world.project)
     assert result.returncode == 2
     assert result.stdout.splitlines()[0] == "Refusal: child-outside-project"
-    assert "would load user settings only (--setting-sources user)" in result.stderr
-    assert "spawn it through `agentctl dispatch`" in result.stderr
+    assert f"child in {world.project} would load user settings only (--setting-sources user)" in result.stderr
+    assert "approved delivery venue (`agentctl dispatch`" in result.stderr
+    assert f"--workdir {world.project} (" not in result.stderr
 
 
 def test_child_in_the_dispatched_venue_of_the_parents_project_passes(world, monkeypatch):
@@ -351,7 +352,9 @@ def test_subdirectory_of_a_project_with_only_a_start_directory_settings_json_is_
     assert result.stdout.splitlines()[0] == "Refusal: child-outside-project"
 
 
-def test_subdirectory_of_a_repository_with_a_root_settings_local_json_passes(world, monkeypatch):
+def test_gate_alone_passes_a_subdirectory_of_a_repository_with_a_root_settings_local_json(world, monkeypatch):
+    """`_child_project_gate` given `user_only=None`; through `_main` such a child, being
+    neither the delivery venue nor the parent's project root, loads user settings only."""
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(world.project))
     gate = MOD._child_project_gate(
         Namespace(allow_child_outside_project=None, kind="developer"), str(world.local / "sub"), None

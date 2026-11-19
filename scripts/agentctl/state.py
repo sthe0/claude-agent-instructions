@@ -2987,6 +2987,11 @@ class SessionState:
     # "declared" is kept so the hash can be recomputed, but dispatch takes the declared
     # half from the hash-verified plan snapshot, never from here.
     approved_grant_entries: dict[str, dict] | None = None
+    # The delivery venue's project settings digests at the last approve
+    # (dispatch.venue_settings_digests); spawn-specialist loads project settings in the
+    # venue only while they still match. None before the first approve, and on a state
+    # approved before the field existed: such a venue's child loads user settings only.
+    venue_settings_at_approve: dict[str, str] | None = None
     planning_misses: list[dict] = field(default_factory=list)
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)

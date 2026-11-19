@@ -38,8 +38,8 @@ included), a raised `defaultMode` and other changed security keys — or says
 the rules are unknown; and a settings document in a scratch directory is
 denied outright.
 
-G1-nonproject is the one branch that denies at every depth and in every
-mode, and it does not break the "never deny on ambiguity" rule above: it
+G1-nonproject and G2-env (below) are the branches that deny at every depth
+and in every mode. G1-nonproject does not break the "never deny on ambiguity" rule above: it
 fires only when the shared probe (`lib/project_root.make_probe`) POSITIVELY
 places the parent of `.claude` under a session scratch root
 (`agentctl.exempt_paths.scratch_roots()`: `AGENTCTL_SCRATCH_ROOTS`, else
@@ -59,12 +59,22 @@ moving or copying a whole directory into place (`mv d x/.claude`,
 file), an interpreter's inline code (`python3 -c`, `perl -e`, `node -e`) or
 a script file the command runs, and a target spelled through a variable or
 substitution (`> "$F"`). For `cp SRC DST` the dialog lists the rules SRC
-holds when the hook runs; SRC can change before the human answers. None of
-these reaches a spawned child: `spawn-specialist.py` starts every child with
-`--setting-sources user` and re-enables project settings only in the
-delivery venue `agentctl dispatch` records, so a settings document planted
-in another directory is never loaded. The harness's own permission prompt
-is the only gate on these writes for the current session.
+holds when the hook runs; SRC can change before the human answers. The
+harness's own permission prompt is the only gate on these writes for the
+current session. A child `spawn-specialist.py` starts loads such a document
+only in one of two places, where it enables project settings: the delivery
+venue its engine session records, and only while the venue's
+`.claude/settings.json` and `.claude/settings.local.json` still hash to what
+`agentctl approve` recorded (a write after approval is not loaded; one
+before approval is, and the user approved that venue); and the parent
+session's own project root, whose settings the parent already loads.
+Neither place counts under a scratch root; a `git init` outside scratch
+still makes a directory a checkout the plan may name as its venue. The
+venue's `settings.local.json` at the main checkout's root, which a linked
+worktree loads, is not hashed. Other `claude` launchers
+(`claude-recover.py`, `telemetry-synthetic-task.py`,
+`probe-hook-decision-semantics.py`, `lib/host_llm.py`) pass no
+`--setting-sources` and are out of this scope.
 
 Turning a G-branch `"ask"` into `"deny"` is `main()`'s concern, not the
 decision functions' — applied once, right before a fire is logged and
@@ -160,7 +170,13 @@ The branches — G1 (three sub-forms: G1-edit, G1-bash, G1-state), G2, G3, G4:
              inspected — except for `--permission-mode`, whose `default`/
              `plan` values NARROW rather than widen and so are exempt
              (`_G2_PERMISSION_MODE_EXEMPT_VALUES`).
-  G3       — an Edit, Write, MultiEdit or NotebookEdit onto, or a Bash write
+  G2-env   — `"deny"`: a Bash command that assigns `CLAUDE_CONFIG_DIR`,
+             `CLAUDE_AGENT_HOME`, `HOME`, `CLAUDE_CODE_SESSION_ID` or
+             `AGENTCTL_SCRATCH_ROOTS` (prefix, `env`, `export`) while one of
+             its segments, recursed as for G2, launches `claude` or
+             `spawn-specialist.py` (`_g2_env_bash`). Best-effort; the
+             spawner's `config_root_refusal` is the defence.
+  G3      — an Edit, Write, MultiEdit or NotebookEdit onto, or a Bash write
              target under, a persistent-launch-registration surface
              (`widening_targets.is_launch_surface`), or a Bash command
              invoking `crontab` (`widening_targets.is_crontab_target`) —
@@ -656,6 +672,40 @@ def _g2_bash(command: str) -> str | None:
     return None
 
 
+_CONFIG_REDIRECTING_ENV = frozenset({
+    "CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_HOME", "HOME", "CLAUDE_CODE_SESSION_ID", "AGENTCTL_SCRATCH_ROOTS",
+})
+_EXPORTING_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
+_SPAWNER_SCRIPT = "spawn-specialist.py"
+
+
+def _assigned_env_names(seg: list[str]) -> set[str]:
+    names: list[str] = []
+    stripped = widening_targets.strip_wrappers(seg, assignment_names=names)
+    if stripped and widening_targets.program_name(stripped[0]) in _EXPORTING_BUILTINS:
+        names += [tok.split("=", 1)[0] for tok in stripped[1:] if "=" in tok and not tok.startswith("-")]
+    return set(names)
+
+
+def _launches_child(seg: list[str]) -> bool:
+    return widening_targets.is_claude_program(seg) or any(
+        widening_targets.program_name(tok) == _SPAWNER_SCRIPT for tok in seg
+    )
+
+
+def _g2_env_bash(command: str) -> list[str] | None:
+    """The config-redirecting variables a command assigns (`VAR=… prog`, `env VAR=…`,
+    `export VAR=…`) when any of its segments, through the same shell -c/eval recursion
+    as G2, launches `claude` or `spawn-specialist.py`. Best-effort: a variable set in an
+    earlier Bash call, in a script file, or by an interpreter is not seen;
+    `spawn-specialist.py`'s own `config_root_refusal` is the defence."""
+    segs = _g2_segments(command)
+    if not any(_launches_child(seg) for seg in segs):
+        return None
+    assigned = set().union(*(_assigned_env_names(seg) for seg in segs)) & _CONFIG_REDIRECTING_ENV
+    return sorted(assigned) or None
+
+
 def _g3_edit(tool_input: dict) -> str | None:
     file_path = tool_input.get("file_path")
     if isinstance(file_path, str) and widening_targets.is_launch_surface(file_path):
@@ -912,6 +962,14 @@ def _g2_message(seg_text: str) -> str:
     )
 
 
+def _g2_env_message(names: list[str]) -> str:
+    return (
+        f"Bash sets {', '.join(names)} around a `claude` or `spawn-specialist.py` launch: "
+        f"that moves the child's user settings or the engine store to a directory no guard "
+        f"checks. Launch the child with the session's own environment."
+    )
+
+
 def _g3_message(target: str) -> str:
     return (
         f"Targets a persistent-launch-registration surface ({target}), "
@@ -963,7 +1021,7 @@ def decide_detailed(
     project_root_probe=None,
 ) -> tuple[str, str | None, str | None]:
     """`(decision, branch, message)` at the G-branch level — `decision` is
-    `"allow"` or `"ask"`, and `"deny"` only on G1-nonproject, which needs a
+    `"allow"` or `"ask"`, and `"deny"` only on G2-env and on G1-nonproject, which needs a
     `project_root_probe` (see module docstring: turning an `"ask"` into a
     `"deny"` at depth >= 1 is `main()`'s concern, not this function's).
     `permission_mode` is accepted, never consulted (see module docstring).
@@ -1010,6 +1068,9 @@ def decide_detailed(
             target = _g1_state_bash(command, cwd)
             if target:
                 return "ask", "G1-state", _g1_state_message(target)
+            redirected = _g2_env_bash(command)
+            if redirected:
+                return "deny", "G2-env", _g2_env_message(redirected)
             g4_hit = _g4_bash(command)
             if g4_hit:
                 rules, stage, session, scope, _g4_seg_text = g4_hit

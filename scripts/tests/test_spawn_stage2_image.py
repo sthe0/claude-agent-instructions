@@ -30,7 +30,7 @@ import pytest
 
 from agentctl import cli, grants, plugins
 from agentctl.directive import Directive
-from agentctl.dispatch import RunResult
+from agentctl.dispatch import RunResult, venue_settings_digests
 from agentctl.state import Node, StageStatus
 from lib import widening_targets
 from test_stage_grants import _to_executing, _write_plan_with_grants_block, ns
@@ -599,12 +599,17 @@ def _venue_settings(store, sid: str) -> Path:
 
 def _checkout_venue(store, sid: str, monkeypatch) -> Path:
     """Make `store` the default engine store and the session's venue a git
-    checkout: the two conditions, besides starting in the venue, under which a
-    child loads its project settings."""
+    checkout outside scratch whose settings match those recorded at approve: the
+    conditions, besides starting in the venue, under which a child loads its
+    project settings."""
     monkeypatch.setattr("agentctl.store.DEFAULT_ROOT", store.root)
-    venue = Path(store.load(sid).resolve_check_venue("delivery"))
+    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
+    state = store.load(sid)
+    venue = Path(state.resolve_check_venue("delivery"))
     (venue / ".git").mkdir(parents=True, exist_ok=True)
     (venue / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    state.venue_settings_at_approve = venue_settings_digests(str(venue))
+    store.save(state)
     return venue
 
 

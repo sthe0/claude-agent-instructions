@@ -20,6 +20,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from agentctl import cli
+from agentctl.dispatch import venue_settings_digests
 from agentctl.store import FileStateStore
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -131,16 +132,20 @@ SESSION = "project-settings-venue"
 
 
 def _default_store(tmp_path: Path, monkeypatch) -> FileStateStore:
+    """The default engine store under `tmp_path`, with no scratch roots so a venue there counts."""
     monkeypatch.setattr("agentctl.store.DEFAULT_ROOT", tmp_path / "state")
+    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
     return FileStateStore()
 
 
 def _session_at_venue(store: FileStateStore, venue: Path) -> None:
+    """A session whose delivery venue is `venue`, approved with its settings as they are now."""
     cli.cmd_start(Namespace(session=SESSION, task="t", goal="g", done_criterion="dc",
                             criterion_type="measurable", recursion_depth=0), store=store)
     state = store.load(SESSION)
     state.delivery_worktree = str(venue)
     state.repo_root = str(venue)
+    state.venue_settings_at_approve = venue_settings_digests(str(venue))
     store.save(state)
 
 
@@ -235,3 +240,56 @@ def test_project_settings_refusal_refuses_an_unmarked_venue_outside_scratch(tmp_
     _session_at_venue(_default_store(tmp_path, monkeypatch), venue)
     monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
     assert "is no repository checkout" in _refusal(_settings_of(venue), venue, SESSION)
+
+
+def test_venue_settings_changed_after_approve_leave_the_child_user_only(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    _write_settings(venue, {"permissions": {"allow": ["Bash(git push:*)"]}})
+    venue_settings, not_venue = MOD.dispatched_venue(str(venue), SESSION, None)
+    assert venue_settings is None
+    assert f"{_settings_of(venue)} changed since `agentctl approve`" in not_venue
+
+
+def test_venue_under_a_scratch_root_leaves_the_child_user_only(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [str(tmp_path)])
+    venue_settings, not_venue = MOD.dispatched_venue(str(venue), SESSION, None)
+    assert venue_settings is None
+    assert "is under a scratch root" in not_venue
+
+
+# --- config_root_refusal / starts_in_parent_project: the parent found under the login home ---
+
+PARENT_SESSION = "parent-under-login-home"
+
+
+def _login_home_with_transcript(tmp_path: Path, monkeypatch, cwd: Path) -> Path:
+    home = tmp_path / "home"
+    folder = home / ".claude-agent" / "projects" / MOD._project_dir_name(str(cwd))
+    folder.mkdir(parents=True)
+    (folder / f"{PARENT_SESSION}.jsonl").write_text(json.dumps({"type": "user", "cwd": str(cwd)}) + "\n")
+    monkeypatch.setattr(MOD, "_login_home", lambda: str(home))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PARENT_SESSION)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    return home
+
+
+def test_config_root_refusal_refuses_a_config_dir_other_than_the_parents(tmp_path, monkeypatch):
+    _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "forged"))
+    refusal = MOD.config_root_refusal()
+    assert refusal is not None and str(tmp_path / "forged") in refusal
+
+
+def test_config_root_refusal_passes_the_parents_own_config_root(tmp_path, monkeypatch):
+    home = _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-agent"))
+    assert MOD.config_root_refusal() is None
+
+
+def test_child_started_in_the_parents_project_root_loads_project_sources(tmp_path, monkeypatch):
+    project = _checkout(tmp_path / "proj")
+    _login_home_with_transcript(tmp_path, monkeypatch, project)
+    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
+    assert MOD.user_only_reason(str(project), "not the delivery venue", PARENT_SESSION) is None

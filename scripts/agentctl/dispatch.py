@@ -10,6 +10,7 @@ full state-machine cycle can be exercised in tests with a fake runner and zero
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from dataclasses import dataclass
@@ -205,6 +206,42 @@ def venue_project_settings(state) -> tuple[str | None, str | None]:
         return None, None
     candidate = Path(venue) / ".claude" / "settings.local.json"
     return venue, (str(candidate) if candidate.is_file() else None)
+
+
+VENUE_SETTINGS_FILES = (".claude/settings.json", ".claude/settings.local.json")
+VENUE_SETTINGS_ABSENT = "absent"
+VENUE_SETTINGS_UNREADABLE = "unreadable"
+
+
+def venue_settings_digests(venue: str | None) -> dict[str, str] | None:
+    """`{relative path: sha256 hex, or VENUE_SETTINGS_ABSENT / _UNREADABLE}` of the
+    venue's project settings documents (`VENUE_SETTINGS_FILES`); None without a venue.
+    `agentctl approve` records it and `spawn-specialist.py` loads project settings in
+    the venue only while every entry still matches, so a settings document planted in
+    the venue after approval, by a write the permission-surface guard never saw, is
+    not loaded. An unreadable file never matches, not even an earlier unreadable one."""
+    if not venue:
+        return None
+    digests: dict[str, str] = {}
+    for relative in VENUE_SETTINGS_FILES:
+        try:
+            digests[relative] = hashlib.sha256((Path(venue) / relative).read_bytes()).hexdigest()
+        except FileNotFoundError:
+            digests[relative] = VENUE_SETTINGS_ABSENT
+        except OSError:
+            digests[relative] = VENUE_SETTINGS_UNREADABLE
+    return digests
+
+
+def changed_venue_settings(recorded: dict[str, str] | None, venue: str) -> list[str]:
+    """The `VENUE_SETTINGS_FILES` whose current digest differs from `recorded` (all of
+    them when nothing was recorded), as paths under `venue`."""
+    current = venue_settings_digests(venue) or {}
+    recorded = recorded or {}
+    return [
+        str(Path(venue) / relative) for relative in VENUE_SETTINGS_FILES
+        if current.get(relative) == VENUE_SETTINGS_UNREADABLE or current.get(relative) != recorded.get(relative)
+    ]
 
 
 _CRITERION_FLAG = {
