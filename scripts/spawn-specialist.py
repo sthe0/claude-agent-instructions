@@ -795,6 +795,36 @@ def project_settings_sources(directory: str) -> "tuple[tuple[str, ...], str]":
     return tuple(files), note
 
 
+def accepted_project_settings(workdir: str) -> "frozenset[str]":
+    """Realpaths a `--project-settings` value may name for a child started in `workdir`:
+    `<d>/.claude/settings.local.json` for `workdir` itself and each ancestor up to its
+    VCS root, plus the git root Claude Code reads the local file from (the main
+    checkout's for a linked worktree). $HOME and the user-level files never count.
+
+    Difficulty removed: a shape check alone accepted any path ending in
+    `.claude/settings.local.json`, so an agent could forge one in a scratch directory
+    and have its rules merged into the child's --settings grant (2026-11-12, 2026-11-19)."""
+    start = os.path.realpath(workdir)
+    home = os.path.realpath(Path.home())
+    directories = [start]
+    vcs_root = _vcs_root(start)
+    if vcs_root is not None:
+        top = os.path.realpath(vcs_root)
+        current = start
+        while current != top and current.startswith(top + os.sep):
+            current = os.path.dirname(current)
+            directories.append(current)
+    checkout_root, _ = _git_checkout_root(start)
+    if checkout_root is not None:
+        directories.append(os.path.realpath(checkout_root))
+    user_level = _user_level_settings()
+    accepted = (
+        os.path.realpath(os.path.join(d, PROJECT_SETTINGS_DIR, "settings.local.json"))
+        for d in directories if d != home
+    )
+    return frozenset(p for p in accepted if p not in user_level)
+
+
 def registers_hook(files: Sequence[str]) -> bool:
     """True when any of `files` has a non-empty `hooks` object; a file that cannot be
     read or parsed counts as registering (fail closed)."""
@@ -932,8 +962,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--project-settings",
         type=Path,
-        help="kind=developer only: a target project's own .claude/settings.local.json, whose "
-             "permissions.allow/deny entries are merged into this child's --settings grant "
+        help="kind=developer only: the child's own project's .claude/settings.local.json - "
+             "under --workdir (or the cwd) or an ancestor up to its VCS root, else refused - "
+             "whose permissions.allow/deny entries are merged into this child's --settings grant "
              "(distinct from --project-permissions, which only affects the prose digest)",
     )
     p.add_argument(
@@ -3327,6 +3358,16 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         log_refused("workdir-not-found", {"kind": args.kind, "workdir": str(args.workdir)})
         return 2
     workdir = str(args.workdir) if args.workdir is not None else os.getcwd()
+    if args.project_settings is not None and os.path.realpath(args.project_settings) not in accepted_project_settings(workdir):
+        print(
+            f"error: --project-settings {args.project_settings} is not the "
+            f".claude/settings.local.json of the child's own project ({workdir} or an "
+            f"ancestor up to its VCS root) — refusing to merge its permissions into this "
+            f"child's --settings grant",
+            file=sys.stderr,
+        )
+        log_refused("project-settings-not-project-root", {"kind": args.kind, "workdir": workdir})
+        return 2
     child_project_override = None
     if not prompt_only:
         stop, child_project_override = _child_project_gate(args, workdir)

@@ -599,14 +599,29 @@ def test_p14_project_settings_only_accepts_settings_local_json(tmp_path, plans, 
     for bad in bad_paths:
         bad.write_text(payload)
 
-    accepted = _dry_run(capsys, _base_argv("developer", two_stage_plan) + ["--project-settings", str(good)])
+    workdir = ["--workdir", str(tmp_path / "proj")]
+    accepted = _dry_run(capsys, _base_argv("developer", two_stage_plan) + workdir + ["--project-settings", str(good)])
     assert accepted.rc == 0
     assert "Bash(make test:*)" in accepted.allow
 
     for bad in bad_paths:
-        refused = _dry_run(capsys, _base_argv("developer", two_stage_plan) + ["--project-settings", str(bad)])
+        refused = _dry_run(capsys, _base_argv("developer", two_stage_plan) + workdir + ["--project-settings", str(bad)])
         assert refused.rc != 0, bad
         assert "Bash(make test:*)" not in refused.allow
+
+
+def test_p14_project_settings_of_another_directory_is_refused(tmp_path, plans, two_stage_plan, capsys):
+    forged = tmp_path / "scratch" / "x" / ".claude" / "settings.local.json"
+    forged.parent.mkdir(parents=True)
+    forged.write_text(json.dumps({"permissions": {"allow": ["Bash(git push:*)"]}}))
+    (tmp_path / "proj").mkdir()
+    argv = _base_argv("developer", two_stage_plan) + [
+        "--workdir", str(tmp_path / "proj"), "--project-settings", str(forged),
+    ]
+    refused = _dry_run(capsys, argv)
+    assert refused.rc == 2
+    assert "Bash(git push:*)" not in refused.allow
+    assert "is not the .claude/settings.local.json of the child's own project" in refused.err
 
 
 # --- point 15: ledger row carries the child's real session/transcript ---------
