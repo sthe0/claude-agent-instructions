@@ -518,7 +518,8 @@ def build_report(
     unreached = [r for r in plan["roots"] if r not in sizes]
     kept = {p: s for p, s in sizes.items() if any(p == r or _under(p, r) for r in reached)}
 
-    selector = Selector(kept, rows, min_bytes)
+    rows_in_root = [r for r in rows if r["path"] == root or _under(r["path"], root)]
+    selector = Selector(kept, rows_in_root, min_bytes)
     for walked in reached:
         selector.visit(walked)
     selector.finish()

@@ -357,6 +357,16 @@ def test_machine_table_overrides_a_default_row_and_adds_its_own(planted: Planted
     assert len(sources) == 2 and all(len(s["sha256"]) == 64 for s in sources)
 
 
+def test_a_row_above_the_root_does_not_name_entries_below_it(planted: Planted) -> None:
+    planted.blob("below", 2 * MIB)
+    planted.names.write_text(
+        f'[[entry]]\npath = "{planted.root.parent}"\nlabel = "ancestor"\nkind = "os"\n\n'
+        f'[[entry]]\npath = "{planted.root}/below"\nlabel = "below thing"\nkind = "cache"\n')
+    report = planted.report()
+    assert "ancestor" not in {e["label"] for e in report["entries"]}
+    assert [e["path"] for e in report["entries"] if e["label"] == "below thing"] == [f"{planted.root}/below"]
+
+
 def test_default_table_rows_are_valid_and_neutral() -> None:
     rows, excludes, _ = disk_report.load_names([disk_report.DEFAULT_TABLE], "/home/x")
     assert rows and not excludes

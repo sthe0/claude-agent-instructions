@@ -160,6 +160,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/gates.py`:`_delivery_stamp_blocker` | not a binding | Compares a delivery stamp with its receipt; both are recorded, neither is a plan file's current digest. |
 | `scripts/agentctl/plan_convert.py`:`cmd_plan_convert_live` | not a binding | Requires the plan file's digest to equal the accepted digest exactly before converting; after a conversion the two are different forms, and this check runs against the form on disk. |
 | `scripts/agentctl/plan_store.py`:`_intact` | not a binding | Re-hashes a stored object against its own name. |
+| `scripts/lib/disk_report.py`:`sha256_file` | not a binding | Hashes the report tool's own files and naming tables to record them in the report; it binds no record to a plan version. |
 | `scripts/hook-plan-delivery-gate.py`:`_already_stamped` | not a binding | Compares a stamp's receipt digest with the receipt, both recorded. |
 | `scripts/plan-review-topological.py`:`Driver.launch` | not a binding | Recomputes the root digest the reviewer attests: the sha256 of the index bytes. A positive control of the enumerator. |
 | `scripts/spawn-specialist.py`:`load_review_doc` | not a binding | Computes the digest a `--review-topo` reviewer attests: the loader's index digest for a plan, the sha256 of the file's bytes for an order draft; it compares nothing. |
