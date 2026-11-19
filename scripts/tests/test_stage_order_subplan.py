@@ -15,6 +15,7 @@ Each guard test goes red under a planted defect in `order_agreement_mutants.py`:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,12 +68,37 @@ def test_the_stage_description_survives_a_state_round_trip():
     assert back.stages[0] == stage
 
 
-def _raw_plan(stage_extra: dict, *, weight=None) -> dict:
+TWO_SIDED_ORDER = {
+    "customer_id": "user", "customer": "the position that posed the task",
+    "functional_place": "the norm governing the act",
+    "requirements": [{"id": "R1", "text": "the product works", "derivation": "the task"}],
+    "coverage": {"R1": ["stage 1 verify_command"], "A1": ["stage 1 verify_command"]},
+    "customer_side": {
+        "step": "cutting a release", "missing": "a command that tags it",
+        "product": "the release command", "criterion_type": "measurable",
+        "checks": [{"id": "A1", "kind": "direct", "text": "the command tags a release"}],
+    },
+}
+
+
+AGREED_OLD_FORM_ORDER = {
+    **{k: v for k, v in TWO_SIDED_ORDER.items() if k != "customer_side"},
+    "coverage": {"R1": ["stage 1 verify_command"]},
+}
+
+
+def _raw_plan(stage_extra: dict, *, weight=None, order=None, drop=()) -> dict:
+    """A one-stage plan; `order` is the `[meta.order]` table (a plan with none is on no order),
+    `drop` the stage keys to leave out."""
     meta = {"task_id": "t", "goal": "g", "done_criterion": "d"}
     if weight:
         meta.update(weight_class=weight, external_research="not warranted")
+    if order is not None:
+        meta["order"] = json.loads(json.dumps(order))
     stage = {"title": "s", "executor": "in_thread", "expected_result_image": "the product",
              "done_criterion": "the check passes", **stage_extra}
+    for key in drop:
+        stage.pop(key, None)
     return {"meta": meta, "stage": [stage]}
 
 
@@ -85,19 +111,31 @@ def test_the_loader_reads_the_stage_description():
     stage = doc.stages[0]
     assert stage.place == "the engine, relied on by stage 2"
     assert stage.binding_conditions == [{"id": "B1", "text": "no push", "set_by": "user"}]
+    assert stage.binding_conditions_stated
     assert (stage.declared_size, stage.size_flags, stage.expected_minutes) == (
         120, ["architectural"], 45)
+    assert not parse_plan(_raw_plan({})).stages[0].binding_conditions_stated
 
 
-def test_the_strict_loader_leaves_means_to_the_executor_of_a_described_stage():
+def test_the_strict_loader_leaves_means_to_the_executor_on_a_two_sided_order():
     described = {"place": "the engine", "material": "m", "invariants": "i",
                  "capability_required": "c", "verify_command": "true",
                  "principle": {"statement": "s1", "source": "src", "derivation": "d1",
                                "confidence": "high", "refutation": "r1"}}
-    parse_plan(_raw_plan(described, weight="substantive"), strict=True)
-    old_form = {k: v for k, v in described.items() if k != "place"}
+    parse_plan(_raw_plan(described, weight="substantive", order=TWO_SIDED_ORDER), strict=True)
     with pytest.raises(PlanError, match="missing 'means'"):
-        parse_plan(_raw_plan(old_form, weight="substantive"), strict=True)
+        parse_plan(_raw_plan(described, weight="substantive"), strict=True)
+
+
+def test_the_form_of_a_stage_follows_the_order_not_the_place():
+    """A two-sided order leaves means to the executor even for a stage naming no place; a stage
+    naming a place on an order-less plan still owes its means."""
+    bare = {"material": "m", "invariants": "i", "capability_required": "c", "verify_command": "true",
+            "principle": {"statement": "s1", "source": "src", "derivation": "d1",
+                          "confidence": "high", "refutation": "r1"}}
+    parse_plan(_raw_plan(bare, weight="substantive", order=TWO_SIDED_ORDER), strict=True)
+    with pytest.raises(PlanError, match="missing 'means'"):
+        parse_plan(_raw_plan({**bare, "place": "the engine"}, weight="substantive"), strict=True)
 
 
 def test_the_description_is_a_part_of_the_stage_change_keys():
@@ -130,9 +168,16 @@ def test_the_line_moves_with_the_thresholds_it_is_given():
 
 
 def test_a_stage_declaring_no_minutes_is_judged_on_its_cost_tier():
-    assert stage_above_threshold(_stage(tier="large", place="p"), TIGHT)
-    assert not stage_above_threshold(_stage(tier="small", place="p"), TIGHT)
+    assert stage_above_threshold(_stage(tier="large", place="p", declared_size=1), TIGHT)
+    assert not stage_above_threshold(_stage(tier="small", place="p", declared_size=1), TIGHT)
     assert not stage_above_threshold(_stage(tier="large", place="p", expected_minutes=2), TIGHT)
+
+
+def test_a_new_form_stage_declaring_no_size_is_above_the_line():
+    """No lines, no flag and no minutes is no declaration, never a small stage."""
+    assert stage_above_threshold(_stage(tier="small", place="p"), TIGHT)
+    assert stage_above_threshold(_stage(tier="small", place="p"), Thresholds())
+    assert not stage_above_threshold(_stage(tier="small", place="p", declared_size=1), TIGHT)
 
 
 def test_the_stage_predicate_hands_the_declared_size_to_classify(monkeypatch):
@@ -238,38 +283,78 @@ class _Store:
         return self.states[session_id]
 
 
+def _frame(originating_stage, stages=()):
+    """The slice of a `PlanFrame` the readers use: the stage it was pushed for and the stages of
+    the plan below it."""
+    return SimpleNamespace(originating_stage=originating_stage, stages=list(stages))
+
+
 def test_one_reader_reads_a_frames_record_and_a_child_contours_record():
     record = sub_plan.from_meta(_META)
     own = _session("parent")
-    sub_plan.store(own, record)
+    sub_plan.store(own, record, level=0)
     assert sub_plan.read(own, 2).method == "split the module"
     assert sub_plan.read(own, 3) is None
 
     parent = _session("parent")
-    child = _session("child", parent_link={"parent_session": "parent"})
-    grandchild = _session("grandchild", parent_link={"parent_session": "child"})
-    sub_plan.store(grandchild, record)
-    store = _Store(parent, child, grandchild)
+    linked = _session("child", parent_link={"parent_session": "parent", "stage_index": 2})
+    sub_plan.store(linked, record)
+    store = _Store(parent, linked)
     assert sub_plan.read(parent, 2, store).method == "split the module"
     assert sub_plan.read(parent, 2) is None
+    assert sub_plan.read(parent, 3, store) is None
+
+
+def test_the_reader_follows_the_stage_link_and_never_reaches_a_deeper_session():
+    record = sub_plan.from_meta(_META)
+    parent = _session("parent")
+    elsewhere = _session("elsewhere", parent_link={"parent_session": "parent", "stage_index": 5})
+    sub_plan.store(elsewhere, sub_plan.SubPlanRecord(stage=5, method="built for stage 5"))
+    sub_plan.store(elsewhere, record)
+    grandchild = _session("grandchild", parent_link={"parent_session": "elsewhere", "stage_index": 2})
+    sub_plan.store(grandchild, record)
+    store = _Store(parent, elsewhere, grandchild)
+    assert sub_plan.read(parent, 2, store) is None, "a child linked at another stage, a grandchild"
+    assert sub_plan.read(parent, 5, store).method == "built for stage 5"
+
+
+def test_nested_frames_keep_one_record_each_and_the_reader_asks_its_own_level():
+    upper = sub_plan.SubPlanRecord(stage=1, method="built in the first frame")
+    lower = sub_plan.SubPlanRecord(stage=1, method="built in the nested frame")
+    state = _session("s", plan_stack=[_frame(1), _frame(1)])
+    sub_plan.store(state, upper, level=0)
+    sub_plan.store(state, lower, level=1)
+    assert set(state.sub_plan_records) == {"0:1", "1:1"}, "the second store did not overwrite"
+    assert sub_plan.read(state, 1) is None, "the plan at level 2 owns no record of its stage 1 yet"
+    state.plan_stack.pop()
+    assert sub_plan.read(state, 1).method == "built in the nested frame"
+    state.plan_stack.pop()
+    assert sub_plan.read(state, 1).method == "built in the first frame"
+
+
+def test_a_contour_record_is_keyed_apart_from_a_frame_record_of_the_same_stage():
+    state = _session("s", parent_link={"parent_session": "p", "stage_index": 2})
+    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="contour"))
+    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="frame"), level=0)
+    assert set(state.sub_plan_records) == {"2", "0:2"}
 
 
 def test_subplan_review_record_by_stage():
     state = _session("s")
-    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="m2"))
-    sub_plan.store(state, sub_plan.SubPlanRecord(stage=3, method="m3"))
-    sub_plan.add_review(state, 2, {"verdict": "revise"})
-    assert state.sub_plan_records["2"]["reviews"] == [{"verdict": "revise"}]
-    assert state.sub_plan_records["3"]["reviews"] == []
+    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="m2"), level=0)
+    sub_plan.store(state, sub_plan.SubPlanRecord(stage=3, method="m3"), level=0)
+    sub_plan.add_review(state, 2, {"verdict": "revise"}, level=0)
+    assert state.sub_plan_records["0:2"]["reviews"] == [{"verdict": "revise"}]
+    assert state.sub_plan_records["0:3"]["reviews"] == []
     with pytest.raises(sub_plan.SubPlanError):
-        sub_plan.add_review(state, 9, {"verdict": "pass"})
+        sub_plan.add_review(state, 9, {"verdict": "pass"}, level=0)
 
 
 def test_a_rewritten_record_keeps_its_reviews():
     state = _session("s")
-    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="m"))
-    sub_plan.add_review(state, 2, {"verdict": "pass"})
-    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="m, revised"))
+    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="m"), level=0)
+    sub_plan.add_review(state, 2, {"verdict": "pass"}, level=0)
+    sub_plan.store(state, sub_plan.SubPlanRecord(stage=2, method="m, revised"), level=0)
     assert sub_plan.read(state, 2).reviews == [{"verdict": "pass"}]
 
 
@@ -286,11 +371,17 @@ from agentctl.submission import StageOrderContext  # noqa: E402
 BINDING = ({"id": "B1", "text": "no push", "set_by": "user"},)
 
 
-def _doc(stage_extra=None, record=None):
-    raw = _raw_plan({"place": "the engine", **(stage_extra or {})})
+def _doc(stage_extra=None, record=None, *, order=None, drop=()):
+    """A one-stage plan carrying a stage description (and, on a `order`, in the new form)."""
+    raw = _raw_plan({"place": "the engine", "binding_conditions": [], **(stage_extra or {})},
+                    order=order, drop=drop)
     if record is not None:
         raw["meta"].update(record)
     return parse_plan(raw)
+
+
+def _new_form(stage_extra=None, record=None, *, drop=()):
+    return _doc(stage_extra, record, order=TWO_SIDED_ORDER, drop=drop)
 
 
 def _problems(doc, ctx=None):
@@ -298,7 +389,7 @@ def _problems(doc, ctx=None):
 
 
 def _ctx(**kw):
-    return StageOrderContext(expected_stage=2, binding_conditions=BINDING, thresholds=TIGHT, **kw)
+    return StageOrderContext(expected_stage=2, binding_conditions=BINDING, **kw)
 
 
 def _record(**edits):
@@ -314,40 +405,95 @@ def _record(**edits):
 
 
 def test_a_described_stage_that_states_a_method_is_refused():
-    problems = _problems(_doc({"means": "Edit", "method": "split it"}))
-    assert any("stage 1 states a place" in p and "no means, method" in p for p in problems), problems
+    problems = _problems(_new_form({"means": "Edit", "method": "split it"}))
+    assert any("stage 1 is a stage description and carries no means, method" in p
+               for p in problems), problems
 
 
 def test_a_described_stage_that_states_conditions_is_refused():
-    problems = _problems(_doc({"conditions": "- the module imports [risk: unverified]"}))
-    assert any("no conditions" in p for p in problems), problems
+    problems = _problems(_new_form({"conditions": "- the module imports [risk: unverified]"}))
+    assert any("carries no conditions" in p for p in problems), problems
 
 
 def test_a_description_alone_draws_no_stage_order_violation():
-    assert submission._stage_order_violations(_doc(), _ctx()) == []
+    assert submission._stage_order_violations(_new_form(), _ctx()) == []
 
 
 def test_an_old_form_plan_draws_no_stage_order_violation():
     old_form = parse_plan(_raw_plan({"means": "Edit", "method": "m"}))
-    assert submission._stage_order_violations(old_form, _ctx(record_exists=lambda i: False)) == []
+    assert submission._stage_order_violations(old_form, _ctx()) == []
+    assert submission._stage_order_violations(_doc({"means": "Edit", "method": "m"}), _ctx()) == []
+
+
+_MISSING_PARTS = [
+    ("product", {"expected_result_image": " "}, (), "states no product"),
+    ("place", {"place": " "}, (), "states no place"),
+    ("place left out", {}, ("place",), "states no place"),
+    ("acceptance checks", {"done_criterion": " "}, (), "states no acceptance checks"),
+    ("binding conditions", {}, ("binding_conditions",), "states no binding conditions"),
+]
+
+
+@pytest.mark.parametrize("name, extra, drop, expected", _MISSING_PARTS,
+                         ids=[c[0] for c in _MISSING_PARTS])
+def test_a_missing_part_of_a_stage_description_is_refused(name, extra, drop, expected):
+    problems = submission._stage_order_violations(_new_form(extra, drop=drop), _ctx())
+    assert [p for p in problems if expected in p] and len(problems) == 1, problems
+
+
+def test_the_form_of_a_stage_is_the_orders_choice_not_the_places():
+    """A stage that names no place is still a stage description on a two-sided order, and a stage
+    that names one is not on an order-less plan."""
+    problems = submission._stage_order_violations(_new_form(drop=("place",)), _ctx())
+    assert any("states no place" in p for p in problems), problems
+    assert submission._stage_order_violations(_doc(drop=("place",)), _ctx()) == []
+    assert submission._stage_order_violations(_doc({"place": "the engine"}), _ctx()) == []
+
+
+def test_an_empty_binding_condition_list_is_a_statement_not_a_missing_part():
+    assert submission._stage_order_violations(_new_form({"binding_conditions": []}), _ctx()) == []
+    assert submission._stage_order_violations(
+        _new_form({"binding_conditions": [dict(c) for c in BINDING]}), _ctx()) == []
 
 
 def test_below_threshold_stage_needs_only_description():
-    doc = _doc({"declared_size": 5, "expected_minutes": 2})
-    assert submission._stage_order_violations(doc, _ctx(record_exists=lambda i: False)) == []
+    """A stage below the size line needs the stage description and nothing of the executor's
+    record: no record, no means, no estimate, whatever the verb sequence."""
+    small = {"declared_size": 5, "expected_minutes": 2, "size_flags": []}
+    doc = _new_form(small)
+    assert not plan.stage_above_threshold(doc.stages[0], Thresholds())
+    assert _problems(doc) == []
+    assert _problems(doc, _ctx()) == []
+
+    refused = _problems(_new_form(small, drop=("place",)), _ctx())
+    assert any("states no place" in p for p in refused), refused
 
 
-def test_an_above_threshold_stage_needs_a_record_before_the_parent_is_approved():
-    doc = _doc({"declared_size": 400})
-    problems = submission._stage_order_violations(doc, _ctx(record_exists=lambda i: False))
-    assert any("stage 1 is above the size line and has no sub-plan record" in p for p in problems)
-    assert submission._stage_order_violations(doc, _ctx(record_exists=lambda i: True)) == []
-    assert submission._stage_order_violations(doc, _ctx()) == []  # the submit seam does not ask yet
+def test_a_new_form_stage_declaring_no_size_is_above_the_line_at_submission():
+    stage = _new_form().stages[0]
+    assert plan.stage_above_threshold(stage, Thresholds())
+    assert not plan.stage_above_threshold(_new_form({"declared_size": 5}).stages[0], Thresholds())
 
 
-def test_a_lazy_stage_decides_its_sub_plan_later():
-    doc = _doc({"declared_size": 400, "lazy": True})
-    assert submission._stage_order_violations(doc, _ctx(record_exists=lambda i: False)) == []
+def test_an_unknown_size_flag_is_refused_at_submission():
+    problems = submission._stage_order_violations(
+        _new_form({"declared_size": 5, "size_flags": ["architectural", "huge"]}), _ctx())
+    assert len(problems) == 1 and "size flag(s) 'huge'" in problems[0], problems
+    assert submission._stage_order_violations(
+        _new_form({"declared_size": 5, "size_flags": ["Architectural", "new dependency"]}),
+        _ctx()) == []
+
+
+def test_the_record_presence_rule_is_not_asked_before_approval():
+    """No verb makes a record before a stage runs, so an approve that asked for one would refuse
+    every plan: a stage above the line, lazy or not, draws nothing here."""
+    for extra in ({"declared_size": 400}, {"declared_size": 400, "lazy": True}, {}):
+        assert submission._stage_order_violations(_new_form(extra), _ctx()) == []
+
+
+def test_a_lazy_stage_is_the_one_whose_record_is_decided_later_in_a_plan_too():
+    assert sub_plan.is_decided_later(_new_form({"lazy": True}).stages[0])
+    assert not sub_plan.is_decided_later(_new_form().stages[0])
 
 
 def test_a_complete_record_is_clean():
@@ -394,15 +540,54 @@ def test_compared_plans_need_an_entry_with_its_departure_or_a_resolving_search()
                                 "search_id": "S1"}), resolves))
 
 
-def test_every_binding_condition_is_kept_or_released_by_its_setter():
-    two = (*BINDING, {"id": "B2", "text": "stay in the worktree", "set_by": "user"})
-    ctx = StageOrderContext(expected_stage=2, binding_conditions=two, thresholds=TIGHT)
+TWO_CONDITIONS = (*BINDING, {"id": "B2", "text": "stay in the worktree", "set_by": "user"})
+
+
+def test_a_condition_released_at_the_setter_level_is_not_owed():
+    ctx = StageOrderContext(expected_stage=2, binding_conditions=TWO_CONDITIONS,
+                            released=frozenset({"B2"}))
+    assert _record_problems(_record(), ctx) == []
+    unreleased = StageOrderContext(expected_stage=2, binding_conditions=TWO_CONDITIONS)
     assert any("does not say how it keeps binding condition 'B2'" in p
-               for p in _record_problems(_record(), ctx))
-    released = _record(setter_decisions=[
+               for p in _record_problems(_record(), unreleased))
+
+
+def test_the_carrying_record_cannot_release_the_condition_it_owes():
+    """A plan does not release what was set above it: its own `withdrawn` decision leaves the
+    condition owed."""
+    ctx = StageOrderContext(expected_stage=2, binding_conditions=TWO_CONDITIONS)
+    own_release = _record(setter_decisions=[
         {"condition": "B1", "value": "kept", "setter": "user", "decided_by": "user"},
         {"condition": "B2", "value": "withdrawn", "setter": "user", "decided_by": "user"}])
-    assert _record_problems(released, ctx) == []
+    assert any("does not say how it keeps binding condition 'B2'" in p
+               for p in _record_problems(own_release, ctx))
+
+
+def _setter_record(*decisions) -> dict:
+    return sub_plan.SubPlanRecord(
+        stage=1, setter_decisions=[sub_plan.SetterDecision(c, v, "user", "user")
+                                   for c, v in decisions]).to_dict()
+
+
+def test_the_release_is_read_from_the_record_one_level_above_the_carrying_plan():
+    released = cli_common._setter_level_released
+    nested = _session("s", plan_stack=[_frame(1), _frame(3)],
+                      sub_plan_records={"0:1": _setter_record(("B2", "withdrawn")),
+                                        "1:3": _setter_record(("B9", "withdrawn"))})
+    assert released(nested, None) == frozenset({"B2"}), "the frame below, not the carrying one"
+
+    under_contour = _session(
+        "s", plan_stack=[_frame(3)], parent_link={"parent_session": "p", "stage_index": 1},
+        sub_plan_records={"1": _setter_record(("B3", "changed"), ("B4", "kept"))})
+    assert released(under_contour, None) == frozenset({"B3"}), "kept releases nothing"
+
+    parent = _session("p", parent_link={"parent_session": "g", "stage_index": 4},
+                      sub_plan_records={"4": _setter_record(("B5", "withdrawn"))})
+    contour = _session("c", parent_link={"parent_session": "p", "stage_index": 2})
+    assert released(contour, parent) == frozenset({"B5"})
+
+    assert released(_session("s", plan_stack=[_frame(1)]), None) == frozenset(), "root level"
+    assert released(_session("s"), None) == frozenset()
 
 
 def test_a_record_names_only_the_conditions_the_stage_carries():
@@ -436,7 +621,7 @@ def _described_parent(store, sid):
         means=Means(means="", method=""), actor=Actor(executor="spawn:developer"),
         criterion=Criterion(criterion_type="measurable", done_criterion="crit"),
         outcome=Outcome(status=StageStatus.ACTIVE.value), place="the engine",
-        binding_conditions=[dict(c) for c in BINDING])
+        binding_conditions=[dict(c) for c in BINDING], binding_conditions_stated=True)
     state = SessionState(
         session_id=sid, task_id="parent-task", goal="g", overall_done_criterion="d",
         weight_class=WeightClass.SUBSTANTIVE.value, route=Route.SPAWN.value,
@@ -463,7 +648,7 @@ def test_a_frame_and_a_child_contour_judge_one_record_by_one_definition(store):
                        parent_link={"parent_session": "p", "stage_index": 1, "norm": _NORM})
     flawed = _doc(record=_record(stage=1, how_kept=[], estimate={"minutes": 9, "author": "e"}))
     by_frame = _problems(flawed, cli_common._stage_order_context(framed))
-    by_contour = _problems(flawed, cli_common._stage_order_context(contour))
+    by_contour = _problems(flawed, cli_common._stage_order_context(contour, store=store))
     assert by_frame == by_contour and len(by_frame) == 2, (by_frame, by_contour)
     assert cli_common._stage_order_context(framed).expected_stage == 1
     assert cli_common._stage_order_context(contour).expected_stage == 1
@@ -477,14 +662,70 @@ def test_the_context_resolves_searches_in_the_carrying_session():
     assert ctx.binding_conditions is None
 
 
-def test_the_approve_context_finds_a_record_in_the_frame_and_in_a_linked_contour(store):
+def _staged(*edges):
+    """Parent-plan stages 1..n, `edges` the `(stage, depends_on)` pairs."""
+    deps = dict(edges)
+    return [_stage(i, supplies=[plan_supply(on) for on in deps.get(i, ())]) for i in range(1, 5)]
+
+
+def plan_supply(on):
+    from agentctl.state import Supply
+
+    return Supply(on=on)
+
+
+_MEANS_RECORD = {"conditions": "- the engine exists [means: stage {n}]"}
+
+
+def _means_problems(ctx, n):
+    edits = {"conditions": _MEANS_RECORD["conditions"].format(n=n)}
+    return [p for p in _record_problems(_record(**edits), ctx) if "depends_on ancestor" in p]
+
+
+def test_a_means_mark_must_name_a_real_ancestor_of_the_parent_stage():
+    ctx = StageOrderContext(expected_stage=2, parent_ancestors=frozenset({1}))
+    assert _means_problems(ctx, 1) == []
+    assert _means_problems(ctx, 3), "stage 3 exists in the parent plan but is not an ancestor"
+    assert _means_problems(ctx, 2), "the stage itself is no ancestor of itself"
+    unknown = StageOrderContext(expected_stage=2)
+    assert _means_problems(unknown, 3) == [], "an unknown carrier skips the ancestor check"
+
+
+def test_the_context_reads_the_ancestors_of_the_parent_stage_from_a_frame_and_a_contour(store):
     parent = _described_parent(store, "p")
+    parent.stages = _staged((2, [1]), (3, [2]), (4, []))
+    parent.stages[0].outcome = Outcome(status=StageStatus.ACTIVE.value)
+    parent.current_stage = 3
+    store.save(parent)
+    cli.cmd_push_subplan(Namespace(session="p", plan="/tmp/child.toml", task=None,
+                                   originating_stage=3), store=store)
+    framed = cli_common._stage_order_context(store.load("p"))
+    assert framed.expected_stage == 3 and framed.parent_ancestors == frozenset({1, 2})
+
+    upper = _described_parent(store, "q")
+    upper.stages = _staged((2, [1]), (3, [2]), (4, []))
+    store.save(upper)
+    contour = _session("child", parent_link={"parent_session": "q", "stage_index": 3, "norm": {}})
+    by_contour = cli_common._stage_order_context(contour, store=store)
+    assert by_contour.parent_ancestors == frozenset({1, 2})
+    assert cli_common._stage_order_context(contour).parent_ancestors is None, "no store, unknown"
+
+
+def test_the_context_names_the_released_conditions_of_the_level_above(store):
+    parent = _described_parent(store, "p")
+    parent.parent_link = {"parent_session": "g", "stage_index": 4}
+    parent.sub_plan_records["4"] = _setter_record(("B1", "withdrawn"))
+    store.save(parent)
     child = _session("child", parent_link={"parent_session": "p", "stage_index": 1, "norm": {}})
-    sub_plan.store(child, sub_plan.SubPlanRecord(stage=1, method="m"))
-    store.save(child)
-    ctx = cli_common._stage_order_context(parent, store=store, require_records=True)
-    assert ctx.record_exists(1) and not ctx.record_exists(2)
-    assert cli_common._stage_order_context(parent).record_exists is None
+    assert cli_common._stage_order_context(child, store=store).released == frozenset({"B1"})
+    assert cli_common._stage_order_context(child).released == frozenset(), "no store, nothing read"
+
+    cli.cmd_push_subplan(Namespace(session="p", plan="/tmp/child.toml", task=None,
+                                   originating_stage=1), store=store)
+    framed = store.load("p")
+    assert cli_common._stage_order_context(framed, store=store).released == frozenset({"B1"})
+    framed.parent_link = None
+    assert cli_common._stage_order_context(framed, store=store).released == frozenset(), "root level"
 
 
 _RECORD_HEAD = """
@@ -535,6 +776,21 @@ def _walk_to_submit(store, tmp_path, record_toml):
     return cli.cmd_submit_plan(Namespace(session="w", plan=str(plan)), store=store)
 
 
+def _walk_to_submit_in_contour(store, tmp_path, record_toml):
+    """The child session of a parent stage (a linked contour, no pushed frame) submits its plan."""
+    from test_submit_plan_surfaces import _session as _classified, _write_plan
+
+    _described_parent(store, "p")
+    _classified(store, "c")
+    child = store.load("c")
+    child.parent_link = {"parent_session": "p", "stage_index": 1, "norm": _NORM}
+    child.order_searches = [{"id": "S1"}]
+    store.save(child)
+    plan_file = _write_plan(tmp_path, tier="small")
+    plan_file.write_text(plan_file.read_text(encoding="utf-8") + record_toml, encoding="utf-8")
+    return cli.cmd_submit_plan(Namespace(session="c", plan=str(plan_file)), store=store)
+
+
 def _stage_order_problems(directive) -> list[str]:
     return [p for p in directive.data.get("problems", []) if "sub-plan record" in p]
 
@@ -552,7 +808,11 @@ def test_the_whole_verb_sequence_refuses_a_missing_how_kept_and_then_accepts_the
                     encoding="utf-8")
     fixed = cli.cmd_submit_plan(Namespace(session="w", plan=str(plan)), store=store)
     assert fixed.ok, fixed.data.get("problems")
-    assert sub_plan.read(store.load("w"), 1).how_kept[0].condition == "B1"
+    stored = sub_plan.SubPlanRecord.from_dict(store.load("w").sub_plan_records["0:1"])
+    assert stored.how_kept[0].condition == "B1"
+
+    approved = cli.cmd_approve(Namespace(session="w", by="user"), store=store)
+    assert approved.ok, "approve asks for no record the verbs have not made before approval"
 
 
 def test_a_good_record_is_stored_at_submit_with_all_its_elements_and_its_building_interval(
@@ -560,7 +820,7 @@ def test_a_good_record_is_stored_at_submit_with_all_its_elements_and_its_buildin
     accepted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT)
     assert accepted.ok, accepted.data.get("problems")
     state = store.load("w")
-    record = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["1"])
+    record = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"])
     assert record.means and record.method and record.procedure
     assert record.estimate.author == "executor" and record.estimate.confirmer == "parent"
     assert record.compared_plans.none and record.compared_plans.search_id == "S1"
@@ -598,101 +858,138 @@ PLACE_TEXT = "the release engine, relied on by stage 2"
 HOW_BUILT_TEXT = "the release command is a shell script"
 
 
-def _described_doc(tmp_path, *, two_sided=True, name="plan", **fields):
-    doc = load_plan(_plan_file(tmp_path, two_sided=two_sided, name=name))
-    stage = doc.stages[0]
-    stage.place = fields.pop("place", PLACE_TEXT)
-    stage.subject.result = fields.pop("result", stage.subject.result)
-    for key, value in fields.items():
-        setattr(stage, key, value)
-    return doc
+def _described_doc(order=TWO_SIDED_ORDER, **stage_extra):
+    """A one-stage plan whose stage is a description: its prose fields are `stage_extra`'s."""
+    return _doc({"place": PLACE_TEXT, **stage_extra}, order=order)
 
 
-def test_description_method_field_refused():
+def _plan_review_args(path="plan.toml", scope=""):
+    return Namespace(verdict="pass", scope=scope, target=str(path))
+
+
+def _plan_pass(doc, judge, monkeypatch, *, scope="", state=None):
+    """What the plan review's `pass` does with `doc` — the production path, with the plan loaded
+    from memory instead of from a file."""
+    monkeypatch.setattr(cli_review, "load_plan", lambda target: doc)
+    state = state or _session("s", plan_path="plan.toml")
+    return cli_review._method_statement_plan_pass_refusal(_plan_review_args(scope=scope), state, judge)
+
+
+_SUB_PLAN_FIELDS = [
+    ("means", {"means": "use the shell script tool"}),
+    ("method", {"method": "write a shell script"}),
+    ("procedure", {"procedure": "1. write it 2. run it"}),
+    ("conditions", {"conditions": "- the host is slow [risk: unverified host speed]"}),
+]
+
+
+@pytest.mark.parametrize("field, extra", _SUB_PLAN_FIELDS, ids=[f for f, _ in _SUB_PLAN_FIELDS])
+def test_description_method_field_refused(field, extra, monkeypatch):
     judge = Judge(answering(M.METHOD))
-    problems = _problems(_doc({"method": "write a shell script", "procedure": "1. do it"}))
-    assert any("stage 1 states a place" in p and "method" in p and "procedure" in p
-               for p in problems), problems
-    assert judge.calls == []
+    doc = _described_doc(**extra)
+
+    problems = submission._stage_order_violations(doc, _ctx())
+    assert [p for p in problems if f"carries no {field}" in p or f", {field}" in p], problems
+
+    _plan_pass(doc, judge, monkeypatch)
+    assert judge.places == {M.STAGE_DESCRIPTION}, "the judge read the description"
+    (text,) = extra.values()
+    assert not any(text in judged for judged in judge.texts)
 
 
-def test_description_binding_conditions_not_judged(tmp_path):
-    doc = _described_doc(tmp_path, binding_conditions=[
+def test_description_binding_conditions_not_judged(monkeypatch):
+    doc = _described_doc(binding_conditions=[
         {"id": "B1", "text": "the build host runs Linux", "set_by": "user"}])
     judge = Judge(answering(M.METHOD))
 
-    render.stage_description_site_defects(doc, 1, runner=judge)
+    _plan_pass(doc, judge, monkeypatch)
 
     assert judge.calls and judge.places == {M.STAGE_DESCRIPTION}
     assert not any("build host runs Linux" in text for text in judge.texts)
 
 
-def test_description_how_built_is_defect(tmp_path):
-    doc = _described_doc(tmp_path, result=HOW_BUILT_TEXT)
+def test_description_how_built_is_defect(monkeypatch):
+    doc = _described_doc(expected_result_image=HOW_BUILT_TEXT)
     judge = Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION, containing=HOW_BUILT_TEXT))
 
-    lines = render.stage_description_site_defects(doc, 1, runner=judge)
+    refusal = _plan_pass(doc, judge, monkeypatch)
 
-    assert len(lines) == 1, lines
-    assert "stage 1 result (stage description)" in lines[0]
-    assert "states how the product is built" in lines[0]
+    assert refusal is not None and refusal.action == "fix_plan"
+    (line,) = refusal.data["problems"]
+    assert "stage 1 result (stage description)" in line
+    assert "states how the product is built" in line
 
 
-def test_description_extra_field_how_built_reported(tmp_path):
-    doc = _described_doc(tmp_path, place=HOW_BUILT_TEXT)
+_EXTRA_FIELDS = ("place", "invariants", "knowledge", "material", "preconditions")
+
+
+@pytest.mark.parametrize("field", _EXTRA_FIELDS)
+def test_description_extra_field_how_built_reported(field, monkeypatch):
+    doc = _described_doc(**{field: HOW_BUILT_TEXT})
     judge = Judge(answering(M.HOW_BUILT, place=M.STAGE_DESCRIPTION, containing=HOW_BUILT_TEXT))
 
-    lines = render.stage_description_site_defects(doc, 1, runner=judge)
+    refusal = _plan_pass(doc, judge, monkeypatch)
 
-    assert len(lines) == 1 and "stage 1 place (stage description)" in lines[0], lines
-    assert "states how the product is built" in lines[0]
+    assert refusal is not None, field
+    (line,) = refusal.data["problems"]
+    assert f"stage 1 {field} (stage description)" in line, line
+    assert "states how the product is built" in line
 
 
-def test_description_old_form_not_judged(tmp_path):
-    doc = _described_doc(tmp_path, two_sided=False)
+def test_description_old_form_not_judged(monkeypatch):
+    doc = _described_doc(order=AGREED_OLD_FORM_ORDER, method="write a shell script")
+    assert not plan.is_two_sided(doc.meta.order) and doc.meta.order is not None
     judge = Judge(answering(M.METHOD))
 
+    assert _plan_pass(doc, judge, monkeypatch) is None
     assert render.stage_description_site_defects(doc, 1, runner=judge) == []
     assert M.plan_statements(doc) == []
     assert judge.calls == []
 
 
-def test_description_could_not_read_is_defect(tmp_path):
-    doc = _described_doc(tmp_path)
+def test_description_could_not_read_is_defect(monkeypatch):
+    doc = _described_doc()
     judge = Judge(fail=True)
 
     findings = render.stage_description_site_findings(doc, 1, runner=judge)
-
     assert len(findings) == 1 and findings[0].verdict == M.COULD_NOT_READ
     assert len(judge.calls) == 1
     assert "the judge did not answer" in M.defect_line(findings[0])
 
+    refusal = _plan_pass(doc, Judge(fail=True), monkeypatch)
+    assert refusal is not None and refusal.action == "fix_plan"
+    assert "did not answer" in " ".join(refusal.data["problems"])
 
-def test_means_condition_not_judged(tmp_path):
-    doc = _described_doc(tmp_path, conditions="- a means condition [risk: the build host is slow]")
-    doc.stages[0].means.method = "use the shell script"
+
+def test_means_condition_not_judged(monkeypatch):
+    marked = "- the host is slow [risk: unverified host speed]"
+    record = _record(conditions=marked, means="use the shell script")
+    doc = _new_form(record=record)
+    assert submission._stage_order_violations(doc, _ctx()) == [], "a securing-marked record is clean"
+    unmarked = _new_form(record=_record(conditions="- the host is slow"))
+    assert any("unmarked condition" in p
+               for p in submission._stage_order_violations(unmarked, _ctx()))
+
+    stage = doc.stages[0]
+    stage.conditions, stage.means.method = marked, "use the shell script"
     judge = Judge(answering(M.METHOD))
-
-    render.stage_description_site_defects(doc, 1, runner=judge)
+    _plan_pass(doc, judge, monkeypatch)
 
     assert judge.calls
-    for text in ("a means condition", "the build host is slow", "use the shell script"):
+    for text in ("the host is slow", "unverified host speed", "use the shell script",
+                 "split the module"):
         assert not any(text in judged for judged in judge.texts), text
 
 
-def test_place_is_one_of_the_statements_of_the_description(tmp_path):
-    doc = _described_doc(tmp_path)
+def test_place_is_one_of_the_statements_of_the_description():
+    doc = _described_doc()
     labels = {s.label: s for s in M.description_statements(doc, 1)}
     assert labels["stage 1 place"].text == PLACE_TEXT
     assert labels["stage 1 place"].place == M.STAGE_DESCRIPTION
 
 
-def _plan_review_args(path):
-    return Namespace(verdict="pass", scope="", target=str(path))
-
-
-def test_description_every_prose_field_judged(tmp_path):
-    doc = _described_doc(tmp_path, knowledge="what is known", preconditions="stage 0 done")
+def test_description_every_prose_field_judged():
+    doc = _described_doc(knowledge="what is known", preconditions="stage 0 done")
     statements = M.description_statements(doc, 1)
     labels = [s.label for s in statements]
     for field in ("title", "place", "result", "material", "invariants", "knowledge",
@@ -702,8 +999,13 @@ def test_description_every_prose_field_judged(tmp_path):
     assert not any("binding condition" in label for label in labels)
 
 
-def test_description_no_order_not_judged(tmp_path, monkeypatch):
-    _assert_flow_makes_no_judge_call(tmp_path, monkeypatch, "no-order")
+def test_description_no_order_not_judged(monkeypatch):
+    doc = parse_plan(_raw_plan({"place": PLACE_TEXT, "method": "write a shell script"}))
+    assert doc.meta.order is None
+    judge = Judge(answering(M.METHOD))
+
+    assert _plan_pass(doc, judge, monkeypatch) is None
+    assert judge.calls == []
 
 
 def test_description_dry_run_not_judged(store, venued_fixtures_dir, tmp_path):
@@ -716,25 +1018,29 @@ def test_description_dry_run_not_judged(store, venued_fixtures_dir, tmp_path):
     assert judge.calls == [] and not M.cache_dir().exists()
 
 
-def test_description_child_contour_not_judged(tmp_path, monkeypatch):
-    _assert_flow_makes_no_judge_call(tmp_path, monkeypatch, "child-contour")
+_CONTOUR = {"parent_session": "p", "stage_index": 1, "norm": _NORM}
+_SUB_PLAN_TEXT = {"means": "use the shell script tool", "method": "write a shell script",
+                  "procedure": "1. write it 2. run it",
+                  "conditions": "- the host is slow [risk: unverified host speed]"}
 
 
-def _assert_flow_makes_no_judge_call(tmp_path, monkeypatch, flow):
-    path = _plan_file(tmp_path, two_sided=False)
-    assert not plan.is_two_sided(load_plan(path).meta.order)
-    if flow == "no-order":
-        orderless = parse_plan(_raw_plan({"place": PLACE_TEXT}))
-        assert orderless.meta.order is None
-        monkeypatch.setattr(cli_review, "load_plan", lambda target: orderless)
-    parent_link = ({"parent_session": "p", "stage_index": 1, "norm": {}}
-                   if flow == "child-contour" else None)
-    state = _session("s", plan_path=str(path), parent_link=parent_link)
+def test_description_child_contour_not_judged(monkeypatch):
+    """A child contour is no exemption: a plan on a new-form order has its description read there,
+    and only its description — the executor's record (means, method, procedure, conditions) never.
+    A plan on an old-form order is not judged in a contour either."""
+    state = _session("c", plan_path="plan.toml", parent_link=_CONTOUR)
     judge = Judge(answering(M.METHOD))
 
-    assert cli_review._method_statement_plan_pass_refusal(
-        _plan_review_args(path), state, judge) is None
-    assert judge.calls == []
+    refusal = _plan_pass(_described_doc(**_SUB_PLAN_TEXT), judge, monkeypatch, state=state)
+
+    assert refusal is not None and judge.places == {M.STAGE_DESCRIPTION}
+    for text in _SUB_PLAN_TEXT.values():
+        assert not any(text in judged for judged in judge.texts), text
+
+    old_form = Judge(answering(M.METHOD))
+    assert _plan_pass(_described_doc(order=AGREED_OLD_FORM_ORDER, **_SUB_PLAN_TEXT),
+                      old_form, monkeypatch, state=state) is None
+    assert old_form.calls == []
 
 
 def test_the_submit_flow_makes_no_judge_call(store, tmp_path, monkeypatch):
@@ -744,6 +1050,42 @@ def test_the_submit_flow_makes_no_judge_call(store, tmp_path, monkeypatch):
     monkeypatch.setattr(M, "site_defects", forbidden)
     accepted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT)
     assert accepted.ok, accepted.data.get("problems")
+
+
+def test_the_submit_flow_in_a_child_contour_makes_no_judge_call(store, tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "site_defects", lambda *a, **k: pytest.fail("the judge was called"))
+    refused = _walk_to_submit_in_contour(store, tmp_path, _RECORD_HEAD)
+    assert refused.ok is False
+    assert any("does not say how it keeps binding condition 'B1'" in p
+               for p in _stage_order_problems(refused)), refused.data
+
+
+def test_a_good_record_goes_through_the_child_contour(store, tmp_path):
+    accepted = _walk_to_submit_in_contour(store, tmp_path, _RECORD_HEAD + _HOW_KEPT)
+    assert accepted.ok, accepted.data.get("problems")
+    state = store.load("c")
+    assert list(state.sub_plan_records) == ["1"], "a contour record is keyed by its stage alone"
+    record = sub_plan.read(store.load("p"), 1, store)
+    assert record.method and [h.condition for h in record.how_kept] == ["B1"]
+    assert record.estimate.author == "executor" and record.estimate.confirmer == "parent"
+
+
+def test_a_stage_plan_submitted_to_an_order_not_yet_agreed_is_still_refused(store, tmp_path):
+    from test_submit_plan_surfaces import _session as _classified, _write_plan
+
+    _classified(store, "o")
+    state = store.load("o")
+    state.order_agreement_armed = True
+    store.save(state)
+    plan_file = _write_plan(tmp_path, tier="small")
+    plan_file.write_text(plan_file.read_text(encoding="utf-8") + _RECORD_HEAD + _HOW_KEPT,
+                         encoding="utf-8")
+
+    refused = cli.cmd_submit_plan(Namespace(session="o", plan=str(plan_file)), store=store)
+
+    assert refused.ok is False and refused.action == "fix_plan"
+    assert any("no agreed order understanding" in b for b in refused.data["blockers"])
+    assert store.load("o").sub_plan_records == {}
 
 
 def test_the_plan_review_pass_refuses_a_described_stage_the_judge_cannot_read(tmp_path):

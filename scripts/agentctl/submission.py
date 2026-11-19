@@ -65,7 +65,7 @@ from . import conditions_securing, exempt_paths, grant_shadow, sub_plan
 from . import grants as _grants
 from .conditions import judge_restatement, restatement_prefilter
 from .plan import (
-    _declared_absolute_venue, _remote_head_for, stage_above_threshold, venue_declaration_blockers,
+    _declared_absolute_venue, _remote_head_for, is_two_sided, venue_declaration_blockers,
 )
 from .plan_resources import RESOURCE_REQUEST_KINDS, plan_time_resource_set, uncovered_request_entries
 from .procedure import collapse_prefilter, judge_collapse
@@ -100,6 +100,8 @@ _SUBSTANTIVE_SUBMISSION_FIELDS = (
     ("means.procedure", "procedure", None),
 )
 
+# `knowledge` is what the declared method over the declared means must already know (see
+# `_WHY`), so on a stage description, which declares neither, it is the executor's too.
 _EXECUTOR_OWNED_PATHS = frozenset({"means.method", "means.procedure", "knowledge"})
 
 _WHY = {
@@ -490,7 +492,9 @@ def _order_violations(meta) -> list[str]:
         out.append(_order_malformed("coverage"))
     out.extend(_requirement_violations(order))
     declared = [r.id for r in order.requirements if r.id]
-    uncovered = sorted({r.id for r in order.requirements if r.id and not order.coverage.get(r.id)})
+    if order.customer_side is not None:
+        declared.extend(c.id for c in order.customer_side.checks if c.id)
+    uncovered = sorted({i for i in declared if not order.coverage.get(i)})
     if uncovered:
         out.append(
             f"[meta.order.coverage] says nothing about {', '.join(uncovered)}. Every "
@@ -502,7 +506,7 @@ def _order_violations(meta) -> list[str]:
     if stray:
         out.append(
             f"[meta.order.coverage] names {', '.join(stray)}, which no requirement "
-            f"declares. A key matching no id covers nothing — most often a requirement id "
+            f"or acceptance check declares. A key matching no id covers nothing — most often a requirement id "
             f"renamed on one side only, which leaves the real requirement uncovered while "
             f"the map still looks full"
         )
@@ -1333,23 +1337,17 @@ class StageOrderContext:
 
     `expected_stage` is the parent stage this plan carries the sub-plan of (the frame's
     originating stage, the child contour's handoff stage); `binding_conditions` are that
-    stage's, read from the carrier; `search_resolver` tells whether a search id resolves in
-    the session that carries the record; `record_exists` (given only where a parent plan is
-    approved) tells whether a stage already has a record; `thresholds` draw the size line.
-    Each field left None skips the check that needs it."""
+    stage's, read from the carrier; `released` are the ids of those conditions the setter
+    level's own record released (never the carrying record: a plan cannot release a condition
+    set above it); `parent_ancestors` are the transitive `depends_on` ancestors of the parent
+    stage in the parent plan, which a `[means: stage N]` mark on the record's conditions must
+    name; `search_resolver` tells whether a search id resolves in the session that carries the
+    record. Each field left None skips the check that needs it."""
     expected_stage: int | None = None
     binding_conditions: tuple[dict, ...] | None = None
+    released: frozenset[str] = frozenset()
+    parent_ancestors: frozenset[int] | None = None
     search_resolver: Callable[[str], bool] | None = None
-    record_exists: Callable[[int], bool] | None = None
-    thresholds: object | None = None
-
-
-class _AnyStage(frozenset):
-    """A stage-ancestor set that holds every stage: the sub-plan's `[means: stage N]` mark names
-    a stage of the parent plan, which the carrying plan does not hold."""
-
-    def __contains__(self, item) -> bool:
-        return True
 
 
 @dataclass
@@ -1358,44 +1356,63 @@ class _RecordedConditions:
     conditions: str
 
 
+_STAGE_DESCRIPTION_PARTS = (
+    ("product", lambda s: s.subject.result, "`expected_result_image`"),
+    ("place", lambda s: s.place, "`place`"),
+    ("acceptance checks", lambda s: s.criterion.done_criterion, "`done_criterion`"),
+)
+
+
 def _stage_description_violations(doc, ctx: StageOrderContext) -> list[str]:
-    """Check 4: a stage that states a place is a description and carries no means, method,
-    procedure or conditions; and check 11 (parent side): an above-threshold stage with no
-    sub-plan record cannot be approved, unless its sub-plan is decided later (`lazy`)."""
+    """Check 4: every stage of a plan on a two-sided order is a stage description. The order
+    chooses the form, never a field of the stage: each of its parts (product, place,
+    acceptance checks, binding conditions) must be stated and not blank, and it carries no
+    means, method, procedure or conditions. A size flag outside `classify.SIZE_FLAGS` is
+    refused: the predicate would read it as no signal."""
+    from .classify import SIZE_FLAGS
+
     out: list[str] = []
+    if not is_two_sided(doc.meta.order):
+        return out
     for stage in doc.stages:
-        if stage.place is None:
-            continue
+        for name, read, key in _STAGE_DESCRIPTION_PARTS:
+            value = read(stage)
+            if not (value and str(value).strip()):
+                out.append(f"stage {stage.index} is a stage description and states no {name} ({key})")
+        if not stage.binding_conditions_stated:
+            out.append(f"stage {stage.index} is a stage description and states no binding "
+                       f"conditions (`binding_conditions`; an empty list says there are none)")
         carried = [name for name, value in (
             ("means", stage.means.means), ("method", stage.means.method),
             ("procedure", stage.means.procedure), ("conditions", stage.conditions),
         ) if value and str(value).strip()]
         if carried:
             out.append(
-                f"stage {stage.index} states a place, so it is a stage description and carries "
+                f"stage {stage.index} is a stage description and carries "
                 f"no {', '.join(carried)}: those belong to the executor's sub-plan record "
                 f"(`[meta.sub_plan]` of the plan that builds the stage), not to the order"
             )
-        if (ctx.record_exists is not None and ctx.thresholds is not None
-                and not sub_plan.is_decided_later(stage)
-                and stage_above_threshold(stage, ctx.thresholds)
-                and not ctx.record_exists(stage.index)):
+        unknown = [f for f in stage.size_flags if str(f).strip().lower() not in SIZE_FLAGS]
+        if unknown:
             out.append(
-                f"stage {stage.index} is above the size line and has no sub-plan record: "
-                f"record it (`[meta.sub_plan]` in the plan that builds it) before the plan is "
-                f"approved, or mark the stage `lazy` to decide its sub-plan when it is reached"
+                f"stage {stage.index} names size flag(s) {', '.join(map(repr, unknown))}, which "
+                f"are not size flags; they are one of {', '.join(sorted(SIZE_FLAGS))}"
             )
     return out
 
 
-def _sub_plan_text_violations(record, prefix: str) -> list[str]:
+def _sub_plan_text_violations(record, prefix: str, ctx: StageOrderContext) -> list[str]:
     out = [f"{prefix} has a malformed part: {part}" for part in record.malformed]
     for name in ("means", "method", "procedure"):
         if not getattr(record, name).strip():
             out.append(f"{prefix} states no {name}")
     if record.conditions.strip():
         shim = _RecordedConditions(record.stage, record.conditions)
-        out.extend(conditions_securing.securing_problems(shim, _AnyStage()))
+        ancestors = ctx.parent_ancestors
+        if ancestors is None:
+            ancestors = frozenset(n for c in conditions_securing.parse_marks(record.conditions)
+                                  if (n := c.fields.get("stage")) is not None)
+        out.extend(conditions_securing.securing_problems(shim, ancestors))
     return out
 
 
@@ -1430,11 +1447,13 @@ def _sub_plan_compared_violations(record, prefix: str, ctx: StageOrderContext) -
 
 
 def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) -> list[str]:
-    """Check 13: every binding condition of the stage is kept, or its setter's decision says
-    it was changed or withdrawn."""
+    """Check 13: every binding condition of the stage is kept, or the record of the level that
+    set it (`ctx.released`) says it was changed or withdrawn. The carrying record's own
+    decisions are checked for form and never release a condition: a plan does not release what
+    was set above it."""
     out: list[str] = []
     known = None if ctx.binding_conditions is None else {c["id"] for c in ctx.binding_conditions}
-    released = {d.condition for d in record.setter_decisions if d.value in ("changed", "withdrawn")}
+    released = set(ctx.released)
     for decision in record.setter_decisions:
         if decision.value not in sub_plan.SETTER_VALUES:
             out.append(f"{prefix}'s decision on {decision.condition!r} has value "
@@ -1450,8 +1469,8 @@ def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) ->
     kept = {h.condition for h in record.how_kept if h.how.strip()}
     for cid in sorted(known - kept - released):
         out.append(f"{prefix} does not say how it keeps binding condition {cid!r}: add a "
-                   f"`[[meta.how_kept]]` entry, or record the setter's decision to change or "
-                   f"withdraw it")
+                   f"`[[meta.how_kept]]` entry (a change or withdrawal is the setter level's "
+                   f"record, not this plan's)")
     for held in record.how_kept:
         if held.condition not in known:
             out.append(f"{prefix} says how it keeps {held.condition!r}, which the stage does not carry")
@@ -1462,11 +1481,11 @@ def _sub_plan_record_violations(record, ctx: StageOrderContext) -> list[str]:
     prefix = f"sub-plan record of stage {record.stage}"
     if record.stage <= 0:
         return ["the sub-plan record names no parent stage (`stage = <n>`)"] + _sub_plan_text_violations(
-            record, "the sub-plan record")
+            record, "the sub-plan record", ctx)
     out: list[str] = []
     if ctx.expected_stage is not None and record.stage != ctx.expected_stage:
         out.append(f"{prefix}: this plan builds stage {ctx.expected_stage}, not stage {record.stage}")
-    out.extend(_sub_plan_text_violations(record, prefix))
+    out.extend(_sub_plan_text_violations(record, prefix, ctx))
     out.extend(_sub_plan_estimate_violations(record, prefix))
     out.extend(_sub_plan_compared_violations(record, prefix, ctx))
     out.extend(_sub_plan_binding_violations(record, prefix, ctx))
@@ -1555,6 +1574,7 @@ def submission_violations(
     out.extend(_landed_delivery_venue_violations(doc))
     out.extend(_landing_declaration_violations(doc))
     stage_deps = {s.index: list(s.depends_on or ()) for s in doc.stages}
+    new_form = is_two_sided(doc.meta.order)
     for stage in doc.stages:
         # Supplies are already built by the time a PlanDoc exists, so the "supplied by an
         # earlier stage" alternative is decidable here — evaluating the knowledge
@@ -1564,7 +1584,7 @@ def submission_violations(
         for dotted, label, supply_element in _SUBSTANTIVE_SUBMISSION_FIELDS:
             if _attr(stage, dotted):
                 continue
-            if stage.place is not None and dotted in _EXECUTOR_OWNED_PATHS:
+            if new_form and dotted in _EXECUTOR_OWNED_PATHS:
                 continue
             if supply_element is not None and supply_element in supplied:
                 continue

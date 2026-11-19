@@ -28,8 +28,8 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 64  # 64: Stage gains place/binding_conditions/declared_size/size_flags/
-                     # expected_minutes (the stage as an order); SessionState gains
+SCHEMA_VERSION = 64  # 64: Stage gains place/binding_conditions(_stated)/declared_size/
+                     # size_flags/expected_minutes (the stage as an order); SessionState gains
                      # sub_plan_records (the executor's sub-plan record per parent stage).
                      # No-op migration.
                      # 63: SessionState gains order_searches/order_beside/
@@ -2601,15 +2601,19 @@ class Stage:
     # None derives no commit/push resource and reports a dropped entry; None on every plan
     # authored before this field.
     branch: str | None = None
-    # The stage as an order (schema 64). A stage is new-form exactly when `place` is set: it
-    # then states the product, the place and its reliance, the acceptance checks and the
-    # binding conditions, and carries no means/method/procedure/conditions of its own (those
-    # are the executor's sub-plan record, sub_plan.py). `binding_conditions` rows are
-    # {id, text, set_by}. The size fields feed `classify.above_threshold`: `declared_size` is
-    # hand-written production lines, `size_flags` names the non-size substantive signals,
-    # `expected_minutes` the wall-clock estimate. All empty on every plan authored before.
+    # The stage as an order (schema 64). A stage is new-form exactly when the plan's order is
+    # two-sided (`plan.is_two_sided`), never by what the stage itself carries: it then states
+    # the product, the place and its reliance, the acceptance checks and the binding
+    # conditions, and carries no means/method/procedure/conditions of its own (those are the
+    # executor's sub-plan record, sub_plan.py). `binding_conditions` rows are {id, text,
+    # set_by}; `binding_conditions_stated` is whether the plan stated the key at all (an
+    # explicit empty list says "none", an absent key is a missing part). The size fields feed
+    # `classify.above_threshold`: `declared_size` is hand-written production lines,
+    # `size_flags` names the non-size substantive signals, `expected_minutes` the wall-clock
+    # estimate. All empty on every plan authored before.
     place: str | None = None
     binding_conditions: list[dict] = field(default_factory=list)
+    binding_conditions_stated: bool = False
     declared_size: int | None = None
     size_flags: list[str] = field(default_factory=list)
     expected_minutes: int | None = None
@@ -2672,6 +2676,7 @@ class Stage:
                 branch=d.get("branch"),
                 place=d.get("place"),
                 binding_conditions=[dict(x) for x in d.get("binding_conditions") or []],
+                binding_conditions_stated=bool(d.get("binding_conditions_stated", False)),
                 declared_size=d.get("declared_size"),
                 size_flags=[str(x) for x in d.get("size_flags") or []],
                 expected_minutes=d.get("expected_minutes"),

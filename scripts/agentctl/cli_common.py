@@ -2284,6 +2284,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.branch = refined.branch
     cur.place = refined.place
     cur.binding_conditions = [dict(c) for c in refined.binding_conditions]
+    cur.binding_conditions_stated = refined.binding_conditions_stated
     cur.declared_size = refined.declared_size
     cur.size_flags = list(refined.size_flags)
     cur.expected_minutes = refined.expected_minutes
@@ -2577,35 +2578,73 @@ def _write_securing_firings(state: SessionState, doc, now: float) -> None:
     state.log(_SECURING_APPROVED_EVENT, revisions=[[r["stage"], r["was"]] for r in revisions])
 
 
-def _stage_order_context(state: SessionState, *, store: StateStore | None = None,
-                         require_records: bool = False) -> StageOrderContext:
+def _released_ids(record_raw: dict | None) -> frozenset[str]:
+    """The binding-condition ids a stored record's decisions changed or withdrew."""
+    if not record_raw:
+        return frozenset()
+    record = sub_plan.SubPlanRecord.from_dict(record_raw)
+    return frozenset(d.condition for d in record.setter_decisions
+                     if d.value in ("changed", "withdrawn"))
+
+
+def _setter_level_released(state: SessionState, parent_state: SessionState | None) -> frozenset[str]:
+    """The conditions released in the record of the level above the plan that carries the
+    sub-plan record: the setter level, never the carrying record itself. For a plan in a frame
+    nested in another frame that is the record of the frame below it; for a frame directly under
+    a child contour's plan, the record that contour carries; for a child contour's own plan,
+    the record its parent session carries. The root level has no such record: what the user set
+    in the order is released by the order's own binding decisions, not here."""
+    depth = len(state.plan_stack)
+    if depth >= 2:
+        key = sub_plan.record_key(state.plan_stack[-2].originating_stage, depth - 2)
+        return _released_ids(state.sub_plan_records.get(key))
+    if depth == 1 and state.parent_link:
+        return _released_ids(state.sub_plan_records.get(
+            sub_plan.record_key(state.parent_link.get("stage_index"))))
+    if depth == 0 and parent_state is not None and parent_state.parent_link:
+        return _released_ids(parent_state.sub_plan_records.get(
+            sub_plan.record_key(parent_state.parent_link.get("stage_index"))))
+    return frozenset()
+
+
+def _stage_order_context(state: SessionState, *, store: StateStore | None = None) -> StageOrderContext:
     """What the stage-order checks need from the session that carries a plan: the parent stage
-    it builds and that stage's binding conditions (from the pushed frame, or from the child
-    contour's handoff norm), the search ids this session recorded, and -- only where a parent
-    plan is approved (`require_records`) -- whether a stage's sub-plan record exists, read
-    through the one reader that finds it in a frame or in a linked contour."""
+    it builds, that stage's binding conditions and the conditions the setter level released, and
+    the parent stage's ancestors in the parent plan (from the pushed frame, or from the child
+    contour's handoff norm and its parent session), and the search ids this session recorded."""
     from . import cli_order
 
     expected = None
     conditions = None
+    ancestors = None
+    parent_state = None
     if state.plan_stack:
         frame = state.plan_stack[-1]
         expected = frame.originating_stage
         parent = next((s for s in frame.stages if s.index == expected), None)
-        if parent is not None and parent.place is not None:
+        if parent is not None and parent.binding_conditions_stated:
             conditions = tuple(parent.binding_conditions)
+        ancestors = frozenset(conditions_securing.ancestors(
+            expected, {s.index: list(s.depends_on or ()) for s in frame.stages}))
     elif state.parent_link:
         expected = state.parent_link.get("stage_index")
         description = (state.parent_link.get("norm") or {}).get("description_place") or ()
-        if description:
-            conditions = tuple({"id": c[0], "text": c[1], "set_by": c[2]} for c in description[0][2])
+        tagged = next((e for e in description if e and e[0] == "description"), None)
+        if tagged is not None:
+            conditions = tuple({"id": c[0], "text": c[1], "set_by": c[2]} for c in tagged[2])
+        try:
+            parent_state = store.load(state.parent_link["parent_session"]) if store is not None else None
+        except Exception:
+            parent_state = None
+        if parent_state is not None:
+            ancestors = frozenset(conditions_securing.ancestors(
+                expected, {s.index: list(s.depends_on or ()) for s in parent_state.stages}))
     return StageOrderContext(
         expected_stage=expected,
         binding_conditions=conditions,
+        released=_setter_level_released(state, parent_state),
+        parent_ancestors=ancestors,
         search_resolver=lambda search_id: cli_order._search_recorded(state, search_id),
-        record_exists=((lambda index: sub_plan.read(state, index, store) is not None)
-                       if require_records else None),
-        thresholds=Thresholds(),
     )
 
 

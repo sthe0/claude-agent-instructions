@@ -15,6 +15,7 @@ from . import (
     carry_forward,
     order_approvals,
     plan_store,
+    render,
     task_accumulator,
 )
 from .directive import Directive
@@ -1211,9 +1212,13 @@ def _method_statement_plan_pass_refusal(args, state: SessionState, method_runner
         doc = load_plan(target)
     except (OSError, PlanError):
         return None
-    found = method_statement.site_defects(
-        method_statement.plan_statements(doc, None if stage_index is None else {stage_index}),
-        runner=method_runner, stop_on_unread=True)
+    found: list = []
+    for stage in doc.stages:
+        if stage_index is not None and stage.index != stage_index:
+            continue
+        found.extend(render.stage_description_site_findings(doc, stage.index, runner=method_runner))
+        if any(f.verdict == method_statement.COULD_NOT_READ for f in found):
+            break
     if not found:
         return None
     lines = [method_statement.defect_line(f) for f in found]

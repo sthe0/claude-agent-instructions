@@ -822,7 +822,9 @@ def register(sub, add):
     sp.add_argument("--plan", required=True, help="path to the child service plan TOML")
     sp.add_argument("--task", default=None, help="task_id for the child (defaults to sub:<plan-stem>)")
     sp.add_argument("--originating-stage", dest="originating_stage", type=int, default=None,
-                    help="parent stage whose missing element the sub-plan supplies "
-                         "(defaults to state.current_stage)")
+                    help="parent stage the pushed plan serves (defaults to state.current_stage): "
+                         "a service plan supplies a missing element of it; a plan carrying the "
+                         "executor's sub-plan record (`[meta.sub_plan]`) builds it, and the "
+                         "record's `stage` must name this stage")
 
     sp = add("pop-subplan"); sp.add_argument("--session", required=True)

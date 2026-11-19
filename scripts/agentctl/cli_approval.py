@@ -190,8 +190,7 @@ def _refresh_caches_from_plan_path(
                                       _frozen_edge_stages(state, baseline, refreshed),
                                       state=state, baseline=baseline, plan_path=state.plan_path,
                                       conditions_securing_required=_conditions_securing_required(state),
-                                      stage_order=_stage_order_context(
-                                          state, store=store, require_records=True))
+                                      stage_order=_stage_order_context(state, store=store))
     if violations:
         return violations
     if advice is not None:

@@ -578,12 +578,12 @@ _PRINCIPLE_SUBFIELDS = ("statement", "source", "derivation", "confidence", "refu
 _EXECUTOR_OWNED_FIELDS = ("means", "method", "procedure", "conditions")
 
 
-def _validate_substantive_stage(s: dict, index: int) -> None:
-    """Raise PlanError if a substantive stage is missing any activity-structure field. A
-    stage description (it states a `place`) leaves means, method and conditions to the
+def _validate_substantive_stage(s: dict, index: int, new_form: bool = False) -> None:
+    """Raise PlanError if a substantive stage is missing any activity-structure field. A stage
+    of a plan on a new-form order (`new_form`) leaves means, method and conditions to the
     executor's sub-plan record and is refused at the submission seam when it carries them."""
     for field_name in _SUBSTANTIVE_STAGE_FIELDS:
-        if s.get("place") and field_name in _EXECUTOR_OWNED_FIELDS:
+        if new_form and field_name in _EXECUTOR_OWNED_FIELDS:
             continue
         if not s.get(field_name):
             raise PlanError(
@@ -1970,9 +1970,13 @@ def _parse_stage_binding_conditions(raw) -> list[dict]:
 def stage_above_threshold(stage, thr) -> bool:
     """Whether `stage` is above the line that gives it a sub-plan record: its declared size
     judged by `classify.above_threshold`. A stage that declares no minutes is judged on the
-    minutes of its cost tier, so the declaration (the tier) states the size."""
+    minutes of its cost tier, so the declaration (the tier) states the size. A stage that
+    declares no size at all (no lines, no flag, no minutes) is above the line; this is the one
+    place that rule lives."""
     from . import classify, effort
 
+    if stage.declared_size is None and not stage.size_flags and stage.expected_minutes is None:
+        return True
     minutes = stage.expected_minutes
     if minutes is None:
         minutes = thr.effort_stage_minutes(effort._stage_tier(stage))
@@ -2132,7 +2136,7 @@ def parse_plan(
                 f"(expected one of {'|'.join(sorted(_COST_TIERS))})"
             )
         if strict and is_substantive:
-            _validate_substantive_stage(s, index)
+            _validate_substantive_stage(s, index, is_two_sided(order))
         raw_principle = s.get("principle")
         principle = None
         if isinstance(raw_principle, dict) and raw_principle:
@@ -2314,6 +2318,7 @@ def parse_plan(
                 branch=_parse_branch(s.get("branch"), stage_ctx, strict=strict) or meta.branch,
                 place=str(s["place"]).strip() or None if isinstance(s.get("place"), str) else None,
                 binding_conditions=_parse_stage_binding_conditions(s.get("binding_conditions")),
+                binding_conditions_stated="binding_conditions" in s,
                 declared_size=_opt_int(s.get("declared_size")),
                 size_flags=[str(f) for f in s.get("size_flags", []) if isinstance(f, str)],
                 expected_minutes=_opt_int(s.get("expected_minutes")),

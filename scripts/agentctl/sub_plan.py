@@ -229,10 +229,19 @@ def is_decided_later(stage) -> bool:
     return bool(stage.lazy)
 
 
-def store(state, record: SubPlanRecord) -> None:
-    """Keep `record` in `state` under its parent stage; a stored record's reviews and
-    objections survive a rewrite of the authored parts."""
-    key = str(record.stage)
+def record_key(stage_index: int, level: int | None = None) -> str:
+    """Where a record sits in `SessionState.sub_plan_records`. A record a frame carries is
+    keyed by the stack level of the plan whose stage it describes (`level`) beside the stage
+    number, so a frame nested in a frame does not overwrite the record of the same stage number
+    one level up; the record a child contour carries describes the parent session's stage and
+    is keyed by the stage number alone (`level` None)."""
+    return str(stage_index) if level is None else f"{level}:{stage_index}"
+
+
+def store(state, record: SubPlanRecord, level: int | None = None) -> None:
+    """Keep `record` in `state` under its parent stage (see `record_key`); a stored record's
+    reviews and objections survive a rewrite of the authored parts."""
+    key = record_key(record.stage, level)
     previous = state.sub_plan_records.get(key)
     if previous:
         kept = SubPlanRecord.from_dict(previous)
@@ -259,49 +268,61 @@ def record_carried_by(state, doc) -> None:
     record = doc.meta.sub_plan
     if record is None or record.stage <= 0:
         return
+    level = len(state.plan_stack) - 1 if state.plan_stack else None
     pushed = frame_push_position(state, record.stage) if state.plan_stack else None
-    previous = state.sub_plan_records.get(str(record.stage)) or {}
+    previous = state.sub_plan_records.get(record_key(record.stage, level)) or {}
     place = previous.get("building_place")
     if pushed is not None and not (place and place.get("pushed") == pushed):
         record.building_place = BuildingPlace(session=state.session_id, pushed=pushed)
     elif pushed is None and state.parent_link:
         record.building_place = BuildingPlace(session=state.session_id)
-    store(state, record)
+    store(state, record, level)
 
 
 def close_frame_interval(state, stage_index: int, popped: int) -> None:
     """End the building-place interval of the record for `stage_index` at history position
-    `popped`: the frame that built it has been popped."""
-    raw = state.sub_plan_records.get(str(stage_index))
+    `popped`: the frame that built it has been popped, so the plan whose stage it describes
+    is the current one again."""
+    raw = state.sub_plan_records.get(record_key(stage_index, len(state.plan_stack)))
     place = (raw or {}).get("building_place")
     if place and place.get("popped") is None and place.get("session") == state.session_id:
         place["popped"] = popped
 
 
-def add_review(state, stage_index: int, review: dict) -> None:
-    """Add a review to the record of `stage_index`; no other stage's record is touched."""
-    key = str(stage_index)
+def add_review(state, stage_index: int, review: dict, level: int | None = None) -> None:
+    """Add a review to the record of `stage_index` (see `record_key`); no other stage's record
+    is touched."""
+    key = record_key(stage_index, level)
     if key not in state.sub_plan_records:
         raise SubPlanError(f"no sub-plan record for stage {stage_index}")
     state.sub_plan_records[key].setdefault("reviews", []).append(dict(review))
 
 
-def read(state, stage_index: int, store_=None) -> SubPlanRecord | None:
-    """The record for `stage_index`, wherever its carrier is: this session's own (a frame's
-    record sits beside the parent's stages) or any session linked below it (a child's
-    contour). `store_` is the state store that finds the linked sessions; without one only the
-    session's own record is read."""
-    seen: set[str] = set()
-    pending = [state]
-    while pending:
-        current = pending.pop(0)
-        if current.session_id in seen:
+def linked_children(state, store_) -> list:
+    """The sessions linked directly below `state` (empty without a store). Loads the store's
+    sessions, so a caller that reads several stages takes this once and passes it to `read`."""
+    if store_ is None:
+        return []
+    from .cli_common import _linked_children
+    return _linked_children(store_, state.session_id)
+
+
+def read(state, stage_index: int, store_=None, children=None) -> SubPlanRecord | None:
+    """The record of stage `stage_index` of the plan `state` is running, wherever its carrier
+    is: a frame this session pushed (keyed by the plan's own stack level) or the contour of the
+    child linked at that stage (`parent_link.stage_index`), whose own record describes the
+    stage it was linked at. Each level is read only for the stages of its own plan: a record a
+    deeper session holds under the same stage number describes that session's plan, not this
+    one. `children` are the linked sessions when the caller already has them."""
+    raw = state.sub_plan_records.get(record_key(stage_index, len(state.plan_stack)))
+    if raw:
+        return SubPlanRecord.from_dict(raw)
+    if children is None:
+        children = linked_children(state, store_)
+    for child in children:
+        if (child.parent_link or {}).get("stage_index") != stage_index:
             continue
-        seen.add(current.session_id)
-        raw = current.sub_plan_records.get(str(stage_index))
+        raw = child.sub_plan_records.get(record_key(stage_index))
         if raw:
             return SubPlanRecord.from_dict(raw)
-        if store_ is not None:
-            from .cli_common import _linked_children
-            pending.extend(_linked_children(store_, current.session_id))
     return None
