@@ -10,6 +10,7 @@
 "scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed[head-pinned-before-review]" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed[inline-binary-failsafe]" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed[inline-bound-comparison]" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
+"scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed[spawned-task-id]" = { count = 1, first_seen = "2026-11-19T07:27:50Z", last_seen = "2026-11-19T07:27:50Z" }
 "scripts/tests/test_order_agreement_e2e.py::test_a_linked_child_is_exempt_and_takes_a_plan_without_agreement" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_order_agreement_e2e.py::test_a_sub_plan_is_not_held_to_the_parents_agreement" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_order_base_review.py::test_agreement_mutant_is_killed[adopted_proposal_unfiltered]" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
@@ -77,6 +78,7 @@
 "scripts/tests/test_reaper_git_worktrees.py::test_unreachable_remote_is_logged_as_an_error" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_reaper_liveness.py::test_a_process_with_a_mapped_file_inside_the_tree_is_found_under_the_maps_kind" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_reaper_liveness.py::test_a_process_with_an_open_file_inside_the_tree_is_found" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
+"scripts/tests/test_substrate_adequacy.py::test_unknown_mechanism_count_shown" = { count = 1, first_seen = "2026-11-19T10:17:03Z", last_seen = "2026-11-19T10:17:03Z" }
 "scripts/tests/test_telemetry_fixture.py::test_migration_adds_the_fixture_cause_columns" = { count = 1, first_seen = "2026-11-18T09:52:07Z", last_seen = "2026-11-18T09:52:07Z" }
 "scripts/tests/test_telemetry_live_shape.py::test_command_row_written_when_interrupted_after_state_save" = { count = 1, first_seen = "2026-11-17T01:12:25Z", last_seen = "2026-11-17T01:12:25Z" }
 "scripts/tests/test_telemetry_recorder_cost.py::test_session_end_hook_process_returns_while_its_detached_sync_delivers" = { count = 1, first_seen = "2026-11-18T14:56:21Z", last_seen = "2026-11-18T14:56:21Z" }

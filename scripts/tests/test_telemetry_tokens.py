@@ -38,6 +38,7 @@ def boundary(seconds, session):
 
 
 def put(table, *rows):
+    """Looser than telemetry_import_support.put: a deferred (busy) insert is accepted here."""
     assert store.insert_rows(table, rows)["failed"] == 0
 
 

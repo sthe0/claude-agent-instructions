@@ -139,6 +139,34 @@ def test_a_slot_seen_twice_in_one_torn_read_counts_once(tmp_path):
     assert test_slots.held(directory, str(locks)) == [("slot-0", 222)]
 
 
+SLOT_A, SLOT_B = (8, 1, 10), (8, 1, 11)
+
+
+def scripted_lock_table(monkeypatch, reads):
+    """Make each read of /proc/locks return the next of `reads`, counting the reads made."""
+    pending, made = iter(reads), []
+
+    def read(path):
+        made.append(path)
+        return next(pending)
+    monkeypatch.setattr(test_slots, "_lock_table", read)
+    return made
+
+
+def test_a_read_that_skipped_a_row_is_replaced_by_two_agreeing_reads(monkeypatch):
+    full = [(111, SLOT_A), (222, SLOT_B)]
+    made = scripted_lock_table(monkeypatch, [[(111, SLOT_A)], full, full])
+    assert test_slots._slot_locks({SLOT_A: "slot-0", SLOT_B: "slot-1"}, "locks") == set(full)
+    assert len(made) == 3
+
+
+def test_reads_that_never_agree_report_every_lock_any_of_them_saw(monkeypatch):
+    reads = [[(111, SLOT_A)], [(222, SLOT_B)]] * test_slots.STABLE_READS_MAX
+    made = scripted_lock_table(monkeypatch, reads)
+    assert test_slots._slot_locks({SLOT_A: "slot-0", SLOT_B: "slot-1"}, "locks") == {(111, SLOT_A), (222, SLOT_B)}
+    assert len(made) == test_slots.STABLE_READS_MAX
+
+
 def test_held_sees_this_process_holding_real_slots(slot_dir):
     with test_slots.acquire(2, limits=limits(slot_dir)) as holder:
         assert test_slots.held(slot_dir) == [("slot-0", os.getpid()), ("slot-1", os.getpid())]

@@ -14,7 +14,7 @@ import pytest
 
 from lib import config_root
 from lib.telemetry import report, store, substrate, tables
-from telemetry_import_support import BASE, at
+from telemetry_import_support import BASE, at, put
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 
@@ -33,11 +33,6 @@ NOW = (BASE + timedelta(days=1)).isoformat()
 
 
 # --- record fixtures ----------------------------------------------------------------------
-
-def put(table, *rows):
-    outcome = store.insert_rows(table, rows, deadline_s=60)
-    assert outcome["failed"] == 0 and outcome["deferred"] == 0
-
 
 def event(session, kind, seconds, fields, source_key) -> str:
     event_id = str(uuid.uuid4())

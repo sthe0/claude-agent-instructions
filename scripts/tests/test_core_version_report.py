@@ -12,13 +12,8 @@ import pytest
 
 from lib import config_root
 from lib.telemetry import report, store, sync, tables
-from telemetry_import_support import at, reply, world  # noqa: F401  (world is a fixture)
+from telemetry_import_support import at, put, reply, world  # noqa: F401  (world is a fixture)
 from telemetry_live_support import spool_events
-
-
-def put(table, *rows):
-    outcome = store.insert_rows(table, rows, deadline_s=60)
-    assert outcome["failed"] == 0 and outcome["deferred"] == 0
 
 
 def event(session, kind, seconds, fields=None, source_key=None, provenance="live") -> str:
