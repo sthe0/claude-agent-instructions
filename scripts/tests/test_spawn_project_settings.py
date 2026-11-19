@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import subprocess
+from argparse import Namespace
 from pathlib import Path
+
+from agentctl import cli
+from agentctl.store import FileStateStore
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 
@@ -123,47 +125,74 @@ def test_build_child_settings_merges_project_deny_alongside_plans_deny(tmp_path)
     assert "Bash(curl:*)" in settings["permissions"]["deny"]
 
 
-# --- accepted_project_settings: only the child's own project's local file ---
+# --- project_settings_refusal: only the file dispatch forwards for the session ---
 
-def _local_settings_of(directory: Path) -> str:
-    return os.path.realpath(directory / ".claude" / "settings.local.json")
-
-
-def _git_repo(path: Path) -> Path:
-    path.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
-    return path
+SESSION = "project-settings-venue"
 
 
-def test_accepted_project_settings_names_the_workdirs_own_local_file(tmp_path):
-    workdir = tmp_path / "proj"
-    workdir.mkdir()
-    assert _local_settings_of(workdir) in MOD.accepted_project_settings(str(workdir))
+def _session_at_venue(state_root: Path, venue: Path) -> None:
+    store = FileStateStore(state_root)
+    cli.cmd_start(Namespace(session=SESSION, task="t", goal="g", done_criterion="dc",
+                            criterion_type="measurable", recursion_depth=0), store=store)
+    state = store.load(SESSION)
+    state.delivery_worktree = str(venue)
+    state.repo_root = str(venue)
+    store.save(state)
 
 
-def test_accepted_project_settings_refuses_a_scratch_dir_beside_the_workdir(tmp_path):
-    workdir = tmp_path / "proj"
-    workdir.mkdir()
-    assert _local_settings_of(tmp_path / "scratch" / "x") not in MOD.accepted_project_settings(str(workdir))
+def _venue_with_settings(tmp_path: Path) -> Path:
+    venue = tmp_path / "proj"
+    _write_settings(venue, {"permissions": {"allow": ["Bash(make test:*)"]}})
+    _session_at_venue(tmp_path / "state", venue)
+    return venue
 
 
-def test_accepted_project_settings_refuses_the_parent_of_a_workdir_outside_vcs(tmp_path):
-    workdir = tmp_path / "proj"
-    workdir.mkdir()
-    assert _local_settings_of(tmp_path) not in MOD.accepted_project_settings(str(workdir))
+def _settings_of(directory: Path) -> Path:
+    return directory / ".claude" / "settings.local.json"
 
 
-def test_accepted_project_settings_includes_ancestors_up_to_the_git_root(tmp_path):
-    repo = _git_repo(tmp_path / "repo")
-    workdir = repo / "service" / "api"
-    workdir.mkdir(parents=True)
-    accepted = MOD.accepted_project_settings(str(workdir))
-    assert _local_settings_of(repo / "service") in accepted
-    assert _local_settings_of(repo) in accepted
+def test_project_settings_refusal_accepts_the_venue_settings_for_a_child_in_the_venue(tmp_path):
+    venue = _venue_with_settings(tmp_path)
+    assert MOD.project_settings_refusal(_settings_of(venue), str(venue), SESSION, tmp_path / "state") is None
 
 
-def test_accepted_project_settings_stops_at_the_git_root(tmp_path):
-    repo = _git_repo(tmp_path / "repo")
-    workdir = repo / "service"
-    workdir.mkdir()
-    assert _local_settings_of(tmp_path) not in MOD.accepted_project_settings(str(workdir))
+def test_project_settings_refusal_compares_by_realpath(tmp_path):
+    venue = _venue_with_settings(tmp_path)
+    link = tmp_path / "proj-link"
+    link.symlink_to(venue)
+    assert MOD.project_settings_refusal(_settings_of(link), str(link), SESSION, tmp_path / "state") is None
+
+
+def test_project_settings_refusal_refuses_without_a_session(tmp_path):
+    venue = _venue_with_settings(tmp_path)
+    refusal = MOD.project_settings_refusal(_settings_of(venue), str(venue), None, tmp_path / "state")
+    assert "--session" in refusal
+
+
+def test_project_settings_refusal_refuses_an_unknown_session(tmp_path):
+    venue = _venue_with_settings(tmp_path)
+    refusal = MOD.project_settings_refusal(_settings_of(venue), str(venue), "no-such-session", tmp_path / "state")
+    assert "no engine session no-such-session" in refusal
+
+
+def test_project_settings_refusal_refuses_a_forged_file_outside_the_venue(tmp_path):
+    venue = _venue_with_settings(tmp_path)
+    forged = _write_settings(tmp_path / "scratch" / "x", {"permissions": {"allow": ["Bash(git push:*)"]}})
+    refusal = MOD.project_settings_refusal(forged, str(venue), SESSION, tmp_path / "state")
+    assert "is not the settings file of the delivery venue" in refusal
+
+
+def test_project_settings_refusal_refuses_when_the_venue_has_no_settings_file(tmp_path):
+    venue = tmp_path / "proj"
+    venue.mkdir()
+    _session_at_venue(tmp_path / "state", venue)
+    refusal = MOD.project_settings_refusal(_settings_of(venue), str(venue), SESSION, tmp_path / "state")
+    assert "(none)" in refusal
+
+
+def test_project_settings_refusal_refuses_a_child_started_outside_the_venue(tmp_path):
+    venue = _venue_with_settings(tmp_path)
+    elsewhere = tmp_path / "scratch"
+    elsewhere.mkdir()
+    refusal = MOD.project_settings_refusal(_settings_of(venue), str(elsewhere), SESSION, tmp_path / "state")
+    assert "but the child starts in" in refusal

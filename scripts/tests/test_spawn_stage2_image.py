@@ -586,42 +586,80 @@ def test_p13_header_add_dirs_equal_argv_add_dirs(tmp_path, plans, two_stage_plan
 # --- point 14: --project-settings accepts only .claude/settings.local.json ----
 
 
-def test_p14_project_settings_only_accepts_settings_local_json(tmp_path, plans, two_stage_plan, capsys):
-    payload = json.dumps({"permissions": {"allow": ["Bash(make test:*)"]}})
-    good = tmp_path / "proj" / ".claude" / "settings.local.json"
-    good.parent.mkdir(parents=True)
-    good.write_text(payload)
-    bad_paths = [
-        tmp_path / "settings.json",
-        tmp_path / "proj" / ".claude" / "settings.json",
-        tmp_path / "proj" / "settings.local.json",
-    ]
-    for bad in bad_paths:
-        bad.write_text(payload)
-
-    workdir = ["--workdir", str(tmp_path / "proj")]
-    accepted = _dry_run(capsys, _base_argv("developer", two_stage_plan) + workdir + ["--project-settings", str(good)])
-    assert accepted.rc == 0
-    assert "Bash(make test:*)" in accepted.allow
-
-    for bad in bad_paths:
-        refused = _dry_run(capsys, _base_argv("developer", two_stage_plan) + workdir + ["--project-settings", str(bad)])
-        assert refused.rc != 0, bad
-        assert "Bash(make test:*)" not in refused.allow
+PROJECT_RULE = "Bash(make test:*)"
 
 
-def test_p14_project_settings_of_another_directory_is_refused(tmp_path, plans, two_stage_plan, capsys):
+def _venue_settings(store, sid: str) -> Path:
+    venue = Path(store.load(sid).resolve_check_venue("delivery"))
+    settings = venue / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({"permissions": {"allow": [PROJECT_RULE]}}))
+    return settings
+
+
+def test_p14_the_settings_dispatch_forwards_reach_the_child(store, fixtures_dir, tmp_path, plans, capsys, monkeypatch):
+    sid = "stage2-project-settings-dispatched"
+    plan = _engine_plan(fixtures_dir, tmp_path)
+    _to_executing(store, sid, fixtures_dir, plan_path=plan)
+    _venue_settings(store, sid)
+    children = []
+
+    def runner(argv, cwd=None):
+        monkeypatch.chdir(cwd)
+        children.append(_dry_run(capsys, argv[2:] + ["--dry-run", "--state-root", str(tmp_path / "state")]))
+        return RunResult(0, stdout="COMPLETED: done\n")
+
+    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium", dry_run=False), store=store, runner=runner)
+
+    assert children[0].rc == 0
+    assert PROJECT_RULE in children[0].allow
+
+
+def test_p14_project_settings_must_end_in_settings_local_json(store, fixtures_dir, tmp_path, plans, capsys, monkeypatch):
+    sid = "stage2-project-settings-shape"
+    plan = _engine_plan(fixtures_dir, tmp_path)
+    _to_executing(store, sid, fixtures_dir, plan_path=plan)
+    good = _venue_settings(store, sid)
+    bad = good.with_name("settings.json")
+    bad.write_text(good.read_text())
+    monkeypatch.chdir(good.parent.parent)
+
+    refused = _dry_run(capsys, _session_argv(sid, tmp_path, plan) + ["--project-settings", str(bad)])
+
+    assert refused.rc == 2
+    assert PROJECT_RULE not in refused.allow
+
+
+def test_p14_project_settings_of_another_directory_is_refused(store, fixtures_dir, tmp_path, plans, capsys, monkeypatch):
+    sid = "stage2-project-settings-forged"
+    plan = _engine_plan(fixtures_dir, tmp_path)
+    _to_executing(store, sid, fixtures_dir, plan_path=plan)
+    venue = _venue_settings(store, sid).parent.parent
     forged = tmp_path / "scratch" / "x" / ".claude" / "settings.local.json"
     forged.parent.mkdir(parents=True)
     forged.write_text(json.dumps({"permissions": {"allow": ["Bash(git push:*)"]}}))
-    (tmp_path / "proj").mkdir()
-    argv = _base_argv("developer", two_stage_plan) + [
-        "--workdir", str(tmp_path / "proj"), "--project-settings", str(forged),
-    ]
-    refused = _dry_run(capsys, argv)
+    monkeypatch.chdir(venue)
+
+    refused = _dry_run(capsys, _session_argv(sid, tmp_path, plan) + ["--project-settings", str(forged)])
+
     assert refused.rc == 2
     assert "Bash(git push:*)" not in refused.allow
-    assert "is not the .claude/settings.local.json of the child's own project" in refused.err
+    assert "is not the settings file of the delivery venue" in refused.err
+
+
+def test_p14_project_settings_without_a_session_is_refused(tmp_path, plans, two_stage_plan, capsys):
+    settings = tmp_path / "proj" / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"permissions": {"allow": [PROJECT_RULE]}}))
+    argv = _base_argv("developer", two_stage_plan) + [
+        "--workdir", str(tmp_path / "proj"), "--project-settings", str(settings),
+    ]
+
+    refused = _dry_run(capsys, argv)
+
+    assert refused.rc == 2
+    assert PROJECT_RULE not in refused.allow
+    assert "names the engine session (--session)" in refused.err
 
 
 # --- point 15: ledger row carries the child's real session/transcript ---------

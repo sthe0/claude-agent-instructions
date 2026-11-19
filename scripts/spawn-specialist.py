@@ -715,34 +715,42 @@ def project_settings_sources(directory: str) -> "tuple[tuple[str, ...], str]":
     return tuple(files), note
 
 
-def accepted_project_settings(workdir: str) -> "frozenset[str]":
-    """Realpaths a `--project-settings` value may name for a child started in `workdir`:
-    `<d>/.claude/settings.local.json` for `workdir` itself and each ancestor up to its
-    VCS root, plus the git root Claude Code reads the local file from (the main
-    checkout's for a linked worktree). $HOME and the user-level files never count.
+def project_settings_refusal(
+    project_settings: "Path | str",
+    workdir: str,
+    session_id: "str | None",
+    state_root: "Path | None" = None,
+) -> "str | None":
+    """Why `--project-settings` is refused, or None when it is exactly what
+    `agentctl dispatch` forwards for `session_id`: the settings file of the delivery
+    venue the engine records (`agentctl.dispatch.venue_project_settings`), for a child
+    started in that venue. The engine refuses a scratch directory as a plan's venue, so
+    neither a forged file nor a scratch workdir can carry project settings.
 
-    Difficulty removed: a shape check alone accepted any path ending in
-    `.claude/settings.local.json`, so an agent could forge one in a scratch directory
-    and have its rules merged into the child's --settings grant (2026-11-12, 2026-11-19)."""
-    start = os.path.realpath(workdir)
-    home = os.path.realpath(Path.home())
-    directories = [start]
-    vcs_root = _vcs_root(start)
-    if vcs_root is not None:
-        top = os.path.realpath(vcs_root)
-        current = start
-        while current != top and current.startswith(top + os.sep):
-            current = os.path.dirname(current)
-            directories.append(current)
-    checkout_root, _ = _git_checkout_root(start)
-    if checkout_root is not None:
-        directories.append(os.path.realpath(checkout_root))
-    user_level = _user_level_settings()
-    accepted = (
-        os.path.realpath(os.path.join(d, PROJECT_SETTINGS_DIR, "settings.local.json"))
-        for d in directories if d != home
-    )
-    return frozenset(p for p in accepted if p not in user_level)
+    Difficulty removed: accepting any `.claude/settings.local.json` the spawner could
+    reach let an agent forge one in a scratch directory and have its rules merged into
+    the child's --settings grant."""
+    if not session_id:
+        return "is forwarded only by `agentctl dispatch`, which names the engine session (--session); none was given"
+    from agentctl.dispatch import venue_project_settings
+    from agentctl.store import FileStateStore
+
+    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
+    try:
+        state = store.load(session_id)
+    except Exception as exc:
+        return f"cannot be checked: the engine state of session {session_id} is unreadable ({exc})"
+    if state is None:
+        return f"cannot be checked: there is no engine session {session_id}"
+    venue, expected = venue_project_settings(state)
+    if expected is None or os.path.realpath(project_settings) != os.path.realpath(expected):
+        return (
+            f"is not the settings file of the delivery venue session {session_id} records "
+            f"({expected or 'none'})"
+        )
+    if os.path.realpath(workdir) != os.path.realpath(venue):
+        return f"belongs to the delivery venue {venue}, but the child starts in {workdir}"
+    return None
 
 
 def registers_hook(files: Sequence[str]) -> bool:
@@ -3278,15 +3286,17 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         log_refused("workdir-not-found", {"kind": args.kind, "workdir": str(args.workdir)})
         return 2
     workdir = str(args.workdir) if args.workdir is not None else os.getcwd()
-    if args.project_settings is not None and os.path.realpath(args.project_settings) not in accepted_project_settings(workdir):
+    refusal = (
+        project_settings_refusal(args.project_settings, workdir, args.session, args.state_root)
+        if args.project_settings is not None else None
+    )
+    if refusal is not None:
         print(
-            f"error: --project-settings {args.project_settings} is not the "
-            f".claude/settings.local.json of the child's own project ({workdir} or an "
-            f"ancestor up to its VCS root) — refusing to merge its permissions into this "
-            f"child's --settings grant",
+            f"error: --project-settings {args.project_settings} {refusal} — refusing to merge "
+            f"its permissions into this child's --settings grant",
             file=sys.stderr,
         )
-        log_refused("project-settings-not-project-root", {"kind": args.kind, "workdir": workdir})
+        log_refused("project-settings-not-dispatched", {"kind": args.kind, "workdir": workdir, "session": args.session})
         return 2
     child_project_override = None
     if not prompt_only:

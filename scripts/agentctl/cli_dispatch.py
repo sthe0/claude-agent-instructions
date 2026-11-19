@@ -35,6 +35,7 @@ from .dispatch import (
     permission_request_action,
     parse_marker,
     LABEL_DECORATION,
+    venue_project_settings,
 )
 from .plan import (
     order_digest,
@@ -403,25 +404,6 @@ def _try_reattest(
 # absent cost_tier falls through to the dict's .get default of "medium", same
 # as the --budget resolution just above.
 _EFFORT_BY_COST_TIER = {"small": "low", "medium": "medium", "large": "high"}
-
-
-def _dispatch_project_settings_path(state) -> str | None:
-    """Absolute path to the delivery venue's own `.claude/settings.local.json`,
-    when one exists — forwarded to a spawned developer so it inherits the same
-    project-scope Bash/tool grants an interactive session in that project
-    already has (see spawn-specialist.py's project_settings_permission_rules).
-
-    Resolved off the SAME venue cmd_dispatch already pins the child's cwd to
-    (resolve_check_venue(DELIVERY)) — the tree the spawned developer actually
-    writes in and runs commands in, not an unrelated repo_root. None when the
-    venue is unresolved or the file doesn't exist: dispatch then behaves
-    exactly as before this function existed (no --project-settings forwarded,
-    the child gets only the fleet-wide KIND_BASELINES["developer"] grant)."""
-    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
-    if not venue:
-        return None
-    candidate = Path(venue) / ".claude" / "settings.local.json"
-    return str(candidate) if candidate.is_file() else None
 
 
 def _parse_add_dir_spec(spec: str) -> tuple[str, str] | None:
@@ -1379,7 +1361,7 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # and delivery is where a spawned developer must write.
             cwd=child_cwd,
             runtime_host=host,
-            project_settings=_dispatch_project_settings_path(state),
+            project_settings=venue_project_settings(state)[1],
             session_id=state.session_id,
         )
     finally:
