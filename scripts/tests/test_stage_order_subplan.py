@@ -265,7 +265,6 @@ _META = {
         "setter_decisions": [{"condition": "B1", "value": "kept", "setter": "user",
                               "decided_by": "user"}],
         "resource_request": [{"stage": 2, "allow": ["Edit"]}],
-        "parent_resource_approval": "approved", "user_subplan_approval": "",
     },
     "compared_plans": {"entries": [{"ref": "plan-a", "departure": "no migration"}]},
     "how_kept": [{"condition": "B1", "how": "no push verb is called"}],

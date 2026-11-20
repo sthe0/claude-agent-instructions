@@ -21,6 +21,7 @@ from . import (
     resource_estimation,
     resources as _resources,
     runtime_host,
+    sub_plan,
     workspace_cleanup,
     child_runs,
     effort,
@@ -1322,6 +1323,30 @@ def _brief_method_refusal(state, stage, method_runner, unread_by: str = "") -> D
     return refusal
 
 
+def _stage_approval_refusal(state, store, stage, *, subplan_only: bool,
+                            dry_run: bool) -> Directive | None:
+    """The refusal of a start the user's or the parent's approval does not cover: a decided-later
+    stage whose sub-plan the user has not approved, an above-line stage whose resources and
+    permissions the parent has not approved. It covers the in-thread start as well as the spawned
+    one. A dry run starts nothing and is not refused. No model judge stands behind it: both
+    decisions are read from state the engine wrote."""
+    if dry_run:
+        return None
+    try:
+        record = sub_plan.read(state, stage.index, store)
+    except sub_plan.SubPlanError as exc:
+        return Directive(False, state.node, "noop",
+                         f"dispatch refused: the sub-plan record of stage {stage.index} cannot be read: {exc}")
+    blockers = list(dict.fromkeys(
+        gates.decided_later_dispatch_blockers(state, stage, record, subplan_only=subplan_only)
+        + gates.parent_resource_dispatch_blockers(state, stage, record, subplan_only=subplan_only)))
+    if not blockers:
+        return None
+    return Directive(
+        False, state.node, "await_user_approval",
+        "dispatch refused: " + "; ".join(blockers), data={"blockers": blockers})
+
+
 def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
               perm_checker=None, method_runner=None) -> Directive:
     state = _require(store, args.session)
@@ -1335,6 +1360,12 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to dispatch")
+    subplan_only = bool(getattr(args, "subplan_only", False))
+    dry_run = bool(getattr(args, "dry_run", False))
+    approval_refusal = _stage_approval_refusal(
+        state, store, stage, subplan_only=subplan_only, dry_run=dry_run)
+    if approval_refusal is not None:
+        return approval_refusal
     if not stage.is_spawn():
         return Directive(True, state.node, "execute_in_thread", f"stage {stage.index} is in-thread; no spawn")
     # Stage 6: an explicit, OPT-IN re-attest request. Absent --re-attest this
@@ -1345,7 +1376,6 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
         directive = _try_reattest(state, stage, store, runner)
         if directive is not None:
             return directive
-    dry_run = bool(getattr(args, "dry_run", False))
     if not dry_run:
         brief_refusal = _brief_method_refusal(
             state, stage, method_runner, (getattr(args, "unread_brief_by", None) or "").strip())
@@ -1417,6 +1447,8 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
         if stage.spawn_kind() == "developer":
             return Directive(False, state.node, "noop", f"dispatch refused: {exc}")
         evidence_dir = None
+    if not dry_run and stage.place is not None:
+        sub_plan.set_planning_mark(state, stage.index, subplan_only)
     child_run = None if dry_run else _begin_child_run(store, state, stage)
     result = None
     try:
@@ -2224,6 +2256,10 @@ def register(sub, add):
     # NOW. Absent, behavior is byte-identical to today — refusal is the default,
     # never an automatic route.
     sp.add_argument("--re-attest", action="store_true")
+    sp.add_argument("--subplan-only", action="store_true",
+                    help="start a decided-later stage only to plan it: the child records its "
+                         "sub-plan and does not approve it; refused for any other stage and for "
+                         "a sub-plan the user has already approved")
     sp = add("resolve-permission"); sp.add_argument("--session", required=True)
     sp.add_argument("--decision", choices=["granted", "denied"], required=True)
     sp.add_argument("--by", default=None,

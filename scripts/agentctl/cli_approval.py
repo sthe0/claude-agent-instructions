@@ -14,6 +14,7 @@ from . import (
     plan_resources,
     plugins,
     resources as _resources,
+    sub_plan,
     task_accumulator,
     mandate_store,
 )
@@ -27,8 +28,12 @@ from .plan import (
     materialized_grant_entries,
     order_digest,
     entries_grants_sha256,
+    stage_above_threshold,
 )
+from .cli_plan import subplan_receipt_path
+from .config import Thresholds
 from .state import (
+    PLAN_PRESENTATION_KIND_SUBPLAN,
     AGENT_ACTOR,
     is_skipped,
     Partition,
@@ -542,7 +547,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if not by_agent and not mandate_basis:
         blockers = (
             blockers
-            + gates.plan_presentation_blockers(state, state.plan_path)
+            + gates.plan_presentation_blockers(state, state.plan_path, store=store)
             + gates.grants_approval_blockers(state, state.plan_path, entries=_approved_entries)
         )
     agent_autonomy: dict | None = None
@@ -590,6 +595,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 f"--by {args.by!r} refused: outside the approved boundary -- "
                 + "; ".join(agent_autonomy.get("reason_texts") or agent_autonomy["reasons"])
             ]
+    if by_agent and state.parent_link:
+        blockers = blockers + gates.child_approval_blockers(
+            state, _load_parent(store, state.parent_link))
     _second_current = _second_current_stage_refusal(state, state.current_stage)
     if _second_current is not None:
         return _second_current
@@ -808,6 +816,8 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             state.order_effort_base = {}
         else:
             _flush_order_effort(state, store=store)
+    if not mandate_basis:
+        _write_stage_approvals(state, store, by_agent=by_agent)
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -968,7 +978,152 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
     )
 
 
+def _load_parent(store: StateStore, parent_link: dict) -> SessionState | None:
+    """The parent session a linked child runs under, or None when it cannot be read."""
+    parent_id = (parent_link or {}).get("parent_session")
+    if not parent_id:
+        return None
+    try:
+        return store.load(parent_id)
+    except Exception:
+        return None
+
+
+def _stage_record(state: SessionState, store: StateStore, stage: Stage):
+    try:
+        return sub_plan.read(state, stage.index, store)
+    except sub_plan.SubPlanError:
+        return None
+
+
+def _approved_set(state: SessionState, store: StateStore, stage: Stage) -> dict | None:
+    """The set of resources and permissions an agent may approve this stage's request inside: what
+    the user approved for the stage's sub-plan (decided-later), what the parent approved for the
+    stage this session runs under (a linked child), or what the user approved for the stage at the
+    root. None when no set was approved."""
+    entry = sub_plan.approval_entry(state, stage.index)
+    if sub_plan.is_decided_later(stage):
+        return entry.get("user_subplan_set")
+    if state.parent_link:
+        parent = _load_parent(store, state.parent_link)
+        if parent is None:
+            return None
+        parent_entry = sub_plan.approval_entry(parent, state.parent_link.get("stage_index"))
+        return parent_entry.get("approved") or parent_entry.get("user_subplan_set")
+    return entry.get("approved")
+
+
+def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: bool) -> None:
+    """The parent's approval of the resources and permissions of each stage above the size line,
+    written by `approve`: the user's approval writes it for every such stage and sets the
+    approved set; the agent's writes it only for a stage whose request lies inside that set. A
+    decided-later stage is approved through its sub-plan (approve-subplan), not here."""
+    thr = Thresholds()
+    for stage in state.stages:
+        if stage.place is None or sub_plan.is_decided_later(stage) \
+                or not stage_above_threshold(stage, thr):
+            continue
+        record = _stage_record(state, store, stage)
+        rows = record.resource_request if record else []
+        if not by_agent:
+            sub_plan.write_parent_approval(state, stage.index, rows)
+            continue
+        approved = _approved_set(state, store, stage)
+        if approved is None:
+            if not state.parent_link:
+                sub_plan.write_parent_approval(state, stage.index, rows)
+            continue
+        if not sub_plan.request_within(rows, approved):
+            sub_plan.write_parent_approval(state, stage.index, rows, widens_set=False)
+
+
+def cmd_approve_subplan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The user's approval of one presented sub-plan, for the sub-plan as it stands now."""
+    state = _require(store, args.session)
+    by = (args.by or "").strip()
+    if not by or by.casefold() == AGENT_ACTOR:
+        return Directive(False, state.node, "await_user_approval",
+                         "approve-subplan is the user's: --by agent is refused")
+    if state.parent_link:
+        return Directive(False, state.node, "noop",
+                         "approve-subplan is run in the root session the sub-plan was presented "
+                         "in, not in a linked child")
+    try:
+        stage = state.stage(args.stage)
+    except KeyError:
+        return Directive(False, state.node, "noop", f"no stage {args.stage}")
+    try:
+        record = sub_plan.read(state, stage.index, store)
+    except sub_plan.SubPlanError as exc:
+        return Directive(False, state.node, "noop", str(exc))
+    if record is None:
+        return Directive(False, state.node, "noop", f"stage {stage.index} has no sub-plan on record")
+    live = sub_plan.approval_digest(record)
+    path = subplan_receipt_path(stage.index)
+    receipt = next((r for r in reversed(state.plan_presentations)
+                    if r.kind == PLAN_PRESENTATION_KIND_SUBPLAN and r.plan_path == path), None)
+    if receipt is None:
+        return Directive(False, state.node, "await_user_approval",
+                         f"stage {stage.index}'s sub-plan was not presented to the user: run "
+                         f"present-plan --kind subplan --stage {stage.index}")
+    if receipt.understanding_sha256 != live:
+        return Directive(False, state.node, "await_user_approval",
+                         f"stage {stage.index}'s sub-plan changed since it was presented: present "
+                         f"it again (present-plan --kind subplan --stage {stage.index})")
+    delivery = gates._delivery_stamp_blocker(state, receipt, None)
+    if delivery:
+        return Directive(False, state.node, "await_user_approval",
+                         f"the presentation of stage {stage.index}'s sub-plan has no delivery "
+                         f"stamp: {delivery}")
+    sub_plan.write_user_approval(state, stage.index, record)
+    state.log("approve_subplan", stage=stage.index, by=by, digest=live)
+    store.save(state)
+    return Directive(True, state.node, "next_stage",
+                     f"stage {stage.index}'s sub-plan approved by {by}")
+
+
+def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The agent's approval of one stage's resources and permissions, inside the set the user (or
+    the parent) approved. It asks no method question: only whether the request lies in the set."""
+    state = _require(store, args.session)
+    try:
+        stage = state.stage(args.stage)
+    except KeyError:
+        return Directive(False, state.node, "noop",
+                         f"stage {args.stage} is not a stage of this session's own plan")
+    if stage.place is None or not stage_above_threshold(stage, Thresholds()):
+        return Directive(False, state.node, "noop",
+                         f"stage {stage.index} is below the size line: it needs no separate approval")
+    record = _stage_record(state, store, stage)
+    if record is None:
+        return Directive(False, state.node, "noop", f"stage {stage.index} has no sub-plan on record")
+    if sub_plan.is_decided_later(stage):
+        problem = sub_plan.subplan_approval_problem(sub_plan.approval_entry(state, stage.index), record)
+        if problem:
+            return Directive(False, state.node, "await_user_approval",
+                             f"stage {stage.index} is decided later and {problem}")
+    approved = _approved_set(state, store, stage)
+    if approved is None:
+        return Directive(False, state.node, "await_user_approval",
+                         f"no resources and permissions were approved for stage {stage.index}: "
+                         f"the user's approval comes first")
+    outside = sub_plan.request_within(record.resource_request, approved)
+    if outside:
+        return Directive(False, state.node, "await_user_approval",
+                         f"stage {stage.index}'s request is outside the approved set: "
+                         + "; ".join(outside), data={"outside": outside})
+    sub_plan.write_parent_approval(state, stage.index, record.resource_request, widens_set=False)
+    state.log("approve_stage_resources", stage=stage.index)
+    store.save(state)
+    return Directive(True, state.node, "next_stage",
+                     f"stage {stage.index}'s resources and permissions approved inside the set")
+
+
 def register(sub, add):
+    sp = add("approve-subplan"); sp.add_argument("--session", required=True)
+    sp.add_argument("--stage", type=int, required=True); sp.add_argument("--by", required=True)
+    sp = add("approve-stage-resources"); sp.add_argument("--session", required=True)
+    sp.add_argument("--stage", type=int, required=True)
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     sp.add_argument("--skip-optional", dest="skip_optional", type=int, action="append",
                     default=[], metavar="INDEX",

@@ -54,7 +54,7 @@ from .plan import (
     whole_suite_warnings,
     dropped_grants_report,
 )
-from .render import plan_render_stage_arg_type, plan_summary_text, render_plan_grants
+from .render import plan_render_stage_arg_type, plan_summary_text, render_plan_grants, render_subplans
 from .state import (
     Actor,
     AUTHORIZE_REPLAN_MARKER,
@@ -72,6 +72,7 @@ from .state import (
     PLAN_PRESENTATION_KIND_FULL,
     PLAN_PRESENTATION_KIND_ORDER,
     PLAN_PRESENTATION_KIND_REPLAN_DIFF,
+    PLAN_PRESENTATION_KIND_SUBPLAN,
     PLAN_PRESENTATION_KINDS,
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
     PlanPresentation,
@@ -221,7 +222,11 @@ def _plan_presentation_skeleton(stages: list[Stage]) -> str:
 def _deliver_presentation_via_channel(state: SessionState, presentation, raw: bytes) -> None:
     """With a headless customer channel configured, hand the rendering to it and,
     when it answers, write the `channel` delivery stamp for essence/replan_diff
-    (`full` is delivered and logged but backs no gate). No channel: nothing."""
+    (`full` is delivered and logged but backs no gate). No channel: nothing. A sub-plan is not
+    handed to the channel, which answers for a whole plan: its stamp comes from
+    `confirm-delivery --kind subplan`."""
+    if presentation.kind == PLAN_PRESENTATION_KIND_SUBPLAN:
+        return
     result = delivery_channel.deliver(presentation.kind, raw)
     if result is None:
         return
@@ -335,6 +340,65 @@ def _order_receipt_understanding(digest: str) -> str | None:
     `order_receipt_unbound` mutant); the stored value is what makes the receipt stale
     when the draft moves."""
     return digest
+
+
+def subplan_receipt_path(stage: int) -> str:
+    return f"subplan:{stage}"
+
+
+def _present_subplan(args, state: SessionState, *, store: StateStore) -> Directive:
+    """`present-plan --kind subplan --stage <n>`: stamp a receipt for the recorded sub-plan of one
+    stage. The receipt binds the sub-plan's approval digest (so a later edit of the sub-plan
+    makes it stale) and the rendering bytes, which must carry the first twelve hex digits of that
+    digest as the `[subplan:<stage>:<digest>]` anchor. Records only: the node does not move."""
+    stage = getattr(args, "stage", None)
+    if stage is None:
+        return Directive(False, state.node, "noop", "--stage is required with --kind subplan")
+    if getattr(args, "plan", None):
+        return Directive(False, state.node, "noop", "--plan is not accepted with --kind subplan")
+    try:
+        record = sub_plan.read(state, stage, store)
+    except sub_plan.SubPlanError as exc:
+        return Directive(False, state.node, "noop", f"cannot present the sub-plan of stage {stage}: {exc}")
+    if record is None:
+        return Directive(False, state.node, "noop",
+                         f"stage {stage} has no sub-plan on record to present: record it first")
+    digest = sub_plan.approval_digest(record)
+    anchor = f"[subplan:{stage}:{digest[:12]}]"
+    raw, text, refusal = _read_presented_rendering(args, state)
+    if refusal is not None:
+        return refusal
+    if anchor not in text:
+        return Directive(
+            False, state.node, "noop",
+            f"the rendering does not carry the anchor {anchor} of the sub-plan as it stands; "
+            "stamping nothing — add the anchor to it and re-run",
+            data={"anchor": anchor})
+    writer_gate, refusal = _present_writer_gate(state, text, PLAN_PRESENTATION_KIND_SUBPLAN)
+    if refusal is not None:
+        return refusal
+    presentation = PlanPresentation(
+        plan_path=subplan_receipt_path(stage),
+        kind=PLAN_PRESENTATION_KIND_SUBPLAN,
+        plan_sha256=digest,
+        rendering_sha256=hashlib.sha256(raw).hexdigest(),
+        rendering_text=text,
+        presented_ts=time.time(),
+        understanding_sha256=digest,
+    )
+    _record_plan_presentation(state, presentation)
+    state.log("present_plan", plan=presentation.plan_path, kind=PLAN_PRESENTATION_KIND_SUBPLAN,
+              rendering_sha256=presentation.rendering_sha256)
+    _deliver_presentation_via_channel(state, presentation, raw)
+    store.save(state)
+    return _attach_writer_gate(Directive(
+        True, state.node, "continue",
+        f"presentation receipt recorded (kind=subplan, stage {stage}). Next: emit this exact "
+        "rendering as the turn's FINAL text message; the user approves it with "
+        f"`approve-subplan --stage {stage} --by <their name>` once the delivery is confirmed",
+        data={"rendering_sha256": presentation.rendering_sha256, "subplan_sha256": digest,
+              "anchor": anchor},
+    ), writer_gate)
 
 
 def _present_order(args, state: SessionState, *, store: StateStore) -> Directive:
@@ -900,6 +964,10 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
     _book_and_judge(state, store, args, effort_segments.ACT_PRESENT_PLAN)
     if getattr(args, "kind", None) == PLAN_PRESENTATION_KIND_ORDER:
         return _present_order(args, state, store=store)
+    if getattr(args, "kind", None) == PLAN_PRESENTATION_KIND_SUBPLAN:
+        return _present_subplan(args, state, store=store)
+    if getattr(args, "stage", None) is not None:
+        return Directive(False, state.node, "noop", "--stage is only accepted with --kind subplan")
     if not state.plan_path:
         return Directive(False, state.node, "noop", "no plan to present: submit a plan first")
 
@@ -1052,6 +1120,22 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                     "essence rendering omits the grants block; stamping nothing — "
                     "paste this block into it verbatim and re-run",
                     data={"grants_block": compact_grants_block},
+                )
+        if _grants_doc is not None and gates.plan_presentation_active(state):
+            unplanned = gates.unplanned_stage_blockers(state, target, store=store)
+            if unplanned:
+                return Directive(
+                    False, state.node, "noop",
+                    "cannot present essence: " + "; ".join(unplanned) + "; stamping nothing",
+                    data={"blockers": unplanned},
+                )
+            subplans_block = render_subplans(_grants_doc, state, store)
+            if subplans_block.strip() and subplans_block.strip() not in text:
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the sub-plans, resources and permissions block; "
+                    "stamping nothing — paste this block into it verbatim and re-run",
+                    data={"subplans_block": subplans_block},
                 )
         if _grants_doc is not None and grounding.is_substantive(_grants_doc):
             generalizations_block = _generalizations_missing(_grants_doc, text)
@@ -1422,7 +1506,11 @@ def register(sub, add):
                          "replan_diff = proposed-diff rendering for a non-substantive "
                          "replan against a candidate plan file (see --plan); "
                          "order = the submitted order draft, every requirement, proposal "
-                         "and constraint id shown as an [R1]/[P1]/[K1] anchor")
+                         "and constraint id shown as an [R1]/[P1]/[K1] anchor; "
+                         "subplan = the recorded sub-plan of --stage, shown before the user "
+                         "approves it (approve-subplan)")
+    sp.add_argument("--stage", type=int, default=None,
+                    help="the stage whose sub-plan --kind subplan presents")
     sp.add_argument("--plan", default=None,
                     help="candidate plan file the presentation is stamped against; "
                          "only legal with --kind replan_diff (defaults to the session's "

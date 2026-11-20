@@ -490,7 +490,21 @@ def _stage_description_rule_unwired(mp):
                raising=True)
 
 
+def _decided_later_dispatched(mp):
+    """A decided-later stage starts without the user's approval of its sub-plan."""
+    mp.setattr("agentctl.gates.decided_later_dispatch_blockers",
+               lambda state, stage, record, *, subplan_only=False: [], raising=True)
+
+
+def _parent_resource_dispatched(mp):
+    """A stage above the size line starts without the parent's approval of its resources."""
+    mp.setattr("agentctl.gates.parent_resource_dispatch_blockers",
+               lambda state, stage, record, *, subplan_only=False: [], raising=True)
+
+
 MUTANTS = {
+    "decided_later_dispatched": _decided_later_dispatched,
+    "parent_resource_dispatched": _parent_resource_dispatched,
     "size_predicate_hardcoded": _size_predicate_hardcoded,
     "stage_order_checks_unchecked": _stage_order_checks_unchecked,
     "stage_description_rule_unwired": _stage_description_rule_unwired,

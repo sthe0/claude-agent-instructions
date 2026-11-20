@@ -2051,6 +2051,79 @@ def _default_view_root() -> Path:
     return config_root.topo_units_root()
 
 
+def _request_text(parts: dict) -> str:
+    allow = ", ".join(f"`{r}`" for r in parts["allow"]) or "none"
+    dirs = ", ".join(f"`{p}` ({m or 'no mode'})" for p, m in parts["add_dirs"]) or "none"
+    return f"allow: {allow}; directories: {dirs}"
+
+
+def render_subplans(doc: PlanDoc, state, store=None) -> str:
+    """The block of a plan's presentation that shows what the user approves besides the plan's own
+    text: the sub-plan of every stage that has one, at every level it was recorded (each with its
+    estimate and the whole set of resources and permissions it asks for), each stage decided later
+    by name, and each stage below the size line with the price of its cost tier and the resources
+    it is shown with. A projection of the typed plan and the engine's records, like
+    `render_plan_grants`; empty for an old-form plan and for a plan with nothing of the kind."""
+    from . import sub_plan
+    from .config import Thresholds
+    from .plan import stage_above_threshold
+
+    thr = Thresholds()
+    try:
+        children = sub_plan.linked_children(state, store)
+    except Exception:
+        children = []
+    plan_rows: dict[int, list[dict]] = {}
+    for row in doc.meta.resource_requests:
+        if row.stage is not None:
+            plan_rows.setdefault(row.stage, []).append(
+                {"allow": list(row.allow), "add_dirs": list(row.add_dirs)})
+    lines: list[str] = []
+    for stage in doc.stages:
+        if stage.place is None:
+            continue
+        head = f"- stage {stage.index} “{stage.title}”: "
+        if sub_plan.is_decided_later(stage):
+            lines.append(head + "decided later — its sub-plan is written when it starts, and "
+                                "the stage starts only after you approve that sub-plan")
+            continue
+        if not stage_above_threshold(stage, thr):
+            tier = stage.actor.cost_tier or "medium"
+            price = (f"tier {tier}: ${thr.budget_usd_float(tier):.2f}, "
+                     f"{thr.effort_stage_minutes(tier)} min")
+            lines.append(head + f"below the size line, priced at {price}; resources: "
+                         + _request_text(sub_plan.request_parts(plan_rows.get(stage.index))))
+            continue
+        try:
+            record = sub_plan.read(state, stage.index, store, children)
+        except sub_plan.SubPlanError:
+            record = None
+        if record is None:
+            lines.append(head + "above the size line and has no sub-plan yet")
+            continue
+        est = record.estimate
+        figure = ("no estimate" if est is None else
+                  f"estimate {est.minutes if est.minutes is not None else '?'} min"
+                  f" / ${est.usd if est.usd is not None else '?'}"
+                  + (f", confirmed by {est.confirmer}" if est.confirmer else ""))
+        lines.append(head + f"sub-plan recorded — {figure}; resources: "
+                     + _request_text(sub_plan.request_parts(record.resource_request)))
+    for key, raw in sorted(state.sub_plan_records.items()):
+        level, _, number = key.partition(":")
+        if not number or level == str(len(state.plan_stack)):
+            continue
+        record = sub_plan.SubPlanRecord.from_dict(raw)
+        est = record.estimate
+        figure = ("no estimate" if est is None else
+                  f"estimate {est.minutes if est.minutes is not None else '?'} min"
+                  f" / ${est.usd if est.usd is not None else '?'}")
+        lines.append(f"- level {level}, stage {number}: sub-plan recorded — {figure}; resources: "
+                     + _request_text(sub_plan.request_parts(record.resource_request)))
+    if not lines:
+        return ""
+    return "Sub-plans, resources and permissions\n" + "\n".join(lines) + "\n"
+
+
 def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
     """Render the plan's per-stage grant set — declared (plan-authored, in
     `[stage.grants]`) plus derived (mechanically proposed by

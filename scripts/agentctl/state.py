@@ -30,7 +30,8 @@ from .script_effects import StageEffectDeclaration
 
 SCHEMA_VERSION = 64  # 64: Stage gains place/binding_conditions(_stated)/declared_size/
                      # size_flags/expected_minutes (the stage as an order); SessionState gains
-                     # sub_plan_records (the executor's sub-plan record per parent stage).
+                     # sub_plan_records (the executor's sub-plan record per parent stage)
+                     # and stage_approvals (the engine's copy of the approvals per stage).
                      # No-op migration.
                      # 63: SessionState gains order_searches/order_beside/
                      # executor_side_revisions (the two-sided order: recorded searches,
@@ -1369,11 +1370,16 @@ PLAN_PRESENTATION_KIND_REPLAN_DIFF = "replan_diff"
 # understanding_sha256) as well as the rendering; recorded by cmd_present_plan and
 # stamped by the delivery hook like the other kinds.
 PLAN_PRESENTATION_KIND_ORDER = "order"
+# Fifth instance: the recorded sub-plan of one stage shown to the user before they approve it
+# (approve-subplan). Its receipt names the stage in plan_path ("subplan:<n>") and binds the
+# sub-plan's approval digest in plan_sha256 and understanding_sha256.
+PLAN_PRESENTATION_KIND_SUBPLAN = "subplan"
 PLAN_PRESENTATION_KINDS = (
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
     PLAN_PRESENTATION_KIND_REPLAN_DIFF,
     PLAN_PRESENTATION_KIND_ORDER,
+    PLAN_PRESENTATION_KIND_SUBPLAN,
 )
 
 # Language-independent ASCII marker a plan-approval AskUserQuestion option must
@@ -2903,6 +2909,10 @@ class SessionState:
     # The executor's sub-plan records, keyed by the parent stage index (schema 64); the shape
     # and its one reader are sub_plan.py's.
     sub_plan_records: dict[str, dict] = field(default_factory=dict)
+    # The engine's last-written approvals per stage of this session's plan (the parent's
+    # copy): the resources the parent approved, the sub-plan the user approved, and the
+    # planning-dispatch mark. Written by the approval verbs only, never read from a plan.
+    stage_approvals: dict[str, dict] = field(default_factory=dict)
     # The order agreement (schema 61). `order_agreement_armed` is set by classify alone;
     # `order_agreement_exemption` names why an eligible session was left unarmed.
     order_agreement_armed: bool = False
@@ -3735,5 +3745,21 @@ SESSION_SCOPED_FIELDS = frozenset({
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
     "order_draft_path", "order_draft_sha256", "order_reviews",
     "order_searches", "order_beside", "executor_side_revisions", "sub_plan_records",
-    "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
+    "stage_approvals", "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
 })
+
+
+def restamp_subplan_digest(state: "SessionState", stage_index: int, record) -> bool:
+    """Carry the user's approval of a sub-plan over an edit of it: set the approved digest to
+    the live `record`'s, only when an approval is set and the live request equals the one the
+    user approved. A changed request, or no approval, leaves the field as it was and the stage
+    stays refused until the user approves the changed sub-plan."""
+    from . import sub_plan
+
+    entry = state.stage_approvals.get(sub_plan.approval_key(state, stage_index)) or {}
+    if not entry.get("user_subplan_approval"):
+        return False
+    if sub_plan.resource_request_digest(record.resource_request) != entry.get("user_subplan_request"):
+        return False
+    entry["user_subplan_approval"] = sub_plan.approval_digest(record)
+    return True

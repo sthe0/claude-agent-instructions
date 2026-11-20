@@ -1344,8 +1344,11 @@ class StageOrderContext:
     `depends_on` ancestors of the parent stage in the parent plan, which a `[means: stage N]`
     mark on the record's conditions must name; `search_resolver` tells whether a search id
     resolves in the session that carries the record; `parent_unreadable` says why the parent
-    session that was asked for could not be read at all. Each other field left None skips the
-    check that needs it."""
+    session that was asked for could not be read at all; `engine_approvals` are the approvals the
+    engine last wrote for the parent stage (`SessionState.stage_approvals`: an empty mapping when
+    it wrote none), which a record's approval fields may only repeat. Each other field left None
+    skips the check that needs it."""
+    engine_approvals: dict | None = None
     expected_stage: int | None = None
     binding_conditions: tuple[dict, ...] | None = None
     released: frozenset[str] = frozenset()
@@ -1550,7 +1553,41 @@ def _sub_plan_record_violations(doc, record, ctx: StageOrderContext) -> list[str
     out.extend(_sub_plan_estimate_violations(record, prefix))
     out.extend(_sub_plan_compared_violations(record, prefix, ctx))
     out.extend(_sub_plan_binding_violations(doc, record, prefix, ctx))
+    out.extend(_sub_plan_approval_violations(record, prefix, ctx))
     return out
+
+
+def _sub_plan_approval_violations(record, prefix: str, ctx: StageOrderContext) -> list[str]:
+    """The approval fields of a record are the engine's: a record that states one differing from
+    what the engine last wrote for the parent stage is refused, so no plan text approves
+    itself (the user's approval of a sub-plan and the parent's approval of its resources are
+    written by `approve-subplan`, `approve` and `approve-stage-resources` only)."""
+    if ctx.engine_approvals is None:
+        return []
+    out: list[str] = []
+    for field in ("parent_resource_approval", "user_subplan_approval"):
+        stated = getattr(record, field)
+        if stated and stated != ctx.engine_approvals.get(field):
+            out.append(
+                f"{prefix}: `{field}` is stated and differs from what the engine wrote: the "
+                f"approval is the engine's, recorded when the user (approve-subplan, approve) or "
+                f"the agent inside the approved set (approve, approve-stage-resources) approves; "
+                f"leave the field out")
+    return out
+
+
+def _lazy_below_threshold_violations(doc) -> list[str]:
+    """A stage below the size line is asked for no sub-plan, so it is never decided later: the
+    `lazy` mark belongs to a stage above the line. Old-form stages carry no size claim."""
+    from .config import Thresholds
+    from .plan import stage_above_threshold
+
+    thr = Thresholds()
+    return [f"stage {s.index} is below the size line and carries the decided-later mark "
+            f"(`lazy = true`): a stage that small needs no sub-plan, drop the mark"
+            for s in doc.stages
+            if s.place is not None and sub_plan.is_decided_later(s)
+            and not stage_above_threshold(s, thr)]
 
 
 def _stage_order_violations(doc, ctx: StageOrderContext | None = None) -> list[str]:
@@ -1561,6 +1598,8 @@ def _stage_order_violations(doc, ctx: StageOrderContext | None = None) -> list[s
     ctx = ctx or StageOrderContext()
     out = _stage_description_violations(doc, ctx)
     out.extend(_restated_condition_violations(doc, ctx))
+    if is_two_sided(doc.meta.order):
+        out.extend(_lazy_below_threshold_violations(doc))
     record = doc.meta.sub_plan
     if record is not None:
         out.extend(_sub_plan_record_violations(doc, record, ctx))

@@ -210,6 +210,117 @@ def digest(record: SubPlanRecord) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
 
 
+# What a user's approval of a sub-plan covers. The estimate is the agreement of its author and
+# confirmer, a review or an objection is a record about the plan, and the approval fields are the
+# engine's own: none of them is part of the plan the user approved.
+APPROVAL_EXCLUDED = DIGEST_EXCLUDED + (
+    "building_place", "setter_decisions", "malformed", "estimate",
+    "parent_resource_approval", "user_subplan_approval")
+
+
+def approval_digest(record: SubPlanRecord) -> str:
+    """The identity of the sub-plan the user approves: the same for the record a frame carries
+    and the record a child contour carries (the place it was built is not part of it)."""
+    body = {k: v for k, v in record.to_dict().items() if k not in APPROVAL_EXCLUDED}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _dir_entry(item) -> tuple[str, str]:
+    if isinstance(item, dict):
+        return (str(item.get("path", "")), str(item.get("mode", "")))
+    if isinstance(item, (list, tuple)):
+        return (str(item[0]) if item else "", str(item[1]) if len(item) > 1 else "")
+    return (str(item), "")
+
+
+def request_parts(rows) -> dict:
+    """The allow rules and added directories a resource request names, normalized and sorted:
+    the only parts of a request the parent approves."""
+    allow: set[str] = set()
+    dirs: set[tuple[str, str]] = set()
+    for row in rows or ():
+        if not isinstance(row, dict):
+            continue
+        allow.update(str(r) for r in (row.get("allow") or ()) if isinstance(r, str))
+        dirs.update(_dir_entry(d) for d in (row.get("add_dirs") or ()))
+    return {"allow": sorted(allow), "add_dirs": [list(d) for d in sorted(dirs)]}
+
+
+def resource_request_digest(rows) -> str:
+    return hashlib.sha256(json.dumps(request_parts(rows), sort_keys=True).encode()).hexdigest()
+
+
+def _dir_within(path: str, mode: str, approved: list[list[str]]) -> bool:
+    return any(mode == m and (path == p or path.startswith(p.rstrip("/") + "/"))
+               for p, m in approved)
+
+
+def request_within(rows, approved: dict) -> list[str]:
+    """Why `rows` is not inside the approved set `{allow, add_dirs}` (request_parts' shape):
+    the one in-set test the agent's approval of a stage's resources applies; [] when inside."""
+    live = request_parts(rows)
+    approved_dirs = [list(d) for d in approved.get("add_dirs") or ()]
+    out = [f"allow rule {rule!r} is outside the approved set"
+           for rule in live["allow"] if rule not in set(approved.get("allow") or ())]
+    out += [f"added directory {path!r} ({mode or 'no mode'}) is outside the approved set"
+            for path, mode in live["add_dirs"] if not _dir_within(path, mode, approved_dirs)]
+    return out
+
+
+def approval_key(state, stage_index: int) -> str:
+    """Where the approvals of the stage `stage_index` of the plan `state` is running sit in
+    `SessionState.stage_approvals`: the stack level of that plan beside the stage number, as
+    `read` keys a frame's record."""
+    return f"{len(state.plan_stack)}:{stage_index}"
+
+
+def approval_entry(state, stage_index: int) -> dict:
+    """The engine's last-written approvals of one stage (empty when it wrote none)."""
+    return state.stage_approvals.get(approval_key(state, stage_index)) or {}
+
+
+def write_parent_approval(state, stage_index: int, rows, *, widens_set: bool = True) -> dict:
+    """Record the parent's approval of the resources and permissions `rows` name for a stage.
+    The user's approval (`widens_set`) also sets the approved set later requests are tested
+    against; an agent's approval inside that set leaves it as it was."""
+    entry = state.stage_approvals.setdefault(approval_key(state, stage_index), {})
+    entry["parent_resource_approval"] = resource_request_digest(rows)
+    if widens_set or "approved" not in entry:
+        entry["approved"] = request_parts(rows)
+    return entry
+
+
+def write_user_approval(state, stage_index: int, record: SubPlanRecord) -> dict:
+    """Record the user's approval of the presented sub-plan `record`: its digest, with the
+    digest and the content of the request it carries."""
+    entry = state.stage_approvals.setdefault(approval_key(state, stage_index), {})
+    entry["user_subplan_approval"] = approval_digest(record)
+    entry["user_subplan_request"] = resource_request_digest(record.resource_request)
+    entry["user_subplan_set"] = request_parts(record.resource_request)
+    return entry
+
+
+def set_planning_mark(state, stage_index: int, planning: bool) -> None:
+    """Mark (or clear) the stage as dispatched only to be planned. Clearing writes nothing for a
+    stage that never carried the mark."""
+    key = approval_key(state, stage_index)
+    if planning:
+        state.stage_approvals.setdefault(key, {})["planning"] = True
+    elif key in state.stage_approvals:
+        state.stage_approvals[key]["planning"] = False
+
+
+def subplan_approval_problem(entry: dict, record: SubPlanRecord | None) -> str | None:
+    """Why the user's approval in `entry` does not cover the live `record`, or None when it does."""
+    if not entry.get("user_subplan_approval"):
+        return "the user has not approved a sub-plan for it (approve-subplan --by user)"
+    if record is None:
+        return "the sub-plan the user approved is no longer on record"
+    if approval_digest(record) != entry["user_subplan_approval"]:
+        return "the sub-plan changed since the user approved it (approve-subplan --by user again)"
+    return None
+
+
 def agree_estimate(record: SubPlanRecord, estimate: Estimate) -> bool:
     """Set the record's estimate. Once agreed, the same figure written again changes nothing
     (False) and a different figure is refused: the confirmer agreed to that figure."""

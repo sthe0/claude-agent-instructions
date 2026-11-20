@@ -2673,7 +2673,14 @@ def _stage_order_context(state: SessionState, *, store: StateStore | None = None
             else:
                 ancestors = frozenset(conditions_securing.ancestors(
                     expected, {s.index: list(s.depends_on or ()) for s in parent_state.stages}))
+    engine_approvals = None
+    if expected is not None:
+        if state.plan_stack:
+            engine_approvals = state.stage_approvals.get(f"{len(state.plan_stack) - 1}:{expected}") or {}
+        elif parent_state is not None:
+            engine_approvals = sub_plan.approval_entry(parent_state, expected)
     return StageOrderContext(
+        engine_approvals=engine_approvals,
         expected_stage=expected,
         binding_conditions=conditions,
         released=_setter_level_released(state, parent_state, conditions),
@@ -3722,7 +3729,7 @@ _SESSION_COMMANDS = (
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
-    "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "approve-subplan", "approve-stage-resources", "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "record-landing", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
@@ -3843,7 +3850,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("mandate_id", ("mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry",
                     "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
-    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
+    ("by", ("confirm-delivery", "approve", "approve-subplan", "resolve", "fire-acknowledge", "resolve-permission",
             "task-reset", "mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume",
             "mandate-retry", "order-executor-revise"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
@@ -3851,6 +3858,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
     # for the @<path> partition (test_argv_text_call_sites.py's _is_candidate excludes any
     # action with choices set), so classifying it would be a stale entry the moment it's added.
+    ("unread_brief_by", ("dispatch",), "who lets one dispatch through unread — a name, not a narrative"),
     ("escape_reason", ("confirm-delivery",),
      "one token from delivery.DELIVERY_ESCAPE_REASONS — the narrative half of "
      "the escape is --note, which is RESOLVE"),
