@@ -289,14 +289,14 @@ def _login_home_with_transcript(tmp_path: Path, monkeypatch, cwd: Path) -> Path:
     return home
 
 
-def test_config_root_refusal_refuses_a_config_dir_other_than_the_parents(tmp_path, monkeypatch):
+def test_config_root_refusal_refuses_a_config_dir_other_than_the_parents(tmp_path, monkeypatch, config_root_check_armed):
     _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "forged"))
     refusal = MOD.config_root_refusal()
     assert refusal is not None and str(tmp_path / "forged") in refusal
 
 
-def test_config_root_refusal_refuses_a_config_dir_when_the_session_is_unknown(tmp_path, monkeypatch):
+def test_config_root_refusal_refuses_a_config_dir_when_the_session_is_unknown(tmp_path, monkeypatch, config_root_check_armed):
     _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "no-such-session")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "forged"))
@@ -304,7 +304,7 @@ def test_config_root_refusal_refuses_a_config_dir_when_the_session_is_unknown(tm
     assert refusal is not None and "the child's config root" in refusal
 
 
-def test_config_root_refusal_passes_the_parents_own_config_root(tmp_path, monkeypatch):
+def test_config_root_refusal_passes_the_parents_own_config_root(tmp_path, monkeypatch, config_root_check_armed):
     home = _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-agent"))
     assert MOD.config_root_refusal() is None

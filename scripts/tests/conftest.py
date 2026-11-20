@@ -39,6 +39,13 @@ if LAUNCH_LOG_ENV not in os.environ:
 if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
     os.environ["PATH"] = path_with_arc_stub(system=os.environ.get("PATH", ""))
 
+from config_root_shim import sitecustomize as _config_root_shim_source  # noqa: E402
+
+config_root_shim = _config_root_shim_source.install()
+if os.environ.get("PYTHONPATH", "").split(os.pathsep)[:1] != [config_root_shim.SHIM_DIR]:
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        p for p in (config_root_shim.SHIM_DIR, os.environ.get("PYTHONPATH")) if p)
+
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 import _core_shuffle  # noqa: E402
@@ -306,6 +313,13 @@ def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
     to the real session's transcript: `_default_claude_runtime_host` replaces the session
     id with one that names no transcript."""
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path_factory.mktemp("parent-outside-any-project")))
+
+
+@pytest.fixture
+def config_root_check_armed(monkeypatch):
+    """Run spawn-specialist's real config-root check in this test's in-process spawners
+    (the suite guards it off: config_root_shim/sitecustomize.py)."""
+    monkeypatch.setattr(config_root_shim, "ARMED", True)
 
 
 @pytest.fixture(autouse=True)
