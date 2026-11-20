@@ -1511,7 +1511,7 @@ def test_overlapping_cycles_on_the_event_path_keep_sweep_free_cycles():
     """Cycle n runs from 2(n-1) s to 2(n-1)+3 s, so each starts before the previous one ends, and a sweep lasts 3 s.
     Cycle_end n arrives at 2n+1 s. Sparse rule: a sweep at cycle_end 1 (3 .. 6 s); cycle_end 2 arrives while it runs
     and is not counted; cycle_ends 3, 4, 5 and 6 are the four that follow, so the next sweep is at n = 6 (13 s):
-    sweeps at n = 1, 6, 11 ... 76, 16 in all, the sweep for n lasting 2n+1 .. 2n+4 s. A cycle overlaps the sweep for n = 1+5j when it is cycle
+    sweeps at n = 1, 6, ..., 76 (16 sweeps), the sweep for n lasting 2n+1 .. 2n+4 s. A cycle overlaps the sweep for n = 1+5j when it is cycle
     2+5j or 3+5j: 2 of every 5. Of cycles 2..80 (79) that is 32 overlapped, 47 sweep-free. A sweep at every
     cycle_end (n odd) overlaps cycles n+1 and n+2, that is all of them: 0 sweep-free."""
     share, taker = timed_share("event", cycle_ends=80, duration=3.0, sweep_s=3.0)
