@@ -1731,6 +1731,11 @@ def _stat_due_as_sweep_start(original):
         cycles, sweeps, offset, resolution)
 
 
+def _sparse_on_the_stat_path_only(_original):
+    """The event path takes a sweep at every ``cycle_end`` again, as before stage 19."""
+    return ("stat",)
+
+
 def _closing_sweep_skipped(original):
     class Mutated(original):
         def closing_sweep(self, screen_ids, **kwargs):
@@ -1833,7 +1838,7 @@ SCRIPT_MODULE_MUTATIONS = {
     "stat-due-by-sweep-start": (HARNESS, "due_by_change_time", _stat_due_as_sweep_start),
     "stat-no-closing-sweep": (HARNESS, "SweepTaker", _closing_sweep_skipped),
     "stat-closing-sweep-beside-running": (HARNESS, "SweepTaker", _closing_sweep_beside_a_running_one),
-    "event-sweep-every-cycle-end": (HARNESS, "SPARSE_SWEEP_PATHS", lambda _original: ("stat",)),
+    "event-sweep-every-cycle-end": (HARNESS, "SPARSE_SWEEP_PATHS", _sparse_on_the_stat_path_only),
     "smoke-void-counted": (HARNESS, "record_counted", lambda _original: (lambda record: True)),
     "report-only-ignored": (HARNESS, "parse_report_only", _report_only_unapplied),
     "r1-from-wall": (HARNESS, "judge_cell_r1", _r1_from_wall),

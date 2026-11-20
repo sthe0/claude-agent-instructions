@@ -1503,17 +1503,20 @@ def test_r3_sweeps_on_the_event_path_leave_sweep_free_cycles():
     event_share, event_taker = timed_share("event")
     assert (stat_share, event_share) == (15 / 19, 15 / 19)
     assert (len(stat_taker.sweeps), len(event_taker.sweeps)) == (4, 4)
-    assert sweeps_taken(9, stat_path=True) == 3, "the first cycle_end, then one per STAT_SWEEP_EVERY"
-    assert sweeps_taken(9) == 9 and sweeps_taken(9, stat_path=False) == 9
+
+
+def test_a_sparse_sweep_taker_sweeps_at_the_first_cycle_end_then_once_per_stat_sweep_every():
+    assert sweeps_taken(9, sparse=True) == 3
+
+
+def test_a_sweep_taker_sweeps_at_every_cycle_end_by_default():
+    assert sweeps_taken(9) == 9
 
 
 def test_overlapping_cycles_on_the_event_path_keep_sweep_free_cycles():
-    """Cycle n runs from 2(n-1) s to 2(n-1)+3 s, so each starts before the previous one ends, and a sweep lasts 3 s.
-    Cycle_end n arrives at 2n+1 s. Sparse rule: a sweep at cycle_end 1 (3 .. 6 s); cycle_end 2 arrives while it runs
-    and is not counted; cycle_ends 3, 4, 5 and 6 are the four that follow, so the next sweep is at n = 6 (13 s):
-    sweeps at n = 1, 6, ..., 76 (16 sweeps), the sweep for n lasting 2n+1 .. 2n+4 s. A cycle overlaps the sweep for n = 1+5j when it is cycle
-    2+5j or 3+5j: 2 of every 5. Of cycles 2..80 (79) that is 32 overlapped, 47 sweep-free. A sweep at every
-    cycle_end (n odd) overlaps cycles n+1 and n+2, that is all of them: 0 sweep-free."""
+    # Cycle n runs 2(n-1) .. 2(n-1)+3 s; cycle_end n arrives at 2n+1 s; a sweep lasts 3 s.
+    # Sparse sweeps at n = 1, 6, ..., 76 (16); each overlaps cycles 2+5j and 3+5j, so of cycles 2..80 (79)
+    # 32 overlap a sweep and 47 are sweep-free. A sweep at every cycle_end would leave none sweep-free.
     share, taker = timed_share("event", cycle_ends=80, duration=3.0, sweep_s=3.0)
     assert len(taker.sweeps) == 16
     assert share == 47 / 79
@@ -1576,7 +1579,7 @@ def do_r3(monkeypatch, tmp_path, path, change_s=1.0):
 
     class Spy(h.SweepTaker):
         def __init__(self, *args, **kwargs):
-            spies.append(kwargs.get("stat_path", False))
+            spies.append(kwargs.get("sparse", False))
             super().__init__(*args, **{**kwargs, "now": lambda: ns(100.0)})
 
     trace = FakeTrace()

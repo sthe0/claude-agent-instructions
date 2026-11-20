@@ -970,13 +970,13 @@ SPARSE_SWEEP_PATHS = ("stat", "event")
 
 class SweepTaker:
     """Takes a sweep of the sources at a ``cycle_end`` when none is running, in a thread of its own so the terminal
-    reader never waits; each sweep is stamped with its start and end on the monotonic clock. On the paths in
-    ``SPARSE_SWEEP_PATHS`` (the ``stat_path`` flag, named for the path that had it first) the first ``cycle_end`` takes the baseline sweep and a later one takes a sweep only when
-    ``STAT_SWEEP_EVERY`` ``cycle_end`` events have arrived since the previous sweep ended, so cycles in between share
-    the machine with no sweep."""
+    reader never waits; each sweep is stamped with its start and end on the monotonic clock. When ``sparse`` (the
+    paths in ``SPARSE_SWEEP_PATHS``) the first ``cycle_end`` takes the baseline sweep and a later one takes a sweep
+    only when ``STAT_SWEEP_EVERY`` ``cycle_end`` events have arrived since the previous sweep ended, so cycles in
+    between share the machine with no sweep."""
 
-    def __init__(self, take, spawn=start_thread, now=time.monotonic_ns, stat_path: bool = False):
-        self.take, self.spawn, self.now, self.stat_path = take, spawn, now, stat_path
+    def __init__(self, take, spawn=start_thread, now=time.monotonic_ns, sparse: bool = False):
+        self.take, self.spawn, self.now, self.sparse = take, spawn, now, sparse
         self.sweeps: list[dict] = []
         self.busy = False
         self.started = False
@@ -985,7 +985,7 @@ class SweepTaker:
     def on_event(self, trace, event) -> None:
         if event.get("ev") != "cycle_end" or self.busy:
             return
-        if self.stat_path and self.started:
+        if self.sparse and self.started:
             self.arrived += 1
             if self.arrived < STAT_SWEEP_EVERY:
                 return
@@ -1017,7 +1017,7 @@ class SweepTaker:
 
 
 def r3_sweep_taker(path: str, take, spawn=start_thread, now=time.monotonic_ns) -> SweepTaker:
-    return SweepTaker(take, spawn=spawn, now=now, stat_path=path in SPARSE_SWEEP_PATHS)
+    return SweepTaker(take, spawn=spawn, now=now, sparse=path in SPARSE_SWEEP_PATHS)
 
 
 IN_MODIFY, IN_MOVED_TO, IN_CREATE, IN_DELETE, IN_Q_OVERFLOW = 0x2, 0x80, 0x100, 0x200, 0x4000
@@ -2205,7 +2205,7 @@ class RealRunner:
         arm, path = job["arm"], job["path"]
         tree = self.new if arm == "new" else self.old
         sweeper = r3_sweep_taker(path, ContractWatcher())
-        sparse = sweeper.stat_path
+        sparse = sweeper.sparse
         observer = RunObserver(observed_dirs())
         observer.start()
         load_start = os.getloadavg()[0]
