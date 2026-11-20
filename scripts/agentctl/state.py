@@ -2255,6 +2255,7 @@ class PlanFrame:
     plan_snapshot_hash: str | None = None
     approved_grants_sha256: str | None = None
     approved_grant_entries: dict[str, dict] | None = None
+    venue_settings_at_approve: dict[str, str] | None = None
     accepted_plan_digest: str | None = None
     plan_binding_captured: bool = False
     # Runtime grants are keyed by stage index of the live plan, so they belong to it: the child
@@ -3424,6 +3425,7 @@ class SessionState:
                 plan_snapshot_hash=f.get("plan_snapshot_hash"),
                 approved_grants_sha256=f.get("approved_grants_sha256"),
                 approved_grant_entries=f.get("approved_grant_entries"),
+                venue_settings_at_approve=f.get("venue_settings_at_approve"),
                 accepted_plan_digest=f.get("accepted_plan_digest"),
                 plan_binding_captured=bool(f.get("plan_binding_captured", False)),
                 runtime_grants=f.get("runtime_grants"),
@@ -3539,7 +3541,7 @@ PLAN_BOUND_FIELDS = frozenset({
     "code_review_rounds", "approval", "resolution", "stages", "current_stage", "plugins",
     "plugins_archive", "plan_snapshot_path", "plan_snapshot_hash", "accepted_plan_digest",
     "effort_estimate", "effort_baseline", "effort_actuals", "effort_fires", "effort_spend_seen",
-    "approved_grants_sha256", "approved_grant_entries", "runtime_grants",
+    "approved_grants_sha256", "approved_grant_entries", "venue_settings_at_approve", "runtime_grants",
     "order_agreement", "order_agreement_history", "order_challenges",
 })
 # SESSION_SCOPED_FIELDS belong to the session (or to the engine's bookkeeping of it): push and
