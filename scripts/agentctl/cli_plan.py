@@ -68,6 +68,8 @@ from .state import (
     ORDER_EXEMPT_LINKED,
     ORDER_EXEMPT_SPAWNED,
     order_agree_marker,
+    subplan_marker,
+    subplan_receipt_path,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
     PLAN_PRESENTATION_KIND_ORDER,
@@ -342,10 +344,6 @@ def _order_receipt_understanding(digest: str) -> str | None:
     return digest
 
 
-def subplan_receipt_path(stage: int) -> str:
-    return f"subplan:{stage}"
-
-
 def _present_subplan(args, state: SessionState, *, store: StateStore) -> Directive:
     """`present-plan --kind subplan --stage <n>`: stamp a receipt for the recorded sub-plan of one
     stage. The receipt binds the sub-plan's approval digest (so a later edit of the sub-plan
@@ -364,7 +362,7 @@ def _present_subplan(args, state: SessionState, *, store: StateStore) -> Directi
         return Directive(False, state.node, "noop",
                          f"stage {stage} has no sub-plan on record to present: record it first")
     digest = sub_plan.approval_digest(record)
-    anchor = f"[subplan:{stage}:{digest[:12]}]"
+    anchor = subplan_marker(stage, digest)
     raw, text, refusal = _read_presented_rendering(args, state)
     if refusal is not None:
         return refusal
@@ -394,8 +392,10 @@ def _present_subplan(args, state: SessionState, *, store: StateStore) -> Directi
     return _attach_writer_gate(Directive(
         True, state.node, "continue",
         f"presentation receipt recorded (kind=subplan, stage {stage}). Next: emit this exact "
-        "rendering as the turn's FINAL text message; the user approves it with "
-        f"`approve-subplan --stage {stage} --by <their name>` once the delivery is confirmed",
+        "rendering as the turn's FINAL text message, then ask the user to approve it with an "
+        f"AskUserQuestion option whose label carries {anchor}: the delivery hook stamps the "
+        "delivery when that rendering has landed (or `confirm-delivery --kind subplan` is the "
+        f"escape); the user's approval is `approve-subplan --stage {stage} --by <their name>`",
         data={"rendering_sha256": presentation.rendering_sha256, "subplan_sha256": digest,
               "anchor": anchor},
     ), writer_gate)

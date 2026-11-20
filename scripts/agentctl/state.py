@@ -1415,6 +1415,20 @@ def order_agree_marker(understanding_digest: str) -> str:
     return f"{ORDER_AGREE_MARKER_PREFIX}{understanding_digest[:12]}]"
 
 
+# The anchor a sub-plan rendering carries and an approval ask's option repeats, bound to the
+# sub-plan presented: the prefix, the stage and the first 12 hex digits of its approval digest.
+# Emitted by `present-plan --kind subplan`, checked by the delivery hook.
+SUBPLAN_MARKER_PREFIX = "[subplan:"
+
+
+def subplan_receipt_path(stage: int) -> str:
+    return f"subplan:{stage}"
+
+
+def subplan_marker(stage: int, approval_digest: str) -> str:
+    return f"{SUBPLAN_MARKER_PREFIX}{stage}:{approval_digest[:12]}]"
+
+
 @dataclass
 class PlanPresentation:
     plan_path: str

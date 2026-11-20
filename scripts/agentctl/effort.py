@@ -230,7 +230,7 @@ class Divergence:
 
 # --- the estimate: what the CURRENT plan claims -------------------------------
 
-def _stage_tier(stage) -> str:
+def stage_tier(stage) -> str:
     if stage.actor.cost_tier:
         return stage.actor.cost_tier
     return _DEFAULT_TIER_SPAWN if stage.is_spawn() else _DEFAULT_TIER_IN_THREAD
@@ -340,7 +340,7 @@ def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
     for stage in state.stages:
         if is_skipped(stage):
             continue
-        tier = _stage_tier(stage)
+        tier = stage_tier(stage)
         if stage.is_spawn():
             spend += thr.budget_usd_float(tier)
         minutes += float(thr.effort_stage_minutes(tier))
@@ -857,7 +857,7 @@ def priced_snapshot(state: SessionState) -> dict:
     for stage in state.stages:
         uid = state.stage_uid(stage.index)
         if uid is not None and not is_skipped(stage):
-            stages[uid] = [_stage_tier(stage), bool(stage.is_spawn())]
+            stages[uid] = [stage_tier(stage),bool(stage.is_spawn())]
     return {"estimate": dict(state.effort_estimate or {}), "stages": stages}
 
 
@@ -1046,7 +1046,7 @@ def retier_records(
         stage = by_index.get(index)
         if stage is None:
             continue
-        declared = _stage_tier(stage)
+        declared = stage_tier(stage)
         act, source = _stage_attribution(stage, scale)
         observed = None
         if act is not None:

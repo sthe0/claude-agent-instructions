@@ -1991,7 +1991,7 @@ def stage_above_threshold(stage, thr) -> bool:
         return True
     minutes = stage.expected_minutes
     if minutes is None:
-        minutes = thr.effort_stage_minutes(effort._stage_tier(stage))
+        minutes = thr.effort_stage_minutes(effort.stage_tier(stage))
     return classify.above_threshold(stage.declared_size, stage.size_flags, minutes, thr)
 
 

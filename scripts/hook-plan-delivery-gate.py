@@ -126,6 +126,8 @@ try:
     from agentctl.state import PLAN_PRESENTATION_KIND_ORDER as _KIND_ORDER  # noqa: E402
     from agentctl.state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _KIND_REPLAN_DIFF  # noqa: E402
     from agentctl.state import ORDER_AGREE_MARKER_PREFIX  # noqa: E402
+    from agentctl.state import PLAN_PRESENTATION_KIND_SUBPLAN as _KIND_SUBPLAN  # noqa: E402
+    from agentctl.state import SUBPLAN_MARKER_PREFIX  # noqa: E402
     from agentctl.state import order_agree_marker  # noqa: E402
     from agentctl.state import PlanPresentation as _PlanPresentation  # noqa: E402
     from agentctl.state import SessionState as _SessionState  # noqa: E402
@@ -624,7 +626,7 @@ def _decide_session(
                 # plan approval was being asked for.
                 is_order_ask = has_marker_option(
                     payload.get("tool_input") or {}, ORDER_AGREE_MARKER_PREFIX,
-                )
+                ) or has_marker_option(payload.get("tool_input") or {}, SUBPLAN_MARKER_PREFIX)
                 if not same_turn_denied and not observe_only and not is_order_ask:
                     if "verdict" not in ask_judged:
                         ask_judged["verdict"] = _judge_approval_ask(payload, budget)
@@ -669,6 +671,14 @@ def _decide_session(
                 order_state, payload.get("tool_input") or {}, delivered_texts, transcript_path,
             )
 
+    subplan_receipt_to_stamp: _PlanPresentation | None = None
+    if has_marker_option(payload.get("tool_input") or {}, SUBPLAN_MARKER_PREFIX):
+        subplan_state = _state()
+        if subplan_state is not None:
+            subplan_receipt_to_stamp = _subplan_receipt_verified(
+                subplan_state, payload.get("tool_input") or {}, delivered_texts, transcript_path,
+            )
+
     decision, reason, delivery_verified = gate_decision(
         node, plan_ts, prompt_ts, turn_start_ts,
         presentation_active=presentation_active,
@@ -684,7 +694,8 @@ def _decide_session(
     # the ask carries their marker, while a delivered essence stays verifiable
     # forever, so the essence must come last.
     return decision, reason, sp, (
-        order_receipt_to_stamp or replan_receipt_to_stamp or essence_receipt_to_stamp
+        order_receipt_to_stamp or replan_receipt_to_stamp or subplan_receipt_to_stamp
+        or essence_receipt_to_stamp
     )
 
 
@@ -709,6 +720,31 @@ def _order_receipt_verified(
     if delivered_texts is None and isinstance(transcript_path, str) and transcript_path:
         delivered_texts = delivered_final_texts(Path(transcript_path))
     return receipt if _delivery_observed(receipt, None, delivered_texts) else None
+
+
+def _subplan_receipt_verified(
+    state: _SessionState,
+    tool_input: dict,
+    delivered_texts: list[tuple[str, float | None]] | None,
+    transcript_path: object,
+) -> _PlanPresentation | None:
+    """The sub-plan receipt to stamp, or None. A sibling of the order certificate, keyed by the
+    ask's own marker: an option must carry the `[subplan:<stage>:<digest>]` anchor of the very
+    sub-plan a receipt is bound to, and that receipt's rendering must have landed as a completed
+    turn's final text after it was registered. Whether the sub-plan is still the one presented is
+    `approve-subplan`'s check, as it reads the live record. Never denies — only certifies."""
+    for receipt in reversed(state.plan_presentations):
+        if receipt.kind != _KIND_SUBPLAN or not receipt.understanding_sha256:
+            continue
+        stage = receipt.plan_path.partition(":")[2]
+        marker = f"{SUBPLAN_MARKER_PREFIX}{stage}:{receipt.understanding_sha256[:12]}]"
+        if not has_marker_option(tool_input, marker):
+            continue
+        if delivered_texts is None and isinstance(transcript_path, str) and transcript_path:
+            delivered_texts = delivered_final_texts(Path(transcript_path))
+        if _delivery_observed(receipt, None, delivered_texts):
+            return receipt
+    return None
 
 
 def main() -> int:

@@ -284,25 +284,55 @@ def test_presentation_shows_subplans_estimates_and_decided_later_stages(
     assert "`Edit`" in text and "`/work/x` (write)" in text
 
 
-def test_presentation_shows_every_level_of_a_three_level_plan_and_a_childs_records(
-        store, venued_fixtures_dir, tmp_path, monkeypatch):
+def _three_stages(stages, *, lazy, small):
+    """Three described stages of one plan: stage 1 above the line, `lazy` (index) decided later,
+    `small` (index) below the line at five minutes."""
+    import copy
+    out = [copy.deepcopy(stages[0]), copy.deepcopy(stages[1]), copy.deepcopy(stages[1])]
+    for position, stage in enumerate(out, start=1):
+        stage.index, stage.title = position, f"stage {position} of the level"
+        stage.place, stage.binding_conditions_stated = ENGINE, True
+        stage.lazy = position == lazy
+        stage.expected_minutes = 5 if position == small else None
+    return out
+
+
+def _level_record(stage, minutes, allow):
+    record = _rec(stage, allow=allow)
+    record.estimate = sub_plan.Estimate(minutes=minutes, usd=minutes / 10, author="a", confirmer="b")
+    return record
+
+
+def test_presentation_shows_every_level_of_a_three_level_plan_over_real_links(
+        home_store, venued_fixtures_dir, tmp_path):
+    """The presented block reaches every level through the engine's own links: the plan itself,
+    the child handed its stage 1, and the child that one handed its own stage 1. At each level
+    every sub-plan is shown with its estimate and its resources, each stage decided later by name,
+    each stage below the size line with its tier's price."""
+    store = home_store
     state = _submitted(store, venued_fixtures_dir)
-    top = _rec(1)
-    top.estimate = sub_plan.Estimate(minutes=60, usd=2.0, author="a", confirmer="b")
-    sub_plan.store(state, top, level=0)
-    mid, deep = _rec(2, allow=("Read",)), _rec(3, allow=("Bash(make:*)",))
-    deep.estimate = sub_plan.Estimate(minutes=7, usd=0.5, author="a", confirmer="b")
-    sub_plan.store(state, mid, level=1)
-    sub_plan.store(state, deep, level=2)
-    child = state_mod.SessionState(session_id="kid", task_id="t")
-    sub_plan.store(child, _rec(4, allow=("Glob",)), level=3)
-    monkeypatch.setattr(sub_plan, "linked_children", lambda st, store=None: [child])
-    text = render_mod.render_subplans(
-        load_plan(_new_form_plan(venued_fixtures_dir, tmp_path)), state, store)
-    assert "level 1, stage 2: sub-plan recorded" in text and "`Read`" in text
-    assert "level 2, stage 3: sub-plan recorded — estimate 7.0 min / $0.5" in text
+    doc = load_plan(_new_form_plan(venued_fixtures_dir, tmp_path))
+    doc.stages[:] = _three_stages(doc.stages, lazy=2, small=3)
+    kid = _linked_kid(store, tmp_path, "kid", "2026-01-01T00:00:00.000001+00:00",
+                      _level_record(1, 60, ("Edit",)))
+    kid.stages = _three_stages(state.stages, lazy=2, small=3)
+    store.save(kid)
+    grandkid = _linked_kid(store, tmp_path, "grandkid", "2026-01-01T00:00:00.000002+00:00",
+                           _level_record(1, 7, ("Bash(make:*)",)), parent="kid")
+    grandkid.stages = _three_stages(state.stages, lazy=1, small=2)
+    store.save(grandkid)
+
+    text = render_mod.render_subplans(doc, store.load(SESSION), store)
+
+    price = "below the size line, priced at tier "
+    assert text.count("decided later") == 3, text
+    assert text.count(price) == 3, text
+    assert "- stage 1 “stage 1 of the level”: sub-plan recorded — estimate 60.0 min / $6.0" in text
+    assert ("- child kid, stage 1 “stage 1 of the level”: sub-plan recorded — "
+            "estimate 7.0 min / $0.7") in text
     assert "`Bash(make:*)`" in text
-    assert "child kid, level 3, stage 4" in text and "`Glob`" in text
+    assert "- child grandkid, stage 1 “stage 1 of the level”: decided later" in text
+    assert "- child grandkid, stage 2 “stage 2 of the level”: below the size line" in text
 
 
 def test_a_below_threshold_stage_is_shown_with_its_tier_price(
@@ -607,7 +637,7 @@ def test_spawned_decided_later_planning_dispatch(home_store, venued_fixtures_dir
     assert gates.child_approval_blockers(child, store.load(SESSION)) == []
 
 
-def _linked_kid(store, tmp_path, sid, created_at, record=None):
+def _linked_kid(store, tmp_path, sid, created_at, record=None, *, parent=SESSION, stage_index=1):
     """A child session the way a spawn leaves it: its handoff record written and adopted through
     `norm_handoff`, so its `parent_link` is the engine's own, and its record kept under the stage
     number alone."""
@@ -616,7 +646,7 @@ def _linked_kid(store, tmp_path, sid, created_at, record=None):
     from agentctl import norm_handoff
 
     handoff = norm_handoff.build_record(
-        parent_session=SESSION, stage_index=1, kind="developer", norm=_parent_norm(tmp_path),
+        parent_session=parent, stage_index=stage_index, kind="developer", norm=_parent_norm(tmp_path),
         grants=[], depth=1, parent_lineage=None, created_at=created_at)
     link, reason = norm_handoff.verify_env_value(spawn_handoff(store.root, handoff, sid))
     assert link is not None, reason
@@ -1396,3 +1426,69 @@ def test_the_whole_verb_sequence_for_a_decided_later_stage(home_store, venued_fi
     _put(store, _rec(1, method="split it differently"))
     again = Spawns()
     _not_started(_dispatch(store, spawns=again), again, "changed since the user approved it")
+
+
+# --- the delivery stamp of a presented sub-plan ----------------------------------------------
+
+def _ask_after_the_rendering(store, *, marker=True, landed=True, digest=None, sid=SESSION):
+    """Run the delivery hook on an `AskUserQuestion` over a transcript in which the presented
+    rendering reached the user (`landed`) as a completed turn's final text."""
+    from test_plan_delivery_gate_presentation import (
+        run_hook, text_only_entry, user_prompt_entry, write_transcript)
+    home = store.root.parent.parent
+    receipt = store.load(sid).plan_presentations[-1]
+    entries = [user_prompt_entry(receipt.presented_ts - 5)]
+    if landed:
+        entries.append(text_only_entry(receipt.presented_ts + 5, receipt.rendering_text))
+    entries.append(user_prompt_entry(receipt.presented_ts + 10))
+    transcript = write_transcript(home / "t.jsonl", entries)
+    anchor = state_mod.subplan_marker(1, digest or receipt.understanding_sha256)
+    label = f"Approve this sub-plan {anchor}" if marker else "Approve this sub-plan"
+    payload = {"tool_name": "AskUserQuestion", "session_id": sid, "transcript_path": str(transcript),
+               "tool_input": {"questions": [{"question": "Approve the sub-plan of stage 1?",
+                                             "options": [{"label": label}, {"label": "No"}]}]}}
+    return run_hook(payload, home)
+
+
+@pytest.mark.parametrize("ask, stamped", [
+    ({}, True),
+    ({"marker": False}, False),
+    ({"landed": False}, False),
+    ({"digest": "0" * 64}, False),
+], ids=["marked-and-delivered", "no-anchor-in-the-ask", "rendering-never-landed",
+        "anchor-of-another-sub-plan"])
+def test_the_hook_stamps_a_presented_subplan_only_on_its_anchored_ask_after_the_rendering_landed(
+        home_store, venued_fixtures_dir, tmp_path, ask, stamped):
+    """The sub-plan's delivery stamp is written by the delivery hook as the plan's is: when the
+    rendering landed as a completed turn's final text and the ask carries the anchor of this very
+    sub-plan. `approve-subplan` then takes the user's approval, and only then."""
+    from test_plan_delivery_gate_presentation import _stamp
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True)
+    _put(store, _rec(1))
+    _refused(_present_and_approve(store, tmp_path, confirm=False), "has no delivery stamp")
+
+    proc = _ask_after_the_rendering(store, **ask)
+    assert proc.returncode == 0, proc.stderr
+    assert (_stamp(store.root.parent.parent, SESSION) is not None) is stamped
+
+    approved = cli_approval.cmd_approve_subplan(ns(session=SESSION, stage=1, by="fedor"), store=store)
+    if stamped:
+        assert approved.ok is True and _entry(store)["user_subplan_approval"]
+    else:
+        _refused(approved, "has no delivery stamp")
+        assert not _entry(store).get("user_subplan_approval")
+
+
+def test_a_stamp_given_for_one_subplan_is_refused_once_the_subplan_is_edited(
+        home_store, venued_fixtures_dir, tmp_path):
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True)
+    _put(store, _rec(1))
+    _present_and_approve(store, tmp_path, confirm=False)
+    assert _ask_after_the_rendering(store).returncode == 0
+    _put(store, _rec(1, method="split it differently"))
+    refused = cli_approval.cmd_approve_subplan(ns(session=SESSION, stage=1, by="fedor"), store=store)
+    _refused(refused, "changed since it was presented")

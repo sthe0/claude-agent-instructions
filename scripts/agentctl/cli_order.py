@@ -275,7 +275,7 @@ def _order_agreement_anchor(state: SessionState, receipt, state_file: Path) -> "
             "delivery hook stamp it, and put a fresh ask to the user, since an earlier answer "
             "predates that stamp"
         )
-    blockers = gates._delivery_stamp_blocker(state, receipt, None)
+    blockers = gates.delivery_stamp_blocker(state, receipt, None)
     if blockers:
         return "the order presentation has no usable delivery proof: " + "; ".join(blockers)
     anchor = (ORDER_AGREEMENT_ANCHOR_CONFIRMED if stamp.source == delivery.SOURCE_OVERRIDE

@@ -70,7 +70,7 @@ preceding event it must follow, escape flag that bypasses it.
 - `approval_ask` (`hook-plan-delivery-gate.py:353` `gate_decision` with `_same_turn_denied`, `_delivery_observed`,
   `_has_show_full_plan_option`, `_receipt_stale_reason`, `_judge_approval_ask`, `_decide_session`;
   `advisor.py:1651` `approval_ask_prefilter`, `advisor.py:1661` `judge_approval_ask`; `gates.py:2521`
-  `plan_presentation_active`, `gates.py:2663` `plan_presentation_blockers`, `_delivery_stamp_blocker`
+  `plan_presentation_active`, `gates.py:2663` `plan_presentation_blockers`, `delivery_stamp_blocker`
   `gates.py:2630`, `_receipt_binding_blocker` `gates.py:2604`, `_no_stamp_blocker` `gates.py:2566`).
   - *Marker:* `[show-full-plan]` (`state.py:1350`) in an option label or description, **required** on the ask
     (`_NO_MARKER_REASON`). The ask itself is identified not by the marker but by a model judge behind a

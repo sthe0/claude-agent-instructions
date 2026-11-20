@@ -108,6 +108,8 @@ from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
+from .state import PLAN_PRESENTATION_KIND_SUBPLAN as _PLAN_PRESENTATION_KIND_SUBPLAN
+from .state import subplan_receipt_path
 from .state import Stage as _Stage
 from .state import asserts_landing
 from .state import is_settled, is_skipped
@@ -3279,7 +3281,7 @@ def _receipt_binding_blocker(receipt, target_plan: str | None, label: str,
     return None
 
 
-def _delivery_stamp_blocker(state: SessionState, receipt, probe) -> list[str]:
+def delivery_stamp_blocker(state: SessionState, receipt, probe) -> list[str]:
     """Shared delivery-proof check for the plan-presentation family: the
     receipt must additionally be PROVEN DELIVERED (a delivery stamp exists,
     bound to the exact receipt). Fails CLOSED — see plan_presentation_blockers'
@@ -3392,7 +3394,29 @@ def plan_presentation_blockers(
     stale = _receipt_binding_blocker(receipt, target_plan, "plan presentation", state)
     if stale is not None:
         return [stale]
-    return _delivery_stamp_blocker(state, receipt, probe)
+    return delivery_stamp_blocker(state, receipt, probe)
+
+
+def subplan_presentation_blockers(state: SessionState, stage: int, live_digest: str,
+                                  *, probe=None) -> list[str]:
+    """The sub-plan counterpart of `plan_presentation_blockers`: the sub-plan of `stage` must have
+    been presented (a receipt for it exists), the receipt must be bound to the sub-plan as it
+    stands (`live_digest`), and the presentation must be proven delivered, which fails closed the
+    same way. [] == may be approved."""
+    path = subplan_receipt_path(stage)
+    receipt = next((r for r in reversed(state.plan_presentations)
+                    if r.kind == _PLAN_PRESENTATION_KIND_SUBPLAN and r.plan_path == path), None)
+    if receipt is None:
+        return [f"stage {stage}'s sub-plan was not presented to the user: run "
+                f"present-plan --kind subplan --stage {stage}"]
+    if receipt.understanding_sha256 != live_digest:
+        return [f"stage {stage}'s sub-plan changed since it was presented: present it again "
+                f"(present-plan --kind subplan --stage {stage})"]
+    delivered = delivery_stamp_blocker(state, receipt, probe)
+    if delivered:
+        return [f"the presentation of stage {stage}'s sub-plan has no delivery stamp: "
+                f"{delivered[0]}"]
+    return []
 
 
 def unplanned_stage_blockers(state: SessionState, target_plan: str | None, *, store=None) -> list[str]:
@@ -3694,7 +3718,7 @@ def replan_authorization_blockers(
     naming `present-plan --kind replan_diff --plan <target>`; a stale one
     blocks via _receipt_binding_blocker labelled 'replan-diff presentation'
     (never the word 'delivery' — see that helper's docstring); then
-    _delivery_stamp_blocker applies the identical fail-CLOSED delivery
+    delivery_stamp_blocker applies the identical fail-CLOSED delivery
     discipline, including the SOURCE_OVERRIDE by/note requirement and the
     _no_stamp_blocker hook-wiring diagnosis."""
     if not replan_authorization_active(state):
@@ -3721,7 +3745,7 @@ def replan_authorization_blockers(
     stale = _receipt_binding_blocker(receipt, target_plan, "replan-diff presentation", state)
     if stale is not None:
         return [stale]
-    return _delivery_stamp_blocker(state, receipt, probe)
+    return delivery_stamp_blocker(state, receipt, probe)
 
 
 def stage_review_active(state: SessionState) -> bool:

@@ -32,10 +32,8 @@ from .plan import (
     entries_grants_sha256,
     stage_above_threshold,
 )
-from .cli_plan import subplan_receipt_path
 from .config import Thresholds
 from .state import (
-    PLAN_PRESENTATION_KIND_SUBPLAN,
     AGENT_ACTOR,
     is_skipped,
     Partition,
@@ -1070,22 +1068,9 @@ def cmd_approve_subplan(args, *, store: StateStore, runner: Runner | None = None
     if record is None:
         return Directive(False, state.node, "noop", f"stage {stage.index} has no sub-plan on record")
     live = sub_plan.approval_digest(record)
-    path = subplan_receipt_path(stage.index)
-    receipt = next((r for r in reversed(state.plan_presentations)
-                    if r.kind == PLAN_PRESENTATION_KIND_SUBPLAN and r.plan_path == path), None)
-    if receipt is None:
-        return Directive(False, state.node, "await_user_approval",
-                         f"stage {stage.index}'s sub-plan was not presented to the user: run "
-                         f"present-plan --kind subplan --stage {stage.index}")
-    if receipt.understanding_sha256 != live:
-        return Directive(False, state.node, "await_user_approval",
-                         f"stage {stage.index}'s sub-plan changed since it was presented: present "
-                         f"it again (present-plan --kind subplan --stage {stage.index})")
-    delivery = gates._delivery_stamp_blocker(state, receipt, None)
-    if delivery:
-        return Directive(False, state.node, "await_user_approval",
-                         f"the presentation of stage {stage.index}'s sub-plan has no delivery "
-                         f"stamp: {delivery}")
+    blockers = gates.subplan_presentation_blockers(state, stage.index, live)
+    if blockers:
+        return Directive(False, state.node, "await_user_approval", "; ".join(blockers))
     sub_plan.write_user_approval(state, stage.index, record)
     state.log("approve_subplan", stage=stage.index, by=by, digest=live)
     store.save(state)

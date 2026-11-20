@@ -2064,67 +2064,111 @@ def render_subplans(doc: PlanDoc, state, store=None) -> str:
     by name, and each stage below the size line with the price of its cost tier and the resources
     it is shown with. A projection of the typed plan and the engine's records, like
     `render_plan_grants`; empty for an old-form plan and for a plan with nothing of the kind."""
+    from . import sub_plan
+    from .plan import load_plan
+
+    def children_of(owner):
+        try:
+            return sub_plan.linked_children(owner, store)
+        except Exception:
+            return []
+
+    def plan_rows_of(path):
+        try:
+            return _plan_request_rows(load_plan(path)) if path else {}
+        except Exception:
+            return {}
+
+    def read_current(owner, children):
+        def read(index):
+            try:
+                return sub_plan.read(owner, index, store, children)
+            except sub_plan.SubPlanError:
+                return None
+        return read
+
+    def owner_lines(owner, stages, plan_rows, label, seen):
+        """The stages of the plan `owner` is running, the plans of the frames it pushed, and the
+        plans of the sessions linked below it, each at its own level."""
+        out = []
+        for level, frame in enumerate(owner.plan_stack):
+            out += _subplan_stage_lines(
+                frame.stages,
+                lambda index, level=level: _record_from(owner.sub_plan_records.get(
+                    sub_plan.record_key(index, level))),
+                plan_rows_of(frame.plan_path), f"{label}level {level}, ")
+        children = children_of(owner)
+        out += _subplan_stage_lines(stages, read_current(owner, children), plan_rows, label)
+        for child in children:
+            if child.session_id in seen:
+                continue
+            seen.add(child.session_id)
+            out += owner_lines(child, child.stages, plan_rows_of(child.plan_path),
+                               f"child {child.session_id}, ", seen)
+        return out
+
+    lines = owner_lines(state, doc.stages, _plan_request_rows(doc), "", {state.session_id})
+    if not lines:
+        return ""
+    return "Sub-plans, resources and permissions\n" + "\n".join(lines) + "\n"
+
+
+def _plan_request_rows(doc: PlanDoc) -> dict[int, list[dict]]:
+    rows: dict[int, list[dict]] = {}
+    for row in doc.meta.resource_requests:
+        if row.stage is not None:
+            rows.setdefault(row.stage, []).append(
+                {"allow": list(row.allow), "add_dirs": list(row.add_dirs)})
+    return rows
+
+
+def _record_from(raw):
+    from . import sub_plan
+
+    return sub_plan.SubPlanRecord.from_dict(raw) if raw else None
+
+
+def _estimate_text(est) -> str:
+    if est is None:
+        return "no estimate"
+    return (f"estimate {est.minutes if est.minutes is not None else '?'} min"
+            f" / ${est.usd if est.usd is not None else '?'}"
+            + (f", confirmed by {est.confirmer}" if est.confirmer else ""))
+
+
+def _subplan_stage_lines(stages, record_of, plan_rows: dict, label: str) -> list[str]:
+    """One line per described stage of one plan: a stage decided later by name, a stage below the
+    size line with the price of its cost tier and the resources it is shown with, a stage above
+    it with its recorded sub-plan (`record_of(stage number)`), its estimate and what it asks for.
+    `label` names the owner of the plan when it is not the presented one."""
     from . import effort, sub_plan
     from .config import Thresholds
     from .plan import stage_above_threshold
 
     thr = Thresholds()
-    try:
-        children = sub_plan.linked_children(state, store)
-    except Exception:
-        children = []
-    plan_rows: dict[int, list[dict]] = {}
-    for row in doc.meta.resource_requests:
-        if row.stage is not None:
-            plan_rows.setdefault(row.stage, []).append(
-                {"allow": list(row.allow), "add_dirs": list(row.add_dirs)})
     lines: list[str] = []
-    for stage in doc.stages:
+    for stage in stages:
         if stage.place is None:
             continue
-        head = f"- stage {stage.index} “{stage.title}”: "
+        head = f"- {label}stage {stage.index} “{stage.title}”: "
         if sub_plan.is_decided_later(stage):
             lines.append(head + "decided later — its sub-plan is written when it starts, and "
                                 "the stage starts only after you approve that sub-plan")
             continue
         if not stage_above_threshold(stage, thr):
-            tier = effort._stage_tier(stage)
+            tier = effort.stage_tier(stage)
             price = (f"tier {tier}: ${thr.budget_usd_float(tier):.2f}, "
                      f"{thr.effort_stage_minutes(tier)} min")
             lines.append(head + f"below the size line, priced at {price}; resources: "
                          + _request_text(sub_plan.request_parts(plan_rows.get(stage.index))))
             continue
-        try:
-            record = sub_plan.read(state, stage.index, store, children)
-        except sub_plan.SubPlanError:
-            record = None
+        record = record_of(stage.index)
         if record is None:
             lines.append(head + "above the size line and has no sub-plan yet")
             continue
-        est = record.estimate
-        figure = ("no estimate" if est is None else
-                  f"estimate {est.minutes if est.minutes is not None else '?'} min"
-                  f" / ${est.usd if est.usd is not None else '?'}"
-                  + (f", confirmed by {est.confirmer}" if est.confirmer else ""))
-        lines.append(head + f"sub-plan recorded — {figure}; resources: "
+        lines.append(head + f"sub-plan recorded — {_estimate_text(record.estimate)}; resources: "
                      + _request_text(sub_plan.request_parts(record.resource_request)))
-    deeper = [("", key, raw) for key, raw in sorted(state.sub_plan_records.items())
-              if key.partition(":")[2] and key.partition(":")[0] != str(len(state.plan_stack))]
-    for child in children:
-        deeper += [(f"child {child.session_id}, ", key, raw)
-                   for key, raw in sorted(child.sub_plan_records.items()) if ":" in key]
-    for owner, key, raw in deeper:
-        level, _, number = key.partition(":")
-        record = sub_plan.SubPlanRecord.from_dict(raw)
-        est = record.estimate
-        figure = ("no estimate" if est is None else
-                  f"estimate {est.minutes if est.minutes is not None else '?'} min"
-                  f" / ${est.usd if est.usd is not None else '?'}")
-        lines.append(f"- {owner}level {level}, stage {number}: sub-plan recorded — {figure}; "
-                     f"resources: " + _request_text(sub_plan.request_parts(record.resource_request)))
-    if not lines:
-        return ""
-    return "Sub-plans, resources and permissions\n" + "\n".join(lines) + "\n"
+    return lines
 
 
 def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:

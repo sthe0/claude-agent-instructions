@@ -156,7 +156,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/gates.py`:`file_norm_digest` | not a binding | Hashes a norm file, not a plan. |
 | `scripts/method-statement-eval.py`:`sha256_file` | not a binding | Hashes an evaluation set or an instruction file to stamp the record of a run; it compares nothing. |
 | `scripts/agentctl/delivery.py`:`has_answered_channel_delivery` | not a binding | Compares the plan digest a channel stamp was written for with the one in the engine's own recorded channel-delivery event; both are recorded, neither is a plan file's current digest. |
-| `scripts/agentctl/gates.py`:`_delivery_stamp_blocker` | not a binding | Compares a delivery stamp with its receipt; both are recorded, neither is a plan file's current digest. |
+| `scripts/agentctl/gates.py`:`delivery_stamp_blocker` | not a binding | Compares a delivery stamp with its receipt; both are recorded, neither is a plan file's current digest. |
 | `scripts/agentctl/plan_convert.py`:`cmd_plan_convert_live` | not a binding | Requires the plan file's digest to equal the accepted digest exactly before converting; after a conversion the two are different forms, and this check runs against the form on disk. |
 | `scripts/agentctl/plan_store.py`:`_intact` | not a binding | Re-hashes a stored object against its own name. |
 | `scripts/hook-plan-delivery-gate.py`:`_already_stamped` | not a binding | Compares a stamp's receipt digest with the receipt, both recorded. |

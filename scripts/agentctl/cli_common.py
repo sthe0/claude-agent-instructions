@@ -696,7 +696,7 @@ def _note_user_approved_tiers(state: SessionState) -> None:
     for stage in state.stages:
         uid = state.stage_uid(stage.index)
         if uid is not None:
-            approved[uid] = effort._stage_tier(stage)
+            approved[uid] = effort.stage_tier(stage)
             lazy[uid] = stage.lazy
 
 
@@ -786,7 +786,7 @@ def _next_arming_terms(state: SessionState, arming: dict, thr: Thresholds) -> tu
     if approved:
         return effort.stage_budget(approved, thr), effort_segments.SOURCE_USER_APPROVED, approved
     stage = next((s for s in state.stages if state.stage_uid(s.index) == uid), None)
-    tier = effort._stage_tier(stage) if stage is not None else arming.get("declared_tier")
+    tier = effort.stage_tier(stage) if stage is not None else arming.get("declared_tier")
     return effort.stage_budget(tier, thr), effort_segments.SOURCE_DECLARED, tier
 
 
@@ -998,7 +998,7 @@ def _unfold_parent_budget(state: SessionState, parent_index: int) -> None:
     if ledger.get("lazy_marks", {}).get(uid):
         budget, source = fallback, effort_segments.SOURCE_FALLBACK
     else:
-        tier = effort.stage_budget(arming.get("declared_tier") or effort._stage_tier(state.stage(parent_index)), thr)
+        tier = effort.stage_budget(arming.get("declared_tier") or effort.stage_tier(state.stage(parent_index)), thr)
         budget = {scale: min(tier[scale], fallback.get(scale, tier[scale])) for scale in effort_segments.SCALES}
         source = effort_segments.SOURCE_FALLBACK_CAPPED
     unfolds[uid] = {"budget": dict(budget), "source": source}
@@ -1194,7 +1194,7 @@ def _ensure_stage_arming(state: SessionState, stage, now: float, by: str, *, uid
         return effort_segments.resume_arming(ledger, arming["arming_id"], now)
     unfold = ledger.get("unfolds", {}).get(uid)
     approved = ledger.get("approved_tiers", {}).get(uid)
-    tier = None if unfold else approved or effort._stage_tier(stage)
+    tier = None if unfold else approved or effort.stage_tier(stage)
     budget = dict(unfold["budget"]) if unfold else effort.stage_budget(tier, thr)
     source = (unfold["source"] if unfold
               else effort_segments.SOURCE_USER_APPROVED if approved else effort_segments.SOURCE_DECLARED)
