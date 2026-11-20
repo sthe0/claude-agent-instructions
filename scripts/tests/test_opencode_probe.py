@@ -508,6 +508,19 @@ def test_check_record_requires_an_event_log_per_case(tmp_path):
         "alpha/A2: no raw event log A2.jsonl beside the record"]
 
 
+def test_a_newer_passing_run_does_not_unpin_the_pinned_record(tmp_path):
+    probe = make_probe(tmp_path)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.pin_record(state, alpha, probe) == []
+    write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == []
+    write_run(state, alpha, probe, {"A1": "fail", "A2": "pass"})
+    assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == [
+        "alpha/A1: fail is not accepted"]
+
+
 def test_pin_refuses_a_record_without_event_logs(tmp_path):
     probe = make_probe(tmp_path)
     alpha = phase_of(probe, "alpha")

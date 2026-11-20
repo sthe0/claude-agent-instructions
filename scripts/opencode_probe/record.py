@@ -198,9 +198,6 @@ def check_phase(state: Path, phase: core.Phase, *, require_pass: bool, case_ids:
     elif pinned_record(state, last_pass) is None:
         problems.append(f"{phase.name}: pin.toml run {last_pass.get('run')} has no record under "
                         f"{state / 'runs'} whose sha256 is the pinned one")
-    elif last_pass["run"] != path.parent.name:
-        problems.append(f"{phase.name}: pin.toml names run {last_pass['run']} but the newest record "
-                        f"of this tree is {path.parent.name}; run `pin --record`")
     if require_pass:
         problems += record_problems(phase, path, rec, case_ids)
         problems += structure_problems(phase, path, rec, case_ids)
