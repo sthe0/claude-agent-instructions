@@ -1634,9 +1634,10 @@ def list_state(listing):
 
 
 def count_kept_reads(monkeypatch) -> SimpleNamespace:
-    """Counters on ``KeptView.scandir`` calls and ``KeptEntry`` constructions."""
+    """Counters on directory listings (``KeptView.scandir_names``, which ``scandir`` and the entry pass that
+    makes entries of the changed names only both list through) and ``KeptEntry`` constructions."""
     counts = SimpleNamespace(scandir=0, entries=0)
-    real_scandir, real_entry = store.KeptView.scandir, store.KeptEntry
+    real_scandir, real_entry = store.KeptView.scandir_names, store.KeptEntry
 
     def scandir(view, *args, **kwargs):
         counts.scandir += 1
@@ -1649,7 +1650,7 @@ def count_kept_reads(monkeypatch) -> SimpleNamespace:
             counts.entries += 1
             super().__init__(*args)
 
-    monkeypatch.setattr(store.KeptView, "scandir", scandir)
+    monkeypatch.setattr(store.KeptView, "scandir_names", scandir)
     monkeypatch.setattr(store, "KeptEntry", Counted)
     return counts
 
@@ -1939,6 +1940,86 @@ def test_event_path_reuse_is_counted_in_the_cycle_census(bound):
     token = store.REUSED.begin_event_cycle()
     store.BINDINGS.read()
     assert store.REUSED.names(token, ("binding",)) == ["binding"]
+
+
+LIVE_BINDINGS = 20000
+
+
+@pytest.fixture
+def vast_bindings(bound):
+    """The trusting kept view's bindings directory holding twenty thousand settled binding files."""
+    for number in range(LIVE_BINDINGS):
+        path = bound / f"live-{number:05d}.json"
+        path.write_text(binding_text(BETA), encoding="utf-8")
+        os.utime(path, ns=(PAST_NS, PAST_NS))
+    return bound
+
+
+def count_relist_work(monkeypatch) -> SimpleNamespace:
+    """What a read of the bindings directory does from now on: ``entries`` the ``KeptEntry`` objects built,
+    ``looked`` the names the entry pass asks the reuse rule about, ``driven`` the engine lists copied while
+    the driven list is made."""
+    work = SimpleNamespace(entries=0, looked=0, driven=0)
+    real_init, real_reusable = store.KeptEntry.__init__, store.binding_entry_reusable
+
+    def building(entry, *args):
+        work.entries += 1
+        real_init(entry, *args)
+
+    def looking(*args):
+        work.looked += 1
+        return real_reusable(*args)
+
+    def copying(value=()):
+        work.driven += isinstance(value, tuple)
+        return list(value)
+
+    monkeypatch.setattr(store.KeptEntry, "__init__", building)
+    monkeypatch.setattr(store, "binding_entry_reusable", looking)
+    monkeypatch.setattr(store, "list", copying, raising=False)
+    return work
+
+
+def test_a_rewritten_file_in_a_marked_directory_builds_only_its_entry(vast_bindings, monkeypatch):
+    bound = vast_bindings
+    store.BINDINGS.read()
+    store.BINDINGS.read()
+    path, aside = bound / "live-00007.json", bound / "live-00007.tmp"
+    added, gone = bound / "live-added.json", bound / "live-00011.json"
+
+    def rewritten():
+        rewrite(aside, binding_text(ALPHA), mtime_ns=PAST_NS)
+        os.replace(aside, path)
+
+    def created():
+        rewrite(added, binding_text(ALPHA), mtime_ns=PAST_NS)
+
+    def removed():
+        gone.unlink()
+
+    works = {}
+    for change, marks in ((rewritten, [aside, path]), (created, [added]), (removed, [gone])):
+        change()
+        store.KEPT.mark(marks, [bound])
+        with monkeypatch.context() as patch:
+            works[change.__name__] = count_relist_work(patch)
+            read = both_reads(store.BINDINGS.read())
+        assert read == both_reads(store.BindingScan().read()), change.__name__
+    names_changed = {"rewritten": 2, "created": 1, "removed": 1}
+    assert all(max(work.entries, work.looked, work.driven) <= names_changed[name]
+               for name, work in works.items()), works
+    assert read[1]["live-00007"] == [ALPHA] and read[1]["live-added"] == [ALPHA]
+    assert "live-00011" not in read[1]
+
+
+def test_a_trust_change_makes_a_marked_directory_be_read_in_full(vast_bindings, tmp_path, monkeypatch):
+    store.BINDINGS.read()
+    store.KEPT.mark([vast_bindings / "live-00007.json"], [vast_bindings])
+    store.KEPT.trust(Cover(tmp_path))
+    fetched = count_fetches(monkeypatch)
+    read = both_reads(store.BINDINGS.read())
+    assert len(fetched) >= LIVE_BINDINGS
+    assert read == both_reads(store.BindingScan().read())
 
 
 @pytest.fixture

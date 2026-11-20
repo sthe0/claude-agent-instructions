@@ -60,7 +60,7 @@ SNAPSHOT_NAMES = (
     "binding-entry-reuse-off", "binding-entry-keeps-vanished", "binding-entry-reuse-despite-unsettled",
     "transcript-event-reuse-off", "transcript-event-reuse-ignores-subdirectory", "event-reuse-census-off",
     "binding-read-shared-result", "event-cycle-census-unregistered", "covers-memo-clears-live-paths",
-    "transcript-merge-all-projects", "change-set-walks-whole-observation")
+    "transcript-merge-all-projects", "change-set-walks-whole-observation", "marked-directory-relist-rebuilds-all")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
                         "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
                         "startup-applied-last-read-only", "startup-applied-at-check-end",
