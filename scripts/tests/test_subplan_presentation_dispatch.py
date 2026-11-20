@@ -22,13 +22,16 @@ lifts it beside it; the controls call the verbs (`present-plan`, `approve-subpla
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import json
+import os
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_approval, cli_common, gates, own_contour, state as state_mod, sub_plan
+from agentctl import cli, cli_approval, cli_common, gates, norm_handoff, own_contour, state as state_mod, sub_plan
 from agentctl import render as render_mod
 from agentctl import submission
 from agentctl.dispatch import RunResult
@@ -167,9 +170,10 @@ def _user_approves_resources(store, sid=SESSION):
     store.save(state)
 
 
-def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True):
+def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True,
+                         record=None):
     state = store.load(sid)
-    record = sub_plan.read(state, stage, store)
+    record = record or sub_plan.read(state, stage, store)
     anchor = f"[subplan:{stage}:{sub_plan.approval_digest(record)[:12]}]"
     rendering = tmp_path / f"subplan-{stage}-{anchor[-6:-1]}.txt"
     rendering.write_text(f"Sub-plan of stage {stage}: {record.method} {anchor}\n", encoding="utf-8")
@@ -570,21 +574,150 @@ def test_restamp_never_moves_the_approval_over_a_changed_request(
     assert _dispatch(store).action == "execute_in_thread"
 
 
-def test_approve_subplan_is_user_authority():
+PARENT, CHILD = "parent-s", "child-1"
+
+
+def _subplan_table(method="split the module", **approvals) -> str:
+    """The `[meta.sub_plan]` table of a child's plan: its record of the parent's stage 1."""
+    lines = ["", "[meta.sub_plan]", "stage = 1", 'means = "Edit"', f'method = "{method}"',
+             'procedure = "1. read 2. edit"', 'conditions = "- the module imports [risk: unread]"']
+    lines += [f'{field} = "{value}"' for field, value in approvals.items()]
+    lines += ["[[meta.sub_plan.resource_request]]", "stage = 1", 'allow = ["Edit"]',
+              "[meta.sub_plan.estimate]", "minutes = 40", "usd = 2.0",
+              'author = "executor"', 'confirmer = "parent"',
+              "[[meta.compared_plans.entries]]", 'ref = "plan-a"', 'departure = "no migration"']
+    return "\n".join(lines) + "\n"
+
+
+def _text_of(result) -> str:
+    if isinstance(result, dict):
+        return str(result.get("detail", "")) + json.dumps(result.get("data") or {})
+    return result.detail + " ".join(result.data.get("blockers", []) + result.data.get("problems", []))
+
+
+class Contour:
+    """The parent session `parent-s` (EXECUTING, stage 1 decided later) and a real child linked
+    to its stage 1 through the handoff a spawn writes, in one state directory. The child is
+    driven the way a spawned child is -- with its handoff in the environment, through the engine
+    and through `agentctl-own.py` -- and the user's side runs in a process with neither."""
+
+    def __init__(self, store, venued_fixtures_dir, tmp_path, monkeypatch, capsys, *,
+                 in_thread=False):
+        import test_child_approval as tca
+
+        self.tca, self.store, self.mp, self.capsys = tca, store, monkeypatch, capsys
+        monkeypatch.setattr("agentctl.store.DEFAULT_ROOT", store.root)
+        self.tmp, self.handoff, self.plans = tmp_path, None, 0
+        _executing(store, venued_fixtures_dir, PARENT)
+        _described(store, PARENT, lazy=True, in_thread=in_thread)
+        self.child = tca.Child(tmp_path, monkeypatch)
+        self.child.root, self.child.store, self.child.start_parent = store.root, store, False
+
+    def text(self, method="split the module", **approvals) -> str:
+        text = self.tca._spliced(parent_norm=self.child.digest,
+                                 final_checks=((self.tca.PARENT_CHECK, 0),))
+        text = text.replace("depends_on = []\n", 'depends_on = []\nplace = "the engine"\n'
+                            'binding_conditions = []\n', 1)
+        return text + _subplan_table(method, **approvals)
+
+    def write(self, text: str) -> str:
+        self.plans += 1
+        return self.child.write(text, name=f"child-{self.plans}.toml")
+
+    @contextlib.contextmanager
+    def as_child(self):
+        self.mp.setenv(norm_handoff.NORM_HANDOFF_ENV, self.handoff)
+        try:
+            yield
+        finally:
+            self.mp.delenv(norm_handoff.NORM_HANDOFF_ENV)
+
+    def submit(self, text: str | None = None) -> dict:
+        """Link the child and run its start, classify, plan and `submit-plan`."""
+        plan = self.write(text or self.text())
+        self.child.link(grants=self.tca._covering_grants(plan))
+        self.handoff = os.environ[norm_handoff.NORM_HANDOFF_ENV]
+        self.mp.delenv(norm_handoff.NORM_HANDOFF_ENV)
+        with self.as_child():
+            return self.child.submit(plan)
+
+    def own(self, *argv):
+        """One call through the channel a linked child has: (exit code, JSON body, stderr)."""
+        spec = importlib.util.spec_from_file_location("agentctl_own_under_test",
+                                                      SCRIPTS / "agentctl-own.py")
+        channel = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(channel)
+        self.capsys.readouterr()
+        self.mp.setenv(own_contour.OWN_SESSION_ENV, CHILD)
+        try:
+            with self.as_child():
+                code = channel.main(list(argv))
+        finally:
+            self.mp.delenv(own_contour.OWN_SESSION_ENV)
+        out = self.capsys.readouterr()
+        try:
+            body = json.loads(out.out)
+        except ValueError:
+            body = {}
+        return code, body, out.err
+
+    def entry(self) -> dict:
+        return sub_plan.approval_entry(self.store.load(PARENT), 1)
+
+    def child_state(self):
+        return self.store.load(CHILD)
+
+
+@pytest.fixture
+def contour(home_store, venued_fixtures_dir, tmp_path, monkeypatch, capsys):
+    return Contour(home_store, venued_fixtures_dir, tmp_path, monkeypatch, capsys)
+
+
+def test_approve_subplan_is_user_authority(contour, tmp_path):
+    """The verb is the user's: it is in the user-authority set and out of the child's own
+    contour, and a real linked child that calls it through its channel is turned away before the
+    engine, with the field left unset; the user's process, shown the sub-plan, sets it."""
     assert "approve-subplan" in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
     assert "approve-subplan" not in own_contour.OWN_CONTOUR_VERBS
     assert "approve-stage-resources" in own_contour.OWN_CONTOUR_VERBS
     assert "approve-stage-resources" not in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
     assert {"approve-subplan", "approve-stage-resources"} <= set(cli_common._SESSION_COMMANDS)
 
+    submitted = contour.submit()
+    assert submitted["ok"] is True, submitted
+    for verb in ("approve-subplan", "approve-resources"):
+        code, _, err = contour.own(verb, "--stage", "1", "--by", "fedor")
+        assert code == 2 and "outside the own contour" in err, (verb, code, err)
+    assert "user_subplan_approval" not in contour.entry()
+    assert _present_and_approve(contour.store, tmp_path, sid=PARENT).ok is True
+    assert contour.entry()["user_subplan_approval"]
 
-def test_subplan_digest_same_for_both_carriers():
-    frame, contour = _rec(1), _rec(1)
-    frame.building_place = sub_plan.BuildingPlace(session="root", pushed=3, popped=9)
-    contour.building_place = sub_plan.BuildingPlace(session="child")
-    contour.estimate = sub_plan.Estimate(minutes=5, usd=1.0, author="a", confirmer="b")
-    assert sub_plan.approval_digest(frame) == sub_plan.approval_digest(contour)
-    assert sub_plan.approval_digest(frame) != sub_plan.approval_digest(_rec(1, method="other"))
+
+def test_subplan_digest_same_for_both_carriers(contour, tmp_path):
+    """The approval is of the plan, not of where it is kept: approved on the record a child
+    contour carries (read through the link), the stage starts on the same plan carried by a
+    frame, whatever place it was built in and whatever its estimate; an edit stops it."""
+    assert contour.submit()["ok"] is True
+    store = contour.store
+    through_the_link = sub_plan.read(store.load(PARENT), 1, store)
+    assert through_the_link is not None and through_the_link.method == "split the module"
+    assert _present_and_approve(store, tmp_path, sid=PARENT).ok is True
+    approved = contour.entry()["user_subplan_approval"]
+
+    in_a_frame = sub_plan.SubPlanRecord.from_dict(through_the_link.to_dict())
+    in_a_frame.building_place = sub_plan.BuildingPlace(session="root", pushed=3, popped=9)
+    in_a_frame.estimate = sub_plan.Estimate(minutes=5, usd=1.0, author="a", confirmer="b")
+    _put(store, in_a_frame, PARENT)
+    assert sub_plan.read(store.load(PARENT), 1, store).building_place.session == "root"
+    assert sub_plan.approval_digest(in_a_frame) == approved
+    assert _approve_resources(store, sid=PARENT).ok is True
+    spawns = Spawns()
+    assert _dispatch(store, PARENT, spawns).ok is not False and spawns.argvs
+
+    in_a_frame.method = "another way"
+    _put(store, in_a_frame, PARENT)
+    refused = Spawns()
+    _not_started(_dispatch(store, PARENT, refused), refused, "changed since the user approved it")
 
 
 # --- the planning dispatch -------------------------------------------------------------------
@@ -882,64 +1015,120 @@ def test_the_planning_child_of_a_dry_run_main_holds_no_rule_grants(
     assert rule not in sgi._command_section(planning)
 
 
-def test_child_receipt_does_not_approve(home_store, venued_fixtures_dir, tmp_path):
-    """A sub-plan presented to the user in a linked child is no approval: `approve-subplan` is
-    run in the root session the user was shown it in."""
-    store = home_store
-    _executing(store, venued_fixtures_dir)
-    state = _described(store, lazy=True)
-    _put(store, _rec(1))
-    assert _present_and_approve(store, tmp_path).ok is True
-    state = store.load(SESSION)
-    state.stage_approvals["0:1"].pop("user_subplan_approval")
-    state.parent_link = {"parent_session": "someone", "stage_index": 1}
-    store.save(state)
-    d = cli_approval.cmd_approve_subplan(ns(session=SESSION, stage=1, by="fedor"), store=store)
-    _refused(d, "not in a linked child")
-    assert not _entry(store).get("user_subplan_approval")
+def test_child_receipt_does_not_approve(contour, tmp_path):
+    """A sub-plan presented, and its delivery stamped, in a real linked child is no approval:
+    `approve-subplan` run in that child is refused, writes nothing in the child or in the parent,
+    and the parent's stage stays refused; run in the root session the user was shown it in, it
+    approves."""
+    assert contour.submit()["ok"] is True
+    store = contour.store
+    _present_and_approve(store, tmp_path, sid=PARENT, confirm=False)
+    child = contour.child_state()
+    child.plan_presentations.append(store.load(PARENT).plan_presentations[-1])
+    store.save(child)
+    stamped = cli.cmd_confirm_delivery(ns(session=CHILD, kind="subplan", by="fedor",
+                                          note="delivered in the child",
+                                          escape_reason="delivered_out_of_band"), store=store)
+    assert stamped.ok, stamped
+    in_the_child = cli_approval.cmd_approve_subplan(ns(session=CHILD, stage=1, by="fedor"),
+                                                    store=store)
+    _refused(in_the_child, "not in a linked child")
+    assert "user_subplan_approval" not in contour.entry()
+    assert not contour.child_state().stage_approvals.get("0:1", {}).get("user_subplan_approval")
+    spawns = Spawns()
+    _not_started(_dispatch(store, PARENT, spawns), spawns, "stage 1 is decided later")
+    assert _present_and_approve(store, tmp_path, sid=PARENT).ok is True
+    assert contour.entry()["user_subplan_approval"]
 
 
 # --- the approvals are the engine's ---------------------------------------------------------
 
-def test_preset_approval_refused_at_submission():
-    doc = so._doc(record=so._record(), order=None)
-    record = so._record()
-    record["sub_plan"]["parent_resource_approval"] = "approved"
-    preset = so._doc(record=record)
-    ctx = submission.StageOrderContext(expected_stage=2, engine_approvals={})
-    problems = submission._stage_order_violations(preset, ctx)
-    assert any("`parent_resource_approval` is stated" in p for p in problems), problems
-    clean = submission._stage_order_violations(
-        doc, submission.StageOrderContext(expected_stage=2, engine_approvals={}))
-    assert not any("is stated" in p for p in clean)
-    record["sub_plan"]["user_subplan_approval"] = "abc"
-    assert any("`user_subplan_approval` is stated" in p for p in submission._stage_order_violations(
-        so._doc(record=record), ctx))
-    same = submission.StageOrderContext(
-        expected_stage=2, engine_approvals={"parent_resource_approval": "approved",
-                                            "user_subplan_approval": "abc"})
-    assert not any("is stated" in p for p in submission._stage_order_violations(
-        so._doc(record=record), same))
-    old_form = submission.StageOrderContext(expected_stage=2)
-    assert not any("is stated" in p for p in submission._stage_order_violations(
-        so._doc(record=record), old_form))
+@pytest.mark.parametrize("field", ["parent_resource_approval", "user_subplan_approval"])
+def test_preset_approval_refused_at_submission(contour, field):
+    """A child's `submit-plan` and its `replan --plan`, run the way a linked child runs them,
+    refuse a plan whose sub-plan record states an approval the engine has not written; the
+    parent's entry stays unset and its stage stays refused at dispatch. The same plan without
+    the field is taken."""
+    refused = contour.submit(contour.text(**{field: "approved"}))
+    assert refused["ok"] is False, refused
+    assert f"`{field}` is stated" in _text_of(refused), refused
+    assert field not in contour.entry()
+    spawns = Spawns()
+    _not_started(_dispatch(contour.store, PARENT, spawns), spawns, "decided later")
+
+    plain = contour.write(contour.text())
+    with contour.as_child():
+        assert contour.child.run("submit_plan", session=CHILD, plan=plain)["ok"] is True
+    preset = contour.write(contour.text(**{field: "approved"}))
+    code, body, err = contour.own("replan", "--plan", preset)
+    assert f"`{field}` is stated" in json.dumps(body) + err, (code, body, err)
+    assert field not in contour.entry()
 
 
-def test_rewritten_approval_after_edit_refused(store, venued_fixtures_dir):
-    _executing(store, venued_fixtures_dir)
-    state = _described(store, lazy=True)
-    approved = _rec(1)
-    sub_plan.write_user_approval(state, 1, approved)
-    edited = _rec(1, method="split it differently")
-    record = so._record()
-    record["sub_plan"]["user_subplan_approval"] = sub_plan.approval_digest(edited)
-    ctx = submission.StageOrderContext(expected_stage=2,
-                                       engine_approvals=sub_plan.approval_entry(state, 1))
-    problems = submission._stage_order_violations(so._doc(record=record), ctx)
-    assert any("`user_subplan_approval` is stated and differs" in p for p in problems), problems
-    record["sub_plan"]["user_subplan_approval"] = sub_plan.approval_digest(approved)
-    same = submission._stage_order_violations(so._doc(record=record), ctx)
-    assert not any("is stated" in p for p in same), same
+def _frame_submission(store, venued_fixtures_dir, tmp_path, **approvals):
+    """The frame carrier: stage 1 of a decided-later plan is planned in a pushed frame of the
+    same session -- push-subplan, classify, plan, submit-plan of a plan carrying the record."""
+    _executing(store, venued_fixtures_dir, PARENT)
+    _described(store, PARENT, lazy=True)
+    base = (venued_fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    base = base.replace("depends_on = []\n", 'depends_on = []\nplace = "the engine"\n'
+                        'binding_conditions = []\n', 1)
+    path = tmp_path / "frame.toml"
+    path.write_text(base + _subplan_table(**approvals), encoding="utf-8")
+    assert cli.cmd_push_subplan(ns(session=PARENT, plan=str(path), task=None,
+                                   originating_stage=1), store=store).ok
+    cli.cmd_classify(ns(session=PARENT, architectural=True, changed_lines=200,
+                        wall_clock_min=60), store=store)
+    cli.cmd_plan(ns(session=PARENT), store=store)
+    return cli.cmd_submit_plan(ns(session=PARENT, plan=str(path)), store=store)
+
+
+@pytest.mark.parametrize("field", ["parent_resource_approval", "user_subplan_approval"])
+def test_preset_approval_refused_in_a_frame_submission(store, venued_fixtures_dir, tmp_path, field):
+    """A frame submission carrying an approval the engine has not written is refused with the
+    same reason and writes nothing."""
+    preset = _frame_submission(store, venued_fixtures_dir, tmp_path, **{field: "approved"})
+    assert preset.ok is False and f"`{field}` is stated" in _text_of(preset), preset
+    assert field not in store.load(PARENT).stage_approvals.get("0:1", {})
+
+
+def test_a_frame_submission_without_the_approval_fields_is_taken(store, venued_fixtures_dir,
+                                                                  tmp_path):
+    plain = _frame_submission(store, venued_fixtures_dir, tmp_path)
+    assert plain.ok is True, _text_of(plain)
+
+
+def test_rewritten_approval_after_edit_refused(contour, tmp_path):
+    """After the user approved the sub-plan, a child that edits it cannot carry the approval
+    over by writing the new digest into its own plan: its `replan --plan` is refused with the
+    named reason and the parent's copy keeps the approved digest; the edit itself (made in the
+    child's own record, which no plan text gates) leaves the stage refused at dispatch and at
+    the child's own approval."""
+    assert contour.submit()["ok"] is True
+    assert _present_and_approve(contour.store, tmp_path, sid=PARENT).ok is True
+    approved = contour.entry()["user_subplan_approval"]
+    record = sub_plan.read(contour.store.load(PARENT), 1, contour.store)
+    record.method = "split it differently"
+    rewritten = sub_plan.approval_digest(record)
+    assert rewritten != approved
+
+    code, body, err = contour.own("replan", "--plan", contour.write(
+        contour.text("split it differently", user_subplan_approval=rewritten)))
+    assert "`user_subplan_approval` is stated and differs" in json.dumps(body) + err, (code, body, err)
+    assert contour.entry()["user_subplan_approval"] == approved
+
+    child = contour.child_state()
+    sub_plan.store(child, record)
+    contour.store.save(child)
+    assert contour.entry()["user_subplan_approval"] == approved
+    assert sub_plan.read(contour.store.load(PARENT), 1, contour.store).method == \
+        "split it differently"
+    _refused(_approve_resources(contour.store, sid=PARENT), "changed since the user approved it")
+    spawns = Spawns()
+    _not_started(_dispatch(contour.store, PARENT, spawns), spawns, "changed since the user approved it")
+    code, body, err = contour.own("approve", "--by", "agent")
+    assert code != 0 or body.get("ok") is False, (code, body)
+    assert "changed since the user approved it" in json.dumps(body) + err, (code, body, err)
 
 
 def test_the_context_reads_the_engine_copy_from_either_carrier(store):
