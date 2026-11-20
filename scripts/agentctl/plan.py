@@ -1958,13 +1958,21 @@ def _opt_int(value) -> int | None:
 
 
 def _parse_stage_binding_conditions(raw) -> list[dict]:
-    """The `[[stage.binding_conditions]]` rows as {id, text, set_by}; lenient, a row that is not
-    a table is skipped (the stage-order check at submission reports what a row lacks)."""
+    """The `[[stage.binding_conditions]]` rows as {id, text, set_by}; lenient, so the loader
+    never refuses a plan: a part that is not text reads as blank, and a row that is not a table
+    is kept as a blank row marked `not_a_table`. The stage-description check at submission
+    refuses both and names what the row lacks."""
     if not isinstance(raw, list):
         return []
-    return [{"id": str(r.get("id", "")).strip(), "text": str(r.get("text", "")).strip(),
-             "set_by": str(r.get("set_by", "")).strip()}
-            for r in raw if isinstance(r, dict)]
+
+    def part(row: dict, name: str) -> str:
+        value = row.get(name)
+        return value.strip() if isinstance(value, str) else ""
+
+    return [{"id": part(r, "id"), "text": part(r, "text"), "set_by": part(r, "set_by")}
+            if isinstance(r, dict)
+            else {"id": "", "text": "", "set_by": "", "not_a_table": True}
+            for r in raw]
 
 
 def stage_above_threshold(stage, thr) -> bool:
@@ -4886,6 +4894,12 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "optional": "I",
     "lazy": "I",
     "backlog_issue": "I",
+    "place": "I",
+    "binding_conditions": "I",
+    "binding_conditions_stated": "I",
+    "declared_size": "I",
+    "size_flags": "I",
+    "expected_minutes": "I",
     "amendments.date": "B",
     "amendments.text": "B",
     "amendments.reason": "B",
@@ -4949,6 +4963,26 @@ def _flatten_leaves(value: object, path: str, sink: dict[str, object]) -> None:
         sink[path] = value
 
 
+def is_stage_form_migration(old_stage, new_stage) -> bool:
+    """Whether `new_stage` is `old_stage` put into the description form: the old one states no
+    place, the new one does. The form moves the executor's means, method, procedure and
+    conditions out of the stage and adds the description fields; it says nothing new about
+    what the stage builds, so a stage already PASSED keeps its outcome across it."""
+    return old_stage.place is None and new_stage.place is not None
+
+
+# The leaves the stage form itself moves: the executor's parts leave the stage and the
+# description fields come in. A leaf outside this set (the title, the result, the criterion)
+# that moves in the same edit still counts as moved.
+_STAGE_FORM_LEAVES = ("place", "binding_conditions", "binding_conditions_stated", "declared_size",
+                      "size_flags", "expected_minutes", "means.means", "means.method",
+                      "means.procedure", "conditions")
+
+
+def _moved_by_stage_form(path: str) -> bool:
+    return any(path == leaf or path.startswith(leaf + ".") for leaf in _STAGE_FORM_LEAVES)
+
+
 def change_tier(old: PlanDoc, new: PlanDoc) -> PlanChange:
     """Tier of the edit that turns plan version `old` into `new`: 0 nothing moved; 1 only
     bookkeeping/final-venue leaves; 2 a check-only or operative leaf, interface untouched;
@@ -4965,9 +4999,11 @@ def change_tier(old: PlanDoc, new: PlanDoc) -> PlanChange:
         after: dict[str, object] = {}
         _flatten_leaves(dataclasses.asdict(old_by[index]), "", before)
         _flatten_leaves(dataclasses.asdict(new_by[index]), "", after)
+        migrating = is_stage_form_migration(old_by[index], new_by[index])
         moved = sorted(
             (path, leaf_class(path)) for path in set(before) | set(after)
             if before.get(path, ()) != after.get(path, ())
+            and not (migrating and _moved_by_stage_form(path))
         )
         stages[index] = StageChange(
             tier=max((TIER_OF_CLASS[c] for _, c in moved), default=0), moved=tuple(moved))

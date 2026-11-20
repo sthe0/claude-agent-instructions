@@ -110,7 +110,9 @@ def test_the_loader_reads_the_stage_description():
     }))
     stage = doc.stages[0]
     assert stage.place == "the engine, relied on by stage 2"
-    assert stage.binding_conditions == [{"id": "B1", "text": "no push", "set_by": "user"}]
+    assert stage.binding_conditions == [{"id": "B1", "text": "no push", "set_by": "user"},
+                                        {"id": "", "text": "", "set_by": "", "not_a_table": True}], \
+        "a row that is not a table stays, blank and marked, for submission to refuse"
     assert stage.binding_conditions_stated
     assert (stage.declared_size, stage.size_flags, stage.expected_minutes) == (
         120, ["architectural"], 45)
@@ -142,6 +144,43 @@ def test_the_description_is_a_part_of_the_stage_change_keys():
     base, edited = _stage(1, place="a"), _stage(1, place="b")
     assert plan.description_place(_stage(1)) == ()
     assert plan.description_place(base) != plan.description_place(edited)
+
+
+_OLD_FORM_STAGE = {"means": "the tools", "method": "write it", "procedure": "run it",
+                   "conditions": "- the tools exist [risk: none]"}
+_DESCRIPTION_STAGE = {"place": "the engine", "binding_conditions": [], "declared_size": 20}
+
+
+def _form_change(described_extra=None):
+    old = parse_plan(_raw_plan(_OLD_FORM_STAGE))
+    new = parse_plan(_raw_plan({**_DESCRIPTION_STAGE, **(described_extra or {})}))
+    return old, new
+
+
+def test_putting_a_stage_into_the_description_form_moves_no_leaf_of_its_work():
+    """The form takes the executor's parts out of the stage and brings the description in; the
+    stage's work is the same, so the change moves nothing and the carry decision keeps a PASSED
+    verdict."""
+    from agentctl.stage_norm import stage_carried
+
+    old, new = _form_change()
+    assert plan.change_tier(old, new).stages[1].moved == ()
+    assert stage_carried(old.stages, new.stages, 1)
+
+
+def test_a_stage_put_into_the_description_form_with_another_result_still_moves():
+    from agentctl.stage_norm import stage_carried
+
+    old, new = _form_change({"expected_result_image": "another product"})
+    moved = [path for path, _ in plan.change_tier(old, new).stages[1].moved]
+    assert moved == ["subject.result"]
+    assert not stage_carried(old.stages, new.stages, 1)
+
+
+def test_a_described_stage_edited_within_its_form_still_moves_its_description():
+    old = parse_plan(_raw_plan(_DESCRIPTION_STAGE))
+    new = parse_plan(_raw_plan({**_DESCRIPTION_STAGE, "place": "the seam"}))
+    assert [p for p, _ in plan.change_tier(old, new).stages[1].moved] == ["place"]
 
 
 @pytest.mark.parametrize("size, flags, minutes, above", [
@@ -482,6 +521,36 @@ def test_an_empty_binding_condition_list_is_a_statement_not_a_missing_part():
         _new_form({"binding_conditions": [dict(c) for c in BINDING]}), _ctx()) == []
 
 
+_OK_ROW = {"id": "B1", "text": "no push", "set_by": "user"}
+_ROW_REFUSALS = [
+    ("a row that is not a table", ["bare"], "binding condition #1 is not a table"),
+    ("a row with no id", [{"text": "no push", "set_by": "user"}], "binding condition #1 has no 'id'"),
+    ("a row with a blank text", [{**_OK_ROW, "text": "  "}], "binding condition B1 has no 'text'"),
+    ("a row with a blank set_by", [{**_OK_ROW, "set_by": ""}], "binding condition B1 has no 'set_by'"),
+    ("a row whose id is not text", [{**_OK_ROW, "id": 7}], "binding condition #1 has no 'id'"),
+    ("a repeated id", [_OK_ROW, {**_OK_ROW, "text": "other"}], "binding condition id(s) b1 repeat"),
+    ("an id repeated in another case", [_OK_ROW, {**_OK_ROW, "id": "b1"}],
+     "binding condition id(s) b1 repeat"),
+]
+
+
+@pytest.mark.parametrize("name, rows, expected", _ROW_REFUSALS, ids=[r[0] for r in _ROW_REFUSALS])
+def test_a_malformed_stage_binding_condition_row_is_refused(name, rows, expected):
+    problems = submission._stage_order_violations(
+        _new_form({"binding_conditions": rows}), _ctx())
+    assert [p for p in problems if expected in p and p.startswith("stage 1 ")], problems
+
+
+def test_binding_condition_rows_are_checked_only_on_a_described_stage_of_a_two_sided_order():
+    malformed = {"binding_conditions": ["bare", {"text": "x"}]}
+    assert submission._stage_order_violations(_doc(malformed, order=AGREED_OLD_FORM_ORDER),
+                                              _ctx()) == []
+    assert submission._stage_order_violations(_doc(malformed), _ctx()) == []
+    assert submission._stage_order_violations(_new_form({"binding_conditions": []}), _ctx()) == []
+    assert not any("binding condition" in p for p in submission._stage_order_violations(
+        _new_form(drop=("binding_conditions",)), _ctx()) if "no binding condition" not in p)
+
+
 def _sized_plan(*sizes):
     """One in-thread described stage per entry: a line count, or (line count, size flags)."""
     declared = [(size, []) if not isinstance(size, tuple) else (size[0], list(size[1]))
@@ -799,6 +868,18 @@ def test_a_stage_restating_an_inherited_condition_with_another_text_is_refused_b
     assert any("restates binding condition 'C1'" in p
                for p in submission._stage_order_violations(with_record, ctx)), \
         "a plan that also carries a record meets the same refusal"
+
+
+def test_a_restated_condition_is_the_same_condition_in_any_case_of_its_id():
+    ctx = StageOrderContext(expected_stage=1, binding_conditions=(C1,))
+    restated = {"id": "c1", "text": "anything goes", "set_by": "x"}
+    problems = [p for p in submission._stage_order_violations(
+        _new_form({"binding_conditions": [restated]}), ctx) if "restates" in p]
+    assert len(problems) == 1 and "'c1'" in problems[0], problems
+    released = StageOrderContext(expected_stage=1, binding_conditions=(C1,),
+                                 released=frozenset({"C1"}))
+    assert not [p for p in submission._stage_order_violations(
+        _new_form({"binding_conditions": [restated]}), released) if "restates" in p]
 
 
 def test_a_restated_condition_the_setter_level_released_may_change_its_text():
@@ -1156,9 +1237,9 @@ how = "no push verb is run"
 
 [[meta.sub_plan.setter_decisions]]
 condition = "C1"
-value = "kept"
-setter = "user"
-decided_by = "user"
+value = "withdrawn"
+setter = "{_MIDDLE}"
+decided_by = "{_MIDDLE}"
 
 [[meta.sub_plan.setter_decisions]]
 condition = "C2"
@@ -1228,7 +1309,8 @@ def _deepest_record(*kept):
 def test_the_deepest_plan_is_bound_by_the_conditions_its_level_did_not_release(store, tmp_path):
     """Two pushes, then the deepest level submits. The middle level set C2 and released it in
     its own record, so C2 does not bind the deepest plan; it relabelled C1, which the user's
-    stage carries, so C1 still does, whatever the middle level's record says of it."""
+    stage carries, and "withdrew" it in that record, but the user set C1 and only the user's level
+    can release it, so C1 still binds the deepest plan, whatever label the condition carries."""
     deepest = _push_to_the_deepest_level(store, tmp_path)
     plan_text = deepest.read_text(encoding="utf-8")
 

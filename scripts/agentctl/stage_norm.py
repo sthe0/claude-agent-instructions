@@ -29,6 +29,7 @@ from .plan import (
     delivery_place,
     description_place,
     interface_empty,
+    is_stage_form_migration,
     knowledge_place,
     negative_control_place,
     preconditions_place,
@@ -270,6 +271,16 @@ def interface_token(stage) -> str:
     return norm.interface_digest()
 
 
+def _carry_norm(stage, migrating: bool) -> StageNorm:
+    """The norm a carry decision compares. Across a stage-form migration both sides leave out
+    what the form moves (the executor's parts and the description fields)."""
+    norm = StageNorm.from_stage(stage)
+    if not migrating:
+        return norm
+    return replace(norm, means="", method="", conditions=None, procedure_place=(),
+                   description_place=())
+
+
 def stage_carried(prev_stages, new_stages, index: int) -> bool:
     """Whether the PASSED verdict of stage `index` in `prev_stages` still holds against
     `new_stages`: its carry digest is unchanged AND every direct supplier named by the
@@ -284,8 +295,9 @@ def stage_carried(prev_stages, new_stages, index: int) -> bool:
     new = {s.index: s for s in new_stages}
     if index not in prev or index not in new:
         return False
-    if (StageNorm.from_stage(prev[index]).carry_digest()
-            != StageNorm.from_stage(new[index]).carry_digest()):
+    migrating = is_stage_form_migration(prev[index], new[index])
+    if (_carry_norm(prev[index], migrating).carry_digest()
+            != _carry_norm(new[index], migrating).carry_digest()):
         return False
     for sup in {e.on for e in new[index].supplies}:
         if sup not in prev or sup not in new:

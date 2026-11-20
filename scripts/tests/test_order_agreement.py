@@ -611,25 +611,33 @@ def test_replan_refuses_an_old_form_stage_on_a_two_sided_order(ostore, home, arm
 
 
 def test_replan_of_an_old_form_plan_with_described_stages_is_accepted_and_carries_passed(
-        ostore, home, armed_env, tmp_path):
-    """The way out the refusal names, taken: the session holds a plan in the old form, approved
-    before the order chose the stage form; the replan describes the same stage and is accepted,
-    and the stage already PASSED keeps its outcome instead of being re-run."""
+        ostore, home, armed_env, tmp_path, monkeypatch):
+    """The way out the refusal names, taken: the session holds a plan in the old form, submitted
+    and approved before the order chose the stage form (the engine before this change); the
+    replan describes the same stage and is accepted, and the stage already PASSED keeps its
+    outcome instead of being re-run. The approved snapshot the replan is compared against holds
+    the old-form bytes."""
+    from agentctl import submission
     from agentctl.state import StageStatus
 
-    plan = _plan_ready(ostore, home, tmp_path)
-    cli.cmd_order_raise(ns(session=SESSION, id="O1", element="the release is one command"),
-                        store=ostore)
-    cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="",
-                             plan=plan), store=ostore)
-    assert _plan_review(ostore, "pass", plan_digest=_file_sha256(plan)).ok
-    approved = cli.cmd_approve(ns(session=SESSION, by="user"), store=ostore)
+    _agreed(ostore, home, tmp_path)
+    plan = _plan(tmp_path, describe=False)
+    assert cli.cmd_plan(ns(session=SESSION), store=ostore).ok
+    with monkeypatch.context() as before_the_change:
+        before_the_change.setattr(submission, "_stage_description_violations", lambda *a, **k: [])
+        submitted = cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=ostore)
+        assert submitted.ok, (submitted.detail, submitted.data)
+        cli.cmd_order_raise(ns(session=SESSION, id="O1", element="the release is one command"),
+                            store=ostore)
+        cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="",
+                                 plan=plan), store=ostore)
+        assert _plan_review(ostore, "pass", plan_digest=_file_sha256(plan)).ok
+        approved = cli.cmd_approve(ns(session=SESSION, by="user"), store=ostore)
     assert approved.ok, (approved.detail, approved.data.get("blockers"))
-    Path(plan).write_text(Path(_plan(tmp_path, describe=False, name="scratch.toml")).read_text(
-        encoding="utf-8"), encoding="utf-8")
     state = ostore.load(SESSION)
     assert state.node == "APPROVED" and state.plan_path == plan, "the old-form plan is the approved one"
-    assert "means" in Path(plan).read_text(encoding="utf-8"), "its stage is in the old form"
+    assert "means" in Path(state.plan_snapshot_path).read_text(encoding="utf-8"), \
+        "the approved snapshot holds the old form"
     state.stage(1).outcome.status = StageStatus.PASSED.value
     state.stage(1).outcome.actual = "done before the order chose the form"
     ostore.save(state)

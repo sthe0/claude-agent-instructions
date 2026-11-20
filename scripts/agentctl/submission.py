@@ -1367,6 +1367,27 @@ _STAGE_DESCRIPTION_PARTS = (
 )
 
 
+def _stage_binding_condition_violations(stage) -> list[str]:
+    """The rows of one stage's `binding_conditions`, held to what the order's own binding
+    conditions are held to: each is a table with an id, a text and a `set_by`, and an id is
+    stated once (compared without regard to case, as the restated-condition check compares)."""
+    out: list[str] = []
+    for i, row in enumerate(stage.binding_conditions, start=1):
+        if row.get("not_a_table"):
+            out.append(f"stage {stage.index} binding condition #{i} is not a table (an `id`, "
+                       f"a `text` and a `set_by`)")
+            continue
+        label = row.get("id") or f"#{i}"
+        for name in ("id", "text", "set_by"):
+            if not _normalize_string(row.get(name)):
+                out.append(f"stage {stage.index} binding condition {label} has no {name!r}")
+    dup = _duplicate_ids([str(r.get("id") or "").casefold() for r in stage.binding_conditions])
+    if dup:
+        out.append(f"stage {stage.index} binding condition id(s) {', '.join(dup)} repeat "
+                   f"(ids are compared without regard to case)")
+    return out
+
+
 def _stage_description_violations(doc, ctx: StageOrderContext) -> list[str]:
     """Check 4: every stage of a plan on a two-sided order is a stage description. The order
     chooses the form, never a field of the stage: each of its parts (product, place,
@@ -1386,6 +1407,7 @@ def _stage_description_violations(doc, ctx: StageOrderContext) -> list[str]:
         if not stage.binding_conditions_stated:
             out.append(f"stage {stage.index} is a stage description and states no binding "
                        f"conditions (`binding_conditions`; an empty list says there are none)")
+        out.extend(_stage_binding_condition_violations(stage))
         carried = [name for name, value in (
             ("means", stage.means.means), ("method", stage.means.method),
             ("procedure", stage.means.procedure), ("conditions", stage.conditions),
@@ -1489,16 +1511,20 @@ def _sub_plan_binding_violations(doc, record, prefix: str, ctx: StageOrderContex
 def _restated_condition_violations(doc, ctx: StageOrderContext) -> list[str]:
     """A stage of this plan that restates a binding condition the stage it builds carries must
     keep its text (compared after trimming and folding whitespace); another text is a change,
-    which only the setter level's record may make (`ctx.released`)."""
+    which only the setter level's record may make (`ctx.released`). Ids are compared without
+    regard to case: `c1` is the condition `C1`, not another."""
     if ctx.binding_conditions is None:
         return []
-    carried = {c["id"]: " ".join(str(c.get("text", "")).split()) for c in ctx.binding_conditions}
+    carried = {str(c["id"]).casefold():" ".join(str(c.get("text", "")).split())
+               for c in ctx.binding_conditions}
+    released = {str(i).casefold() for i in ctx.released}
     out: list[str] = []
     for stage in doc.stages:
         for cond in stage.binding_conditions:
             text = " ".join(str(cond.get("text", "")).split())
             cid = cond.get("id")
-            if cid in carried and cid not in ctx.released and text != carried[cid]:
+            key = str(cid or "").casefold()
+            if key in carried and key not in released and text != carried[key]:
                 out.append(
                     f"stage {stage.index} restates binding condition {cid!r} with another text "
                     f"than the stage this plan builds carries: only the level that set it can "
