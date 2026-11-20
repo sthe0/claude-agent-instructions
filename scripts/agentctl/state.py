@@ -3747,19 +3747,3 @@ SESSION_SCOPED_FIELDS = frozenset({
     "order_searches", "order_beside", "executor_side_revisions", "sub_plan_records",
     "stage_approvals", "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
 })
-
-
-def restamp_subplan_digest(state: "SessionState", stage_index: int, record) -> bool:
-    """Carry the user's approval of a sub-plan over an edit of it: set the approved digest to
-    the live `record`'s, only when an approval is set and the live request equals the one the
-    user approved. A changed request, or no approval, leaves the field as it was and the stage
-    stays refused until the user approves the changed sub-plan."""
-    from . import sub_plan
-
-    entry = state.stage_approvals.get(sub_plan.approval_key(state, stage_index)) or {}
-    if not entry.get("user_subplan_approval"):
-        return False
-    if sub_plan.resource_request_digest(record.resource_request) != entry.get("user_subplan_request"):
-        return False
-    entry["user_subplan_approval"] = sub_plan.approval_digest(record)
-    return True
