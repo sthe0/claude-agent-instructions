@@ -2,5 +2,6 @@ version = "2.3.2"
 
 [last_pass.mechanisms]
 version = "2.3.2"
-suite_sha256 = "75f1c763cbe4313d28e2d9630b6823692310ae571a61fe3d0a3c5776495378c5"
-record = "/home/the0/.local/state/opencode-probe/runs/20261120T045712Z/record.json"
+suite_sha256 = "dac4c927f57134aebf7b8a84091388ac4b3f8d3aae20c5965f9a147450b65bc4"
+run = "20261120T063432Z"
+record_sha256 = "6ab5a6e7f18978eb01b5d94c73f9d62fd1446b5b1c41ec14e395defdc73dc1f6"

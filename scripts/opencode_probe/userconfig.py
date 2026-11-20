@@ -1,22 +1,58 @@
-"""Snapshot and compare of the user's own OpenCode config directories.
+"""Snapshot and compare of the user's own OpenCode directories.
 
-The probe never writes there; the snapshot, taken before the first OpenCode run, lets
-``user-config --compare`` show that it did not.
+The probe never writes there. Config directories are byte-compared against a snapshot taken
+before the first OpenCode run. The data, state and cache directories hold what the user's own
+OpenCode service writes at any time, so they are not byte-compared: ``user-config --compare``
+fails when any file in them holds a probe run-root path, which a leaked probe session records.
 """
 from __future__ import annotations
 
 import hashlib
-import sys
 from pathlib import Path
 
 from . import core
 
 SNAPSHOT_NAME = "user-config.sha256"
+DATA_DIRS = (".local/share/opencode", ".local/state/opencode", ".cache/opencode")
+CHUNK = 1 << 20
 
 
 def user_dirs(home: Path | None = None) -> list[Path]:
     home = home or Path.home()
     return [home / ".config" / "opencode", home / ".opencode"]
+
+
+def data_dirs(home: Path | None = None) -> list[Path]:
+    home = home or Path.home()
+    return [home / rel for rel in DATA_DIRS]
+
+
+def probe_root_needle() -> bytes:
+    return str(core.state_dir() / "runs" / "root.").encode()
+
+
+def _holds(path: Path, needle: bytes) -> bool:
+    keep = len(needle) - 1
+    tail = b""
+    with path.open("rb") as handle:
+        while block := handle.read(CHUNK):
+            if needle in tail + block:
+                return True
+            tail = block[-keep:]
+    return False
+
+
+def leaked_probe_paths(home: Path | None = None, needle: bytes | None = None) -> list[str]:
+    """Files under the user's data, state and cache directories that name a probe run root."""
+    needle = needle or probe_root_needle()
+    leaked = []
+    for base in data_dirs(home):
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.is_file() and not path.is_symlink() and _holds(path, needle):
+                leaked.append(str(path.relative_to(home or Path.home())))
+    return leaked
 
 
 def digest_tree(home: Path | None = None) -> dict[str, str]:
@@ -55,34 +91,6 @@ def real_config_key_names(home: Path | None = None) -> list[str]:
     return []
 
 
-def list_top_level(home: Path | None = None) -> int:
-    """Top-level entries of the user's OpenCode config directories with file counts."""
-    from collections import Counter
-
-    counts = Counter("/".join(Path(rel).parts[:3]) for rel in digest_tree(home))
-    for name, count in sorted(counts.items()):
-        print(f"{count:6d}  {name}")
-    return 0
-
-
-def show_dependency_file(rel: str, home: Path | None = None) -> int:
-    """Print a file under ``~/.opencode/node_modules`` (installed plugin type definitions,
-    no credentials live there); with a directory, print its file names."""
-    home = home or Path.home()
-    base = (home / ".opencode" / "node_modules").resolve()
-    path = (base / rel).resolve()
-    if base not in path.parents and path != base:
-        print("show: path outside ~/.opencode/node_modules")
-        return 1
-    if path.is_dir():
-        for child in sorted(path.rglob("*")):
-            if child.is_file():
-                print(child.relative_to(base))
-        return 0
-    sys.stdout.write(path.read_text(encoding="utf-8", errors="replace"))
-    return 0
-
-
 def snapshot_path() -> Path:
     return core.state_dir() / SNAPSHOT_NAME
 
@@ -114,10 +122,13 @@ def compare(home: Path | None = None) -> int:
     changed = sorted(rel for rel in expected.keys() & actual.keys() if expected[rel] != actual[rel])
     added = sorted(actual.keys() - expected.keys())
     removed = sorted(expected.keys() - actual.keys())
-    if changed or added or removed:
-        for label, names in (("changed", changed), ("added", added), ("removed", removed)):
+    leaked = leaked_probe_paths(home)
+    if changed or added or removed or leaked:
+        for label, names in (("changed", changed), ("added", added), ("removed", removed),
+                             ("probe path found in", leaked)):
             for name in names[:10]:
                 print(f"user-config compare: {label}: {name}")
         return 1
-    print(f"user-config compare: {len(actual)} files byte-identical to the snapshot")
+    print(f"user-config compare: {len(actual)} config files byte-identical to the snapshot; "
+          "no probe path in the data, state or cache dirs")
     return 0

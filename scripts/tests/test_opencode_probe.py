@@ -2,14 +2,15 @@
 
 Nothing here reaches a real model or the user's OpenCode: a synthetic probe tree stands in for the
 phase packages, and the fake binary (``tests/fixtures/opencode-fake/opencode``) stands in for the
-binary. The ``test_p6_live_*`` and ``test_paths_*`` nodes read the live record the suite produced and
-skip with an ``opencode live:`` reason when there is none.
+binary. Every test here passes or fails on its own; the checks of the live record are in
+``live_opencode_probe_record.py``, outside the default run.
 """
 import json
 import os
 import re
 import shutil
 import stat
+import subprocess
 import threading
 import urllib.request
 from pathlib import Path
@@ -18,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import opencode_live
-from opencode_probe import cli, core, coverage, harness, isolated, negative, record, runner, stub, subject_only, userconfig
+from opencode_probe import cli, core, coverage, harness, isolated, negative, paths, record, runner, stub, subject_only, userconfig
 from opencode_probe.mechanisms import c_p1, c_p6, c_p7, c_p13
 
 FAKE = Path(__file__).resolve().parent / "fixtures" / "opencode-fake" / "opencode"
@@ -124,20 +125,16 @@ def test_user_config_untouched(tmp_path, monkeypatch):
 
 
 def test_single_exact_version_string():
+    version = core.read_pin()["version"]
     mentions = [p for p in core.PROBE_DIR.rglob("*") if p.is_file() and "__pycache__" not in p.parts
-                and "2.3.2" in p.read_text(encoding="utf-8", errors="replace")]
+                and version in p.read_text(encoding="utf-8", errors="replace")]
     assert [p.name for p in mentions] == [core.PIN_NAME]
 
 
-def test_live_cases_skip_with_reason(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_OPENCODE_BIN", str(tmp_path / "absent" / "opencode"))
+def test_a_record_dependent_check_fails_without_a_record(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_OPENCODE_PROBE_STATE", str(tmp_path / "state"))
-    monkeypatch.delenv(opencode_live.CREDENTIAL_ENV, raising=False)
-    assert opencode_live.binary_problem().startswith("opencode live: binary")
-    assert opencode_live.credential_problem().startswith("opencode live: credential")
-    assert opencode_live.record_problem("mechanisms").startswith("opencode live: binary")
-    monkeypatch.setenv("AGENT_OPENCODE_BIN", fake_binary(tmp_path))
-    assert opencode_live.record_problem("mechanisms").startswith("opencode live: record")
+    with pytest.raises(pytest.fail.Exception, match="no record of phase mechanisms"):
+        opencode_live.latest_record("mechanisms")
 
 
 def test_skips_without_binary(tmp_path, monkeypatch, capsys):
@@ -158,16 +155,16 @@ def test_pin_bump_requires_matching_pass(tmp_path):
     assert record.pin_record(state, alpha, probe) == []
     assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == []
     (probe / "pin.toml").write_text(
-        'version = "2.4.0"\n\n[last_pass.alpha]\nversion = "2.3.2"\nsuite_sha256 = "x"\nrecord = "y"\n', encoding="utf-8")
+        'version = "2.4.0"\n\n[last_pass.alpha]\nversion = "2.3.2"\nsuite_sha256 = "x"\nrun = "y"\nrecord_sha256 = "z"\n',
+        encoding="utf-8")
     assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe)
     write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"}, version="2.4.0")
     assert record.pin_record(state, alpha, probe) == []
     assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == []
 
 
-def test_pin_is_exact_2x():
-    version = core.read_pin()["version"]
-    assert version == "2.3.2"
+def test_pin_is_one_exact_version():
+    assert re.fullmatch(r"\d+\.\d+\.\d+", core.read_pin()["version"])
 
 
 def test_require_pass_accepts_absent_only_outside_k7(tmp_path):
@@ -314,12 +311,13 @@ def test_subject_file_change_stales_only_its_phase(tmp_path):
 
 
 def test_run_never_writes_pin(monkeypatch, tmp_path):
-    monkeypatch.setattr(core, "binary_problem", lambda: None)
-    monkeypatch.setattr(runner, "run_phase", lambda phase, **kw: (tmp_path, {"P1": {"status": "pass"}}))
+    monkeypatch.setenv("FAKE_OPENCODE_VERSION", core.read_pin()["version"])
     pin = core.PROBE_DIR / core.PIN_NAME
-    before = pin.read_bytes()
-    assert cli.main(["run", "--phase", "mechanisms"]) == 0
-    assert pin.read_bytes() == before
+    before = (pin.read_bytes(), pin.stat().st_mtime_ns)
+    rec_dir, cases = runner.run_phase(core.get_phase("mechanisms"), case_ids={"P11"}, state=tmp_path / "state",
+                                      binary=fake_binary(tmp_path))
+    assert cases["P11"]["status"] == record.PASS and (rec_dir / "record.json").is_file()
+    assert (pin.read_bytes(), pin.stat().st_mtime_ns) == before
 
 
 def make_usage_db(root, tokens_input, tokens_output):
@@ -351,19 +349,6 @@ def test_p6_counts_every_request_of_the_model(tmp_path):
     assert c_p6._store(SimpleNamespace(root=tmp_path, requests=requests))[1] == {}
 
 
-def test_p6_live_record_names_missing_fields():
-    entry = opencode_live.latest_case("mechanisms", "P6")
-    if entry["status"] == record.PASS:
-        assert entry["evidence"]["missing"] == []
-    else:
-        assert entry["evidence"]["missing"] and set(entry["evidence"]["missing"]) <= set(entry["evidence"]["missing_observations"])
-
-
-def test_paths_record_refused_by_per_mechanism():
-    entry = opencode_live.latest_case("mechanisms", "P1")
-    assert entry["paths"] and all(isinstance(p["refused_by"], list) and p["id"] for p in entry["paths"])
-
-
 def test_isolated_env_asserts_scratch_in_effect(tmp_path):
     root = isolated.make_root(tmp_path)
     env = isolated.isolated_env(root, caller={"PATH": os.environ["PATH"]})
@@ -387,9 +372,48 @@ def test_isolated_root_under_runs_with_marker(tmp_path):
     assert (root / isolated.MARKER).is_file()
 
 
-def test_inert_deny_disables_both_mechanisms(tmp_path):
-    source = (core.PROBE_DIR / "plugin" / "index.mjs").read_text(encoding="utf-8")
-    assert source.count("!INERT") == 3
+PLUGIN_DRIVER = """
+import plugin from %(plugin)s;
+const hooks = {};
+const domain = () => ({ hook: (name, fn) => { hooks[name] = fn; } });
+plugin.setup({ tool: domain(), permission: domain(), session: domain() });
+const out = {};
+try { hooks["execute.before"]({ id: "c1", tool: "shell", input: { command: "touch m" } }); out.threw = false; }
+catch (error) { out.threw = String(error.message); }
+const evaluated = { action: "shell", resources: ["touch m"], source: { id: "c1" }, effect: "allow" };
+hooks["evaluate"](evaluated);
+out.effect = evaluated.effect;
+try { hooks["prompt"]({ sessionID: "s1", prompt: { text: "go" } }); out.prompt_threw = false; }
+catch (error) { out.prompt_threw = String(error.message); }
+console.log(JSON.stringify(out));
+"""
+
+
+def drive_plugin(tmp_path, inert):
+    rules = {"throw": [{"name": "shell", "contains": "m"}], "deny": [{"name": "shell", "contains": "m"}],
+             "refuse_prompt": True}
+    env = {"PATH": os.environ["PATH"], "PROBE_LOG": str(tmp_path / f"log-{inert}.jsonl"),
+           "PROBE_RULES": json.dumps(rules), **({"PROBE_INERT": "1"} if inert else {})}
+    driver = tmp_path / f"driver-{inert}.mjs"
+    driver.write_text(PLUGIN_DRIVER % {"plugin": json.dumps((core.PROBE_DIR / "plugin" / "index.mjs").as_uri())},
+                      encoding="utf-8")
+    done = subprocess.run(["node", str(driver)], env=env, capture_output=True, text=True, timeout=30, check=True)
+    log = [json.loads(line) for line in (tmp_path / f"log-{inert}.jsonl").read_text(encoding="utf-8").splitlines()]
+    return json.loads(done.stdout), log
+
+
+def test_inert_deny_disables_all_three_refusals(tmp_path):
+    live, live_log = drive_plugin(tmp_path, inert=False)
+    assert live == {"threw": "probe throw: shell", "effect": "deny", "prompt_threw": "probe throw: prompt"}
+    assert {e["mechanism"] for e in live_log if e["at"] == "refusal"} == {"PreToolUse", "permission.evaluate",
+                                                                          "UserPromptSubmit"}
+    inert, inert_log = drive_plugin(tmp_path, inert=True)
+    assert inert == {"threw": False, "effect": "allow", "prompt_threw": False}
+    assert not [e for e in inert_log if e["at"] == "refusal"]
+    assert {e["at"] for e in inert_log} >= {"tool.execute.before", "permission.evaluate", "session.prompt"}
+
+
+def test_inert_harness_sets_the_plugin_switch(tmp_path):
     inert = harness.Harness("T1", tmp_path / "e", state=tmp_path / "s", binary=fake_binary(tmp_path), inert=True)
     plain = harness.Harness("T1", tmp_path / "e", state=tmp_path / "s", binary=fake_binary(tmp_path))
     with inert.world(FAKE_SCENARIO) as inert_world, plain.world(FAKE_SCENARIO) as plain_world:
@@ -508,30 +532,111 @@ def test_case_check_record_hook_problems_are_reported(tmp_path):
     assert record.pin_record(state, alpha, probe) == []
 
 
-P1_OK = {"paths": [{"id": "shell:bash", "refused_by": ["PreToolUse"]}, {"id": "child-run", "refused_by": []}]}
+SHELL_PATH = {"id": "shell:bash", "tool": "shell", "verdict": "refused", "refused_by": ["PreToolUse"]}
+EXCLUSION = {"reason": "needs the network", "schema": {"query": "string"}, "description": "searches",
+             "absent_from_tool_list_when_denied": True}
+P1_OK = {"paths": [SHELL_PATH], "evidence": {"tool_list": ["shell", "websearch"],
+                                             "exclusions": {"websearch": EXCLUSION}}}
+
+
+def p1_with(**evidence):
+    return {"paths": [SHELL_PATH], "evidence": {"tool_list": ["shell"], "exclusions": {}, **evidence}}
 
 
 def test_p1_record_needs_paths_with_refused_by():
     assert c_p1.check_record(P1_OK, {}) == []
     assert c_p1.check_record({"paths": []}, {}) == ["no `paths` list"]
-    assert c_p1.check_record({"paths": [{"id": "x"}]}, {}) == ["path 'x' has no id or no refused_by list"]
+    assert c_p1.check_record({"paths": [{"id": "x"}]}, {}) == [
+        "path 'x' has no id, tool, verdict or refused_by list", "no recorded tool list (the tools the stub received)"]
+    contradictory = {"paths": [{**SHELL_PATH, "refused_by": []}], "evidence": P1_OK["evidence"]}
+    assert c_p1.check_record(contradictory, {}) == [
+        "path 'shell:bash' is refused_by [] but its verdict is 'refused'"]
+
+
+def test_p1_record_fails_for_a_listed_tool_that_is_neither_path_nor_exclusion():
+    assert c_p1.check_record(p1_with(tool_list=["shell", "execute"]), {}) == [
+        "tool 'execute' is in the model's tool list and in neither `paths` nor `exclusions`"]
+    bare = {**EXCLUSION, "schema": {}}
+    assert c_p1.check_record(p1_with(tool_list=["shell", "question"], exclusions={"question": bare}), {}) == [
+        "exclusion 'question' lacks a reason, schema, description or switch-off result"]
+    assert c_p1.check_record(p1_with(tool_list=["shell", "question"], exclusions={"question": EXCLUSION}), {}) == []
+
+
+def test_p1_credits_a_refusal_only_on_a_positive_event():
+    spec = SimpleNamespace(path_id="shell:bash", tool="shell")
+    absent = {"executed": False, "refusal_event": None}
+    seen = {"executed": False, "refusal_event": "probe throw: shell"}
+    ran = {"executed": True, "refusal_event": None}
+    marker_missing = c_p1._tool_entry(spec, {"executed": True}, absent, absent, True)
+    assert marker_missing["refused_by"] == [] and marker_missing["verdict"] == "unconfirmed"
+    credited = c_p1._tool_entry(spec, {"executed": True}, seen, absent, True)
+    assert credited["refused_by"] == [c_p1.PRE] and credited["verdict"] == "refused"
+    assert c_p1._tool_entry(spec, {"executed": True}, ran, ran, True)["verdict"] == "unrefused"
+
+
+def test_p13_refusal_without_an_event_is_not_a_pass():
+    def mechanisms(thrown_event, denied_event):
+        return [c_p13.mechanism_entry("PreToolUse", True, True, thrown_event),
+                c_p13.mechanism_entry("permission.evaluate", True, True, denied_event),
+                c_p13.mechanism_entry("Stop", True, False)]
+
+    assert c_p13.verdict(mechanisms("probe throw: shell", "probe deny: shell"), False) == record.PASS
+    silent = mechanisms(None, "probe deny: shell")
+    assert silent[0]["can_refuse"] is False
+    assert c_p13.verdict(silent, False) == record.UNOBSERVED
+    assert c_p13.verdict(mechanisms("probe throw: shell", "probe deny: shell"), True) == record.FAIL
 
 
 def test_p13_record_needs_mechanisms():
+    refusal = {"mechanism": "PreToolUse", "fired": True, "can_refuse": True, "refusal_event": "probe throw: shell"}
     assert c_p13.check_record({"mechanisms": [{"mechanism": "Stop", "fired": True, "can_refuse": False}]}, {}) == []
+    assert c_p13.check_record({"mechanisms": [refusal]}, {}) == []
     assert c_p13.check_record({}, {}) == ["no `mechanisms` list"]
     assert c_p13.check_record({"mechanisms": [{"mechanism": "Stop", "fired": True}]}, {}) == [
         "mechanism 'Stop' lacks fired or can_refuse"]
+    assert c_p13.check_record({"mechanisms": [{**refusal, "refusal_event": None}]}, {}) == [
+        "mechanism 'PreToolUse' can_refuse without a refusal_event"]
 
 
-def test_p6_record_needs_schema_exit_codes_and_store_or_missing():
-    base = {"event_schema": ["type"], "exit_codes": {"success": 0}}
-    store = {"columns": {"id": "text"}, "tokens": {"stored": {}}}
-    assert c_p6.check_record({"evidence": {**base, "store": store}}, {}) == []
-    assert c_p6.check_record({"evidence": {**base, "store": {}, "missing": ["store"]}}, {}) == []
-    assert c_p6.check_record({"evidence": {**base, "store": {}}}, {}) == [
-        "evidence has neither the usage-store columns and tokens nor a `missing` list"]
-    assert c_p6.check_record({"evidence": {"store": store}}, {}) == [
+P6_STORE = {"columns": {"id": "text"}, "tokens": {"stored": {}}, "sample_row": {"id": "ses_1"}}
+P6_SWITCH = {"assistant_messages": [{"model": "m1"}, {"model": "m2"}]}
+P6_BASE = {"event_schema": ["type"], "exit_codes": {"success": 0}}
+
+
+def p6_entry(status, **evidence):
+    return {"status": status, "evidence": {**P6_BASE, **evidence}}
+
+
+def test_p6_pass_needs_the_store_a_sample_row_and_two_models():
+    ok = p6_entry(record.PASS, store=P6_STORE, missing=[], model_switch=P6_SWITCH)
+    assert c_p6.check_record(ok, {}) == []
+    assert c_p6.check_record(p6_entry(record.PASS, store=P6_STORE, missing=["store"], model_switch=P6_SWITCH), {}) == [
+        "status pass but missing is ['store']"]
+    assert c_p6.check_record(p6_entry(record.PASS, store={**P6_STORE, "sample_row": None}, missing=[],
+                                      model_switch=P6_SWITCH), {}) == ["status pass but no sample row is recorded"]
+    assert c_p6.check_record(p6_entry(record.PASS, store={}, missing=[], model_switch=P6_SWITCH), {}) == [
+        "status pass but the usage-store columns or tokens are not recorded", "status pass but no sample row is recorded"]
+    one_model = {"assistant_messages": [{"model": "m1"}, {"model": "m1"}]}
+    assert c_p6.check_record(p6_entry(record.PASS, store=P6_STORE, missing=[], model_switch=one_model), {}) == [
+        "status pass but the switch shows model ids ['m1']"]
+    assert c_p6.check_record(p6_entry(record.PASS, store=P6_STORE, model_switch=P6_SWITCH), {}) == [
+        "evidence has no `missing` list"]
+
+
+def test_p6_absent_needs_a_named_missing_item_with_its_observation():
+    item = c_p6.MISSING_ITEMS[0]
+    ok = p6_entry(record.ABSENT, missing=[item], missing_observations={item: "no table"})
+    assert c_p6.check_record(ok, {}) == []
+    assert c_p6.check_record(p6_entry(record.ABSENT, missing=[], missing_observations={}), {}) == [
+        "status absent but missing is empty"]
+    assert c_p6.check_record(p6_entry(record.ABSENT, missing=["bogus"], missing_observations={"bogus": "x"}), {}) == [
+        f"missing item 'bogus' is not one of {list(c_p6.MISSING_ITEMS)}"]
+    assert c_p6.check_record(p6_entry(record.ABSENT, missing=[item], missing_observations={}), {}) == [
+        f"missing item {item!r} has no observation"]
+
+
+def test_p6_record_needs_schema_and_exit_codes():
+    assert c_p6.check_record({"status": record.FAIL, "evidence": {}}, {}) == [
         "evidence lacks event_schema", "evidence lacks exit_codes"]
 
 
@@ -543,19 +648,138 @@ def test_p7_record_needs_evidence_per_p1_path_id():
         "P1 has no paths to compare against"]
 
 
-def test_live_record_passes_the_structural_check():
-    path, rec = opencode_live.latest_record("mechanisms")
-    assert record.structure_problems(core.get_phase("mechanisms"), path, rec, None) == []
+class FakeRun:
+    """The part of a ``harness.Run`` that ``paths.outcome`` reads."""
+
+    def __init__(self, files=(), refusals=()):
+        self.files, self.refusals = set(files), set(refusals)
+        self.requests = []
+
+    def tool_part(self, call_id):
+        return {"state": {"status": "error", "error": "probe throw: shell"}} if call_id in self.refusals else None
+
+    def exists(self, rel):
+        return rel in self.files
+
+    def refusal_event(self, mechanism, call_id=None):
+        return f"{mechanism} refused {call_id}" if call_id in self.refusals else None
 
 
-def test_tree_never_names_the_forbidden_product():
-    forbidden = re.compile("a" + "i" + r"[\s_.-]?" + "su" + "ite", re.IGNORECASE)
-    root = Path(__file__).resolve().parents[2]
-    hits = []
-    for directory, subdirs, names in os.walk(root):
-        subdirs[:] = [d for d in subdirs if d not in {".git", "__pycache__", ".pytest_cache"}]
-        for name in names:
-            file = Path(directory) / name
-            if forbidden.search(file.read_bytes().decode("utf-8", errors="ignore")):
-                hits.append(str(file.relative_to(root)))
-    assert hits == []
+def test_nested_child_run_refusal_is_read_at_the_nested_call_id():
+    plan = SimpleNamespace(call_ids={"child-run": "call_m1_3_0", "shell:bash": "call_m1_0_0"})
+    nested = SimpleNamespace(path_id="child-run", effect="file:m-child-run", refusal_call_id=paths.NESTED_CALL_ID)
+    own = SimpleNamespace(path_id="shell:bash", effect="file:m-shell", refusal_call_id=None)
+    run = FakeRun(refusals={paths.NESTED_CALL_ID, "call_m1_0_0"})
+    assert paths.outcome(run, plan, nested, c_p1.PRE)["refusal_event"] == f"{c_p1.PRE} refused {paths.NESTED_CALL_ID}"
+    assert paths.outcome(run, plan, own, c_p1.PRE)["refusal_event"] == f"{c_p1.PRE} refused call_m1_0_0"
+    assert paths.outcome(FakeRun(), plan, own, c_p1.PRE)["refusal_event"] is None
+
+
+def test_compare_refuses_a_probe_path_in_the_user_data_dirs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_OPENCODE_PROBE_STATE", str(tmp_path / "probe-state"))
+    home = tmp_path / "user-home"
+    (home / ".config" / "opencode").mkdir(parents=True)
+    for rel in userconfig.DATA_DIRS:
+        (home / rel).mkdir(parents=True)
+    (home / userconfig.DATA_DIRS[0] / "session.db").write_bytes(b"rows without any probe path")
+    userconfig.write_snapshot(home)
+    assert userconfig.compare(home) == 0
+    leak = str(core.state_dir() / "runs" / "root.abc" / "work").encode()
+    (home / userconfig.DATA_DIRS[2] / "index.json").write_bytes(b"x" * 3 + leak + b"y")
+    assert userconfig.leaked_probe_paths(home) == [f"{userconfig.DATA_DIRS[2]}/index.json"]
+    assert userconfig.compare(home) == 1
+
+
+def test_leak_scan_finds_a_path_split_across_read_blocks(monkeypatch, tmp_path):
+    monkeypatch.setattr(userconfig, "CHUNK", 8)
+    (tmp_path / userconfig.DATA_DIRS[1]).mkdir(parents=True)
+    (tmp_path / userconfig.DATA_DIRS[1] / "f").write_bytes(b"ab" + b"NEEDLE-ROOT" + b"cd")
+    assert userconfig.leaked_probe_paths(tmp_path, b"NEEDLE-ROOT") == [f"{userconfig.DATA_DIRS[1]}/f"]
+
+
+def env_meta(root, **env_paths):
+    return json.dumps({"src": "meta", "run": "r1", "root": str(root), "env_paths": env_paths})
+
+
+def test_env_paths_must_lie_under_a_probe_root_of_the_runs_dir(tmp_path):
+    runs = tmp_path / "runs"
+    root = runs / "root.abc"
+    log = tmp_path / "P1.jsonl"
+    log.write_text(env_meta(root, HOME=str(root / "home"), XDG_DATA_HOME=str(root / "xdg" / "data")) + "\n",
+                   encoding="utf-8")
+    assert record.env_path_problems(log, runs) == []
+    log.write_text(env_meta(root, HOME=str(tmp_path / "real-home")) + "\n", encoding="utf-8")
+    assert record.env_path_problems(log, runs) == [
+        f"P1.jsonl run r1: HOME={tmp_path / 'real-home'} lies outside its root {root}"]
+    log.write_text(env_meta(tmp_path / "elsewhere", HOME=str(tmp_path / "elsewhere" / "home")) + "\n", encoding="utf-8")
+    assert "is not a probe root" in record.env_path_problems(log, runs)[0]
+    log.write_text(json.dumps({"src": "meta", "run": "r1", "root": str(root)}) + "\n", encoding="utf-8")
+    assert record.env_path_problems(log, runs) == ["P1.jsonl run r1: no env_paths recorded"]
+
+
+def test_check_record_reports_an_env_path_outside_the_run_root(tmp_path):
+    probe = make_probe(tmp_path)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    path = write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    (path.parent / "events" / "A1.jsonl").write_text(
+        env_meta(state / "runs" / "root.x", HOME="/home/someone") + "\n", encoding="utf-8")
+    assert record.pin_record(state, alpha, probe) == [
+        f"alpha/A1: A1.jsonl run r1: HOME=/home/someone lies outside its root {state / 'runs' / 'root.x'}"]
+
+
+def test_the_config_pins_the_stub_provider_and_small_model(tmp_path):
+    config = fake_harness(tmp_path).base_config(plugin=True)
+    assert config["enabled_providers"] == ["stub"]
+    assert config["small_model"] == f"stub/{harness.STUB_MODELS[0]}"
+    written = json.loads(fake_harness(tmp_path).run(FAKE_SCENARIO, label="config").read("opencode.json"))
+    assert written["enabled_providers"] == ["stub"] and written["small_model"].startswith("stub/")
+
+
+def test_the_binary_under_test_is_copied_not_linked(tmp_path):
+    root = isolated.make_root(tmp_path)
+    source = tmp_path / "installed-opencode"
+    source.write_text("#!/bin/sh\necho 2.3.2\n", encoding="utf-8")
+    source.chmod(0o755)
+    placed = Path(isolated.place_binary(root, str(source)))
+    assert placed.read_bytes() == source.read_bytes()
+    assert not placed.is_symlink() and placed.stat().st_ino != source.stat().st_ino
+    assert source.stat().st_nlink == 1
+    placed.write_text("changed\n", encoding="utf-8")
+    assert source.read_text(encoding="utf-8").endswith("2.3.2\n")
+
+
+def test_the_pin_names_a_run_and_the_record_hash_not_a_path(tmp_path):
+    probe = make_probe(tmp_path)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    path = write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.pin_record(state, alpha, probe) == []
+    pin_text = (probe / core.PIN_NAME).read_text(encoding="utf-8")
+    entry = core.read_pin(probe)["last_pass"]["alpha"]
+    assert entry["run"] == path.parent.name and entry["record_sha256"] == record.file_sha256(path)
+    assert str(tmp_path) not in pin_text and "/" not in pin_text
+    assert record.pinned_record(state, entry)[0] == path
+
+
+def test_a_record_whose_bytes_changed_is_no_longer_the_pinned_one(tmp_path):
+    probe = make_probe(tmp_path)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    path = write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.pin_record(state, alpha, probe) == []
+    rec = record.read_record(path)
+    rec["cases"]["A1"]["evidence"] = {"edited": True}
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    entry = core.read_pin(probe)["last_pass"]["alpha"]
+    assert record.pinned_record(state, entry) is None
+    assert record.pinned_record(state, {**entry, "run": "../elsewhere"}) is None
+    assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe)[0].endswith(
+        "whose sha256 is the pinned one")
+
+
+def test_the_committed_pin_holds_no_machine_path():
+    text = (core.PROBE_DIR / core.PIN_NAME).read_text(encoding="utf-8")
+    assert not re.search(r'"/|/home/|/tmp/|/var/', text)
+
+

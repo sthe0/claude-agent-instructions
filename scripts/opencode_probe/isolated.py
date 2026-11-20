@@ -5,10 +5,13 @@ without ``record.json`` is no record, so ``check-record`` never reads R. HOME, t
 home (``CLAUDE_AGENT_HOME`` / ``CLAUDE_CONFIG_DIR``, which ``config_root.agent_home()``
 reads before HOME), every XDG directory and the OpenCode config locations point into R.
 Before a case runs, a child process with that environment asserts that the agent home
-and each path the run uses lie under R; otherwise the case is ``unobserved``.
+and each path the run uses lie under R; otherwise the case is ``unobserved``. The runner
+removes the roots of a passing case; the roots of any other case stay as evidence (without
+the binary copy, which every world drops on exit).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -24,6 +27,7 @@ AGENT_HOME_FILES = ("CLAUDE.md", "config.md", "memory-global/MEMORY.md")
 AGENT_HOME_DIRS = ("skills", "agents")
 PATH_KEYS = ("HOME", "CLAUDE_AGENT_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
              "XDG_STATE_HOME", "XDG_CACHE_HOME", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR")
+CREATED_ROOTS: list[Path] = []
 KEPT_FROM_CALLER = ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "AGENT_OPENCODE_PROBE_STATE")
 
 
@@ -37,6 +41,7 @@ def make_root(state: Path | None = None) -> Path:
     runs.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="root.", dir=runs)).resolve()
     (root / MARKER).write_text("opencode probe run root\n", encoding="utf-8")
+    CREATED_ROOTS.append(root)
     return root
 
 
@@ -86,58 +91,54 @@ def isolated_env(root: Path, caller: dict | None = None) -> dict[str, str]:
 
 
 def place_binary(root: Path, source: str | None = None) -> str:
-    """The binary under test at ``R/bin/opencode`` (hard link, else copy). OpenCode lists the
-    directory above the binary's own ``bin`` as a config directory, so running the installed
-    ``~/.opencode/bin/opencode`` would load the user's ``~/.opencode`` into an isolated run."""
+    """A copy of the binary under test at ``R/bin/opencode``. OpenCode lists the directory above
+    the binary's own ``bin`` as a config directory, so running the installed
+    ``~/.opencode/bin/opencode`` would load the user's ``~/.opencode`` into an isolated run; a
+    copy, not a link, so nothing written through R can reach the installed file."""
     source = source or core.opencode_bin()
     target = root / "bin" / "opencode"
     target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists():
-        try:
-            os.link(source, target)
-        except OSError:
-            shutil.copy2(source, target)
+        shutil.copy2(source, target)
     return str(target)
+
+
+def drop_binary(root: Path) -> None:
+    shutil.rmtree(root / "bin", ignore_errors=True)
+
+
+def remove_root(root: Path) -> None:
+    """Delete a run root made by ``make_root``; anything else is left alone."""
+    root = Path(root)
+    if root.parent.name == "runs" and root.name.startswith("root.") and (root / MARKER).is_file():
+        shutil.rmtree(root)
+
+
+HOME_STAND_INS = {
+    ".claude/CLAUDE.md": "stand-in global instructions\n",
+    ".claude/skills/stand-in/SKILL.md": "---\nname: stand-in\ndescription: stand-in\n---\nstand-in\n",
+    ".agents/skills/stand-in-agents/SKILL.md":
+        "---\nname: stand-in-agents\ndescription: stand-in\n---\nstand-in\n",
+    ".config/opencode/opencode.json": "{}\n",
+    ".opencode/stand-in.txt": "stand-in\n",
+}
 
 
 def seed_home_stand_ins(root: Path) -> dict[str, str]:
     """Stand-ins of the HOME-level OpenCode and Claude locations; {relative path: sha256}
     so a case can show a write through HOME left them byte-identical."""
-    import hashlib
-
     home = root / "home"
-    files = {
-        ".claude/CLAUDE.md": "stand-in global instructions\n",
-        ".claude/skills/stand-in/SKILL.md": "---\nname: stand-in\ndescription: stand-in\n---\nstand-in\n",
-        ".agents/skills/stand-in-agents/SKILL.md":
-            "---\nname: stand-in-agents\ndescription: stand-in\n---\nstand-in\n",
-        ".config/opencode/opencode.json": "{}\n",
-        ".opencode/stand-in.txt": "stand-in\n",
-    }
-    out = {}
-    for rel, text in files.items():
+    for rel, text in HOME_STAND_INS.items():
         path = home / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        out[rel] = hashlib.sha256(text.encode()).hexdigest()
-    return out
+    return home_stand_in_digests(root)
 
 
 def home_stand_in_digests(root: Path) -> dict[str, str]:
-    import hashlib
-
     home = root / "home"
-    out = {}
-    for rel in seed_home_stand_ins_names():
-        path = home / rel
-        out[rel] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
-    return out
-
-
-def seed_home_stand_ins_names() -> list[str]:
-    return [".claude/CLAUDE.md", ".claude/skills/stand-in/SKILL.md",
-            ".agents/skills/stand-in-agents/SKILL.md", ".config/opencode/opencode.json",
-            ".opencode/stand-in.txt"]
+    return {rel: hashlib.sha256((home / rel).read_bytes()).hexdigest() if (home / rel).is_file()
+            else "missing" for rel in HOME_STAND_INS}
 
 
 _ASSERT_SNIPPET = r"""

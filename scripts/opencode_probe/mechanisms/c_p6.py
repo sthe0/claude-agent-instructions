@@ -3,7 +3,7 @@
 Characterization, always recorded: the key sets of the ``run --format json`` events and the exit
 codes of a successful run, a model error (the stub answers HTTP 400) and a killed run (SIGTERM and
 SIGKILL during a model call that hangs). Capability items, copied into the evidence because the
-probe root is deleted: the usage store's path relative to the isolated XDG data dir, the schema of
+runner removes the roots of a passing case: the usage store's path relative to the isolated XDG data dir, the schema of
 its session table and one sample row, the token counts against the usage the stub reported, the cost
 stored for the uncatalogued stub model, a model id and a timestamp on each message across one
 in-session model switch (driven through ``serve``), and the child session of one scripted
@@ -17,6 +17,7 @@ import sqlite3
 import time
 
 from opencode_probe import record, runner
+from opencode_probe.harness import wait_until
 
 CASE_ID = "P6"
 K7 = False
@@ -73,16 +74,6 @@ def _usage_requests(run, model):
     return [r for r in run.requests if r.get("model") == model]
 
 
-def _wait(predicate, seconds):
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.4)
-    return predicate()
-
-
 def _characterize(h):
     success = h.run(SUCCESS, label="success", timeout=60)
     errored = h.run(MODEL_ERROR, label="model-error", timeout=60)
@@ -126,8 +117,7 @@ def _store(success):
     expected_out = STUB_OUTPUT * len(_usage_requests(success, "m1"))
     seen = {"input": row.get("tokens_input"), "output": row.get("tokens_output")}
     evidence["tokens"] = {"stored": seen, "stub_reported": {"input": expected_in, "output": expected_out},
-                          "stub_model_requests": len(_usage_requests(success, "m1")),
-                          "title_request_counted": True}
+                          "stub_model_requests": len(_usage_requests(success, "m1"))}
     if not (seen["input"] and seen["output"] and seen["input"] == expected_in and seen["output"] == expected_out):
         missing["tokens"] = f"stored {seen}, the stub reported input {expected_in} output {expected_out}"
     return evidence, missing, row
@@ -147,7 +137,7 @@ def _switch(h):
                           key=lambda m: (m.get("time") or {}).get("created", 0))
 
         svc.call("POST", f"/api/session/{sid}/prompt", {"text": "one"})
-        _wait(lambda: any(c.get("type") == "text" for m in assistants() for c in m.get("content", [])), 30)
+        wait_until(lambda: any(c.get("type") == "text" for m in assistants() for c in m.get("content", [])), 30)
         time.sleep(2.0)
         for body in SWITCH_BODIES:
             code, data = svc.call("POST", f"/api/session/{sid}/model", body)
@@ -155,7 +145,7 @@ def _switch(h):
             if code in (200, 204):
                 break
         svc.call("POST", f"/api/session/{sid}/prompt", {"text": "two"})
-        _wait(lambda: len(assistants()) >= 2 and any(
+        wait_until(lambda: len(assistants()) >= 2 and any(
             c.get("text") == "from m2" for c in assistants()[-1].get("content", [])), 30)
         time.sleep(1.0)
         per_message = [{"id": m.get("id"), "model": (m.get("model") or {}).get("id"),
@@ -173,8 +163,8 @@ def _switch(h):
 def _child(h):
     run = h.run(CHILD, label="child", wait_for=("m-p6-child",), settle=12.0)
     root_id = (run.session_ids() or [None])[0]
-    rows = _wait(lambda: [r for r in (_rows(run.root, f"select * from {USAGE_TABLE} where parent_id is not null")
-                                      or []) if r.get("tokens_input")], 15) or []
+    rows = wait_until(lambda: [r for r in (_rows(run.root, f"select * from {USAGE_TABLE} where parent_id is not null")
+                                           or []) if r.get("tokens_input")], 15) or []
     parent = (_rows(run.root, f"select * from {USAGE_TABLE} where id = ?", (root_id,)) or [{}])[0]
     jobs = _rows(run.root, "select session_id, child_session_id, kind, status from job") or []
     evidence = {"root_session": root_id, "child_rows": [_clip(r) for r in rows], "parent_row": _clip(parent),
@@ -183,8 +173,6 @@ def _child(h):
     linked = [r for r in rows if r.get("parent_id") == root_id]
     if not linked:
         return evidence, f"no session row with parent_id {root_id} and non-zero tokens after a scripted subagent call"
-    expected = STUB_INPUT * len(_usage_requests(run, "m2"))
-    evidence["child_tokens_match_stub"] = linked[0].get("tokens_input") == expected
     return evidence, None
 
 
@@ -213,10 +201,34 @@ def run(ctx):
 
 
 def check_record(entry, cases):
-    """The event schema, the exit codes, and either the usage-store facts or a ``missing`` list."""
+    """The event schema, the exit codes, and a status that follows from the content: pass needs
+    ``missing == []``, the usage-store columns and tokens, a sample row and two distinct model ids
+    across the switch; absent needs a non-empty ``missing`` within ``MISSING_ITEMS``, each item with
+    the observation that showed it."""
     evidence = entry.get("evidence", {})
     problems = [f"evidence lacks {key}" for key in ("event_schema", "exit_codes") if not evidence.get(key)]
+    status = entry.get("status")
+    if status not in (record.PASS, record.ABSENT):
+        return problems
     store = evidence.get("store") or {}
-    if not (store.get("columns") and store.get("tokens")) and not evidence.get("missing"):
-        problems.append("evidence has neither the usage-store columns and tokens nor a `missing` list")
+    missing = evidence.get("missing")
+    if not isinstance(missing, list):
+        return problems + ["evidence has no `missing` list"]
+    if status == record.PASS:
+        if missing:
+            problems.append(f"status pass but missing is {missing}")
+        if not (store.get("columns") and store.get("tokens")):
+            problems.append("status pass but the usage-store columns or tokens are not recorded")
+        if not store.get("sample_row"):
+            problems.append("status pass but no sample row is recorded")
+        models = {m.get("model") for m in (evidence.get("model_switch") or {}).get("assistant_messages") or []}
+        if len(models - {None}) < 2:
+            problems.append(f"status pass but the switch shows model ids {sorted(map(str, models))}")
+    else:
+        if not missing:
+            problems.append("status absent but missing is empty")
+        problems += [f"missing item {item!r} is not one of {list(MISSING_ITEMS)}"
+                     for item in missing if item not in MISSING_ITEMS]
+        observed = evidence.get("missing_observations") or {}
+        problems += [f"missing item {item!r} has no observation" for item in missing if not observed.get(item)]
     return problems

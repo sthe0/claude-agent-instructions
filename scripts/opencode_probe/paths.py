@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from .harness import Harness, Run
+from .harness import REFUSAL_TEXT, Harness, Run
 
 NESTED_PROMPT = "nested"
 
@@ -23,6 +23,11 @@ class PathSpec:
     token: str
     effect: str
     throw_contains: str | None = None
+    refusal_call_id: str | None = None
+
+
+UNAVAILABLE_TEXT = "No tool named"
+NESTED_CALL_ID = "call_m3_0_0"
 
 
 def _specs() -> list[PathSpec]:
@@ -43,17 +48,32 @@ def _specs() -> list[PathSpec]:
         PathSpec("subagent:task", "subagent", {"agent": "general", "model": "stub/m2",
                                                "description": "m-subagent", "prompt": "m-subagent"},
                  "m-subagent", "file:m-subagent", "m-subagent"),
+        PathSpec("root:execute", "execute",
+                 {"code": "await fetch('http://127.0.0.1:{port}/m-exec-fetch'); return 'm-exec-fetch done'"},
+                 "m-exec-fetch", "stub-get:/m-exec-fetch", "m-exec-fetch"),
+        PathSpec("root:execute-inner", "execute",
+                 {"code": "const r = await tools.opencode.worktree_list(); "
+                          "return 'm-exec-inner ' + JSON.stringify(r)"},
+                 "m-exec-inner", "output:m-exec-inner", "m-exec-inner"),
+        PathSpec("root:skill", "skill", {"id": "m-skill"}, "m-skill", "output:m-skill-body", "m-skill"),
+        PathSpec("root:experimental_image_generate", "experimental_image_generate",
+                 {"prompt": "m-image"}, "m-image", "dispatched", "m-image"),
         PathSpec("mcp:probesrv:touch", "probesrv_touch", {}, "m-mcp", "file:m-mcp"),
         PathSpec("plugin-tool:probe_tool", "probe_tool", {}, "m-plugin-tool", "file:m-plugin-tool"),
         PathSpec("child-run", "shell", {"command": "{root}/bin/opencode run --standalone --auto --format json "
                                                    f"--model stub/m3 {NESTED_PROMPT}"},
-                 "m-child-run", "file:m-child-run", "m-child-run"),
+                 "m-child-run", "file:m-child-run", "m-child-run", NESTED_CALL_ID),
+        PathSpec("root:question", "question",
+                 {"questions": [{"question": "m-question", "header": "m",
+                                 "options": [{"label": "a", "description": "a"}]}]},
+                 "m-question", "dispatched", "m-question"),
     ]
 
 
 PATH_IDS = tuple(s.path_id for s in _specs())
 FILES = {"m-edit.txt": "before", "m-read.txt": "read-body", "m-glob-1.txt": "x",
-         "m-grep.txt": "line with m-grep-token"}
+         "m-grep.txt": "line with m-grep-token",
+         ".claude/skills/m-skill/SKILL.md": "---\nname: m-skill\ndescription: probe skill\n---\nm-skill-body\n"}
 
 
 @dataclass
@@ -109,14 +129,24 @@ def executed(run: Run, plan: Plan, spec: PathSpec) -> bool:
         return (part or {}).get("state", {}).get("status") == "completed" and target in str(output)
     if kind == "stub-get":
         return any(r.get("get") == target for r in run.requests)
+    if kind == "dispatched":
+        state = (part or {}).get("state") or {}
+        error = str(state.get("error") or "")
+        refused = any(text in error for text in REFUSAL_TEXT.values()) or UNAVAILABLE_TEXT in error
+        return state.get("status") in ("completed", "error") and not refused
     raise ValueError(spec.effect)
 
 
-def outcome(run: Run, plan: Plan, spec: PathSpec) -> dict:
-    part = run.tool_part(plan.call_ids[spec.path_id]) or {}
-    state = part.get("state", {})
-    return {"executed": executed(run, plan, spec), "status": state.get("status"),
-            "error": state.get("error")}
+def outcome(run: Run, plan: Plan, spec: PathSpec, mechanism: str | None = None) -> dict:
+    """What the run shows of the path's call; with ``mechanism`` also the positive refusal event
+    of that mechanism for the call (None when the run has none). The call is the path's own call
+    id, or the nested process's call id for ``child-run``, whose effect happens in that call."""
+    state = (run.tool_part(plan.call_ids[spec.path_id]) or {}).get("state", {})
+    out = {"executed": executed(run, plan, spec), "status": state.get("status"),
+           "error": state.get("error")}
+    if mechanism:
+        out["refusal_event"] = run.refusal_event(mechanism, spec.refusal_call_id or plan.call_ids[spec.path_id])
+    return out
 
 
 def wait_markers(plan: Plan) -> tuple[str, ...]:

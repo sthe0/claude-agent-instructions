@@ -24,7 +24,8 @@ from . import core, isolated, stub
 
 PLUGIN_DIR = core.PROBE_DIR / "plugin"
 STUB_MODELS = ("m1", "m2", "m3")
-CLI_BASE = ("run", "--standalone", "--auto", "--format", "json")
+REFUSAL_TEXT = {"PreToolUse": "probe throw", "permission.evaluate": "probe deny"}
+CLI_BASE =("run", "--standalone", "--auto", "--format", "json")
 
 
 class VersionMismatch(Exception):
@@ -66,7 +67,7 @@ class Run:
     label: str
     root: Path
     argv: list[str]
-    env_keys: list[str]
+    env_paths: dict[str, str]
     exit_code: int | None
     timed_out: bool
     stdout: str
@@ -100,6 +101,38 @@ class Run:
     def probe_entries(self, at: str) -> list[dict]:
         return [e for e in self.probe if e.get("at") == at]
 
+    def refusal_event(self, mechanism: str, call_id: str | None = None) -> str | None:
+        """The positive event showing ``mechanism`` refused: the plugin's own ``refusal`` log
+        entry (for the call when ``call_id`` is given) or, for a call, a tool part whose error
+        text is the plugin's refusal message. None when neither is in the run's output."""
+        for entry in self.probe_entries("refusal"):
+            if entry.get("mechanism") == mechanism and (call_id is None or entry.get("id") == call_id):
+                return "hook-log"
+        part = self.tool_part(call_id) if call_id else None
+        error = str(((part or {}).get("state") or {}).get("error") or "")
+        if REFUSAL_TEXT.get(mechanism, "\0") in error:
+            return "tool-part-error"
+        return None
+
+    def tool_schema(self, tool: str) -> dict:
+        for request in self.requests:
+            if tool in (request.get("tool_specs") or {}):
+                return request["tool_specs"][tool]
+        return {}
+
+    def tool_description(self, tool: str) -> str:
+        for request in self.requests:
+            if tool in (request.get("tool_descriptions") or {}):
+                return str(request["tool_descriptions"][tool])
+        return ""
+
+    def tool_list(self) -> list[str]:
+        """The tools the model was offered: names from the stub's chat requests that carry tools."""
+        names: set[str] = set()
+        for request in self.requests:
+            names.update(request.get("tools") or [])
+        return sorted(names)
+
     def session_ids(self) -> list[str]:
         return sorted({e["sessionID"] for e in self.events if "sessionID" in e})
 
@@ -127,11 +160,25 @@ class World:
     fill: Callable[[str], str]
     stand_ins_before: dict[str, str]
 
+    def env_paths(self) -> dict[str, str]:
+        """The path-valued variables the launched process saw, for the record's isolation check."""
+        return {key: self.env[key] for key in isolated.PATH_KEYS if key in self.env}
+
     def probe(self) -> list[dict]:
         return _read_jsonl(self.probe_log)
 
     def requests(self) -> list[dict]:
         return _read_jsonl(self.stub_dir / "requests.jsonl")
+
+
+def wait_until(predicate: Callable[[], object], timeout: float, interval: float = 0.3) -> object:
+    """The predicate's first truthy value, or its last value once ``timeout`` seconds have passed."""
+    deadline = time.time() + timeout
+    while True:
+        value = predicate()
+        if value or time.time() >= deadline:
+            return value
+        time.sleep(interval)
 
 
 class Service:
@@ -168,12 +215,7 @@ class Service:
             return status, {"raw": text[:500]}
 
     def wait_until(self, predicate: Callable[[], object], timeout: float, interval: float = 0.3) -> object:
-        deadline = time.time() + timeout
-        while True:
-            value = predicate()
-            if value or time.time() >= deadline:
-                return value
-            time.sleep(interval)
+        return wait_until(predicate, timeout, interval)
 
 
 class Harness:
@@ -193,6 +235,8 @@ class Harness:
 
     def base_config(self, *, plugin: bool) -> dict:
         config: dict = {
+            "enabled_providers": ["stub"],
+            "small_model": f"stub/{STUB_MODELS[0]}",
             "providers": {"stub": {
                 "name": "stub", "package": "aisdk:@ai-sdk/openai-compatible",
                 "settings": {"apiKey": "stub-key", "baseURL": "http://127.0.0.1:{port}/v1"},
@@ -247,6 +291,7 @@ class Harness:
         finally:
             if server is not None:
                 server.shutdown()
+            isolated.drop_binary(root)
 
     def run(self, scenario: dict, *, label: str, rules: dict | None = None,
             config: dict | None = None, files: dict[str, str] | None = None,
@@ -287,7 +332,7 @@ class Harness:
                     events.append(json.loads(line))
                 except ValueError:
                     events.append({"raw": line[:500]})
-            run = Run(label, w.root, argv, sorted(w.env), proc.returncode, timed_out, out, err,
+            run = Run(label, w.root, argv, w.env_paths(), proc.returncode, timed_out, out, err,
                       events, w.probe(), w.requests(), w.stand_ins_before,
                       isolated.home_stand_in_digests(w.root) if stand_ins else {})
         self._record(run)
@@ -324,7 +369,7 @@ class Harness:
                     except ProcessLookupError:
                         pass
                     proc.wait()
-            run = Run(label, w.root, argv, sorted(w.env), proc.returncode, False,
+            run = Run(label, w.root, argv, w.env_paths(), proc.returncode, False,
                       out_path.read_text(errors="replace"), err_path.read_text(errors="replace"),
                       [], w.probe(), w.requests())
         self._record(run)
@@ -333,7 +378,7 @@ class Harness:
         self.count += 1
         self._log({"run": self.count, "label": run.label, "src": "meta", "argv": run.argv,
                    "exit_code": run.exit_code, "timed_out": run.timed_out, "root": str(run.root),
-                   "env_keys": run.env_keys, "stderr": run.stderr[-600:]})
+                   "env_paths": run.env_paths, "stderr": run.stderr[-600:]})
         for source, entries in (("stdout", run.events), ("probe", run.probe), ("stub", run.requests)):
             for entry in entries:
                 self._log({"run": self.count, "label": run.label, "src": source, "entry": entry})

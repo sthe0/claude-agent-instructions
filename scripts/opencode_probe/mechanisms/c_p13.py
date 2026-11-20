@@ -5,9 +5,11 @@ Stop, SubagentStop and ``permission.evaluate``: {mechanism, fired, can_refuse, e
 A session with a shell call and a subagent call shows what fires; a throw in
 ``tool.execute.before``, a deny in ``permission.evaluate`` and a throw in ``session.prompt`` show
 which can refuse (a refusal is judged by the marker file the call would have written, and by the
-absence of a model request for the prompt). fail when PreToolUse or ``permission.evaluate`` did
-not fire or did not refuse (``marked_executed`` is then true); absent when both refuse but
-another listed event has no mechanism that fired; pass when every listed event fired.
+absence of a model request for the prompt, and is credited only with a positive event for that
+call: the plugin's refusal log entry or the tool part's error text). fail when PreToolUse or
+``permission.evaluate`` did not fire or its refused run executed the marker
+(``marked_executed`` is then true); unobserved when a refusal has no positive event; absent when
+both refuse but another listed event has no mechanism that fired; pass when every listed event fired.
 """
 from opencode_probe import record, runner
 
@@ -22,7 +24,8 @@ SCENARIO = {"models": {
            {"text": "done"}],
     "m2": [{"text": "child", "tool_calls": [{"name": "shell", "arguments": {"command": "touch {root}/m-p13-child"}}]},
            {"text": "child done"}]}}
-SESSION_START_EVENT = ("session.created",)
+SHELL_CALL_ID = "call_m1_0_0"
+SESSION_START_EVENT =("session.created",)
 SESSION_END_EVENT = ("session.execution.succeeded", "session.deleted")
 
 
@@ -34,6 +37,24 @@ def _events(run):
             data = event.get("data")
             found.append((event["type"], data.get("sessionID") if isinstance(data, dict) else None))
     return found
+
+
+def mechanism_entry(name, fired, can_refuse, refusal_event=None, **evidence):
+    """``can_refuse`` needs the effect absent AND a positive refusal event; the effect absent
+    with no event is recorded as ``refusal_event`` None, which the case reads as unobserved."""
+    return {"mechanism": name, "fired": bool(fired), "can_refuse": bool(can_refuse and refusal_event),
+            "refusal_event": refusal_event, "evidence": evidence}
+
+
+def verdict(mechanisms, marked_executed):
+    """The case status from the mechanism entries; a refusal without a positive event is unobserved."""
+    by_name = {m["mechanism"]: m for m in mechanisms}
+    refusers = [by_name["PreToolUse"], by_name["permission.evaluate"]]
+    if marked_executed or not all(m["fired"] for m in refusers):
+        return record.FAIL
+    if not all(m["can_refuse"] for m in refusers):
+        return record.UNOBSERVED
+    return record.PASS if all(m["fired"] for m in mechanisms) else record.ABSENT
 
 
 def run(ctx):
@@ -51,18 +72,21 @@ def run(ctx):
     child_idle = [s for s in idle_sessions if s not in root_sessions]
     chat_in_prompt_refusal = [r for r in prompt.requests if r.get("tools")]
     marked_executed = thrown.exists("m-p13") or denied.exists("m-p13")
+    thrown_event = thrown.refusal_event("PreToolUse", SHELL_CALL_ID)
+    denied_event = denied.refusal_event("permission.evaluate", SHELL_CALL_ID)
+    prompt_event = prompt.refusal_event("UserPromptSubmit")
 
-    def entry(name, fired, can_refuse, **evidence):
-        return {"mechanism": name, "fired": bool(fired), "can_refuse": bool(can_refuse), "evidence": evidence}
-
+    entry = mechanism_entry
     mechanisms = [
         entry("PreToolUse", observe.probe_entries("tool.execute.before"), not thrown.exists("m-p13"),
+              thrown_event,
               calls=len(observe.probe_entries("tool.execute.before")), control_executed=observe.exists("m-p13"),
               refused_run_executed=thrown.exists("m-p13")),
         entry("PostToolUse", observe.probe_entries("tool.execute.after"), False,
               calls=len(observe.probe_entries("tool.execute.after")),
               note="fires after the call's effect; nothing left to refuse"),
         entry("UserPromptSubmit", observe.probe_entries("session.prompt"), not chat_in_prompt_refusal,
+              prompt_event,
               calls=len(observe.probe_entries("session.prompt")),
               model_requests_when_prompt_hook_throws=len(chat_in_prompt_refusal),
               exit_code_when_prompt_hook_throws=prompt.exit_code),
@@ -76,18 +100,13 @@ def run(ctx):
               mapped_to="session.execution.succeeded or session.experimental.idle in a child session",
               child_sessions_ended=len(child_ended), child_sessions_idle=len(set(child_idle))),
         entry("permission.evaluate", observe.probe_entries("permission.evaluate"), not denied.exists("m-p13"),
+              denied_event,
               calls=len(observe.probe_entries("permission.evaluate")), control_executed=observe.exists("m-p13"),
               refused_run_executed=denied.exists("m-p13")),
     ]
-    by_name = {m["mechanism"]: m for m in mechanisms}
-    refusers = [by_name["PreToolUse"], by_name["permission.evaluate"]]
     evidence = {"marked_executed": marked_executed, "event_types_seen": types,
                 "control_executed": observe.exists("m-p13"), "child_marker": observe.exists("m-p13-child")}
-    if not observe.exists("m-p13"):
-        return runner.result(record.UNOBSERVED, evidence, mechanisms=mechanisms)
-    if not all(m["fired"] and m["can_refuse"] for m in refusers):
-        return runner.result(record.FAIL, evidence, mechanisms=mechanisms)
-    status = record.PASS if all(m["fired"] for m in mechanisms) else record.ABSENT
+    status = verdict(mechanisms, marked_executed) if observe.exists("m-p13") else record.UNOBSERVED
     return runner.result(status, evidence, mechanisms=mechanisms)
 
 
@@ -96,5 +115,8 @@ def check_record(entry, cases):
     listed = entry.get("mechanisms")
     if not listed:
         return ["no `mechanisms` list"]
-    return [f"mechanism {m.get('mechanism')!r} lacks fired or can_refuse" for m in listed
-            if not m.get("mechanism") or "fired" not in m or "can_refuse" not in m]
+    problems = [f"mechanism {m.get('mechanism')!r} lacks fired or can_refuse" for m in listed
+                if not m.get("mechanism") or "fired" not in m or "can_refuse" not in m]
+    problems += [f"mechanism {m['mechanism']!r} can_refuse without a refusal_event" for m in listed
+                 if m.get("can_refuse") and not m.get("refusal_event")]
+    return problems

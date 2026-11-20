@@ -52,7 +52,10 @@ export default {
         input.input.command = `${exports.join(" ")} ${input.input.command}`;
       }
       const rule = matching(RULES.throw, input.tool, input.input);
-      if (rule && !INERT) throw new Error(`probe throw: ${input.tool}`);
+      if (rule && !INERT) {
+        log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool: input.tool });
+        throw new Error(`probe throw: ${input.tool}`);
+      }
     });
     register(ctx.tool, "execute.after", "PostToolUse", (input) => {
       log({ at: "tool.execute.after", input: plain(input) });
@@ -61,13 +64,17 @@ export default {
       log({ at: "permission.evaluate", input: plain(input) });
       const rule = matching(RULES.deny, input.action, input.resources);
       if (rule && !INERT) {
+        log({ at: "refusal", mechanism: "permission.evaluate", id: input.source?.id, action: input.action });
         input.effect = "deny";
         input.message = `probe deny: ${input.action}`;
       }
     });
     register(ctx.session, "prompt", "UserPromptSubmit", (input) => {
       log({ at: "session.prompt", input: plain(input) });
-      if (RULES.refuse_prompt && !INERT) throw new Error("probe throw: prompt");
+      if (RULES.refuse_prompt && !INERT) {
+        log({ at: "refusal", mechanism: "UserPromptSubmit", sessionID: input.sessionID });
+        throw new Error("probe throw: prompt");
+      }
     });
     register(ctx.session, "context", "context", (input) => {
       log({ at: "session.context", sessionID: input.sessionID, messages: plain(input.messages), system: plain(input.system) });

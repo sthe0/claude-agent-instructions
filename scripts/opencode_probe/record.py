@@ -7,6 +7,7 @@ a ``runs/`` entry without ``record.json`` is no record. A negative run writes un
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -88,6 +89,22 @@ def latest_record(state: Path, phase: str, version: str, suite_sha256: str) -> t
     return None
 
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def pinned_record(state: Path, entry: dict | None) -> tuple[Path, dict] | None:
+    """The record a ``last_pass`` entry names by run id, when it is there and its bytes still hash
+    to the pinned sha256."""
+    if not entry or not entry.get("run") or "/" in entry["run"]:
+        return None
+    path = state / "runs" / entry["run"] / "record.json"
+    if not path.is_file() or file_sha256(path) != entry.get("record_sha256"):
+        return None
+    rec = read_record(path)
+    return (path, rec) if rec else None
+
+
 def pin_path(probe_dir: Path = core.PROBE_DIR) -> Path:
     return probe_dir / core.PIN_NAME
 
@@ -97,7 +114,8 @@ def write_pin(probe_dir: Path, version: str, last_pass: dict[str, dict]) -> None
     for phase in sorted(last_pass):
         entry = last_pass[phase]
         lines += [f"[last_pass.{phase}]", f'version = "{entry["version"]}"',
-                  f'suite_sha256 = "{entry["suite_sha256"]}"', f'record = "{entry["record"]}"', ""]
+                  f'suite_sha256 = "{entry["suite_sha256"]}"', f'run = "{entry["run"]}"',
+                  f'record_sha256 = "{entry["record_sha256"]}"', ""]
     pin_path(probe_dir).write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -115,9 +133,36 @@ def record_problems(phase: core.Phase, path: Path, rec: dict, case_ids: set[str]
     return problems
 
 
+def env_path_problems(log: Path, runs_dir: Path) -> list[str]:
+    """Each launched run's meta line names a root ``<runs_dir>/root.*`` and every isolated path
+    variable it set lies under that root; a run without the variables is not an isolated run."""
+    problems = []
+    for number, line in enumerate(log.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            problems.append(f"{log.name} line {number} is not JSON")
+            continue
+        if entry.get("src") != "meta":
+            continue
+        where = f"{log.name} run {entry.get('run')}"
+        root = Path(str(entry.get("root")))
+        if root.parent != runs_dir or not root.name.startswith("root."):
+            problems.append(f"{where}: root {root} is not a probe root under {runs_dir}")
+        env_paths = entry.get("env_paths")
+        if not env_paths:
+            problems.append(f"{where}: no env_paths recorded")
+            continue
+        problems += [f"{where}: {key}={value} lies outside its root {root}"
+                     for key, value in sorted(env_paths.items())
+                     if Path(value) != root and root not in Path(value).parents]
+    return problems
+
+
 def structure_problems(phase: core.Phase, path: Path, rec: dict, case_ids: set[str] | None) -> list[str]:
     """Why the record does not carry what each case is meant to leave behind: one raw event log
-    per case, and whatever the case's own ``check_record(entry, cases)`` asks of its entry."""
+    per case whose launched runs all name isolated paths (``env_path_problems``), and whatever the
+    case's own ``check_record(entry, cases)`` asks of its entry."""
     problems = []
     infos = {c.case_id: c for c in core.phase_cases(phase)}
     for case_id, entry in sorted(rec["cases"].items()):
@@ -126,6 +171,9 @@ def structure_problems(phase: core.Phase, path: Path, rec: dict, case_ids: set[s
         log = path.parent / "events" / f"{case_id}.jsonl"
         if not log.is_file():
             problems.append(f"{phase.name}/{case_id}: no raw event log {log.name} beside the record")
+        else:
+            problems += [f"{phase.name}/{case_id}: {problem}"
+                         for problem in env_path_problems(log, path.parent.parent)]
         hook = getattr(core.load_case(infos[case_id]), "check_record", None) if case_id in infos else None
         if hook:
             problems += [f"{phase.name}/{case_id}: {problem}" for problem in hook(entry, rec["cases"])]
@@ -147,6 +195,12 @@ def check_phase(state: Path, phase: core.Phase, *, require_pass: bool, case_ids:
         problems.append(f"{phase.name}: pin.toml has no last_pass entry (run `pin --record`)")
     elif last_pass.get("suite_sha256") != suite_hash or last_pass.get("version") != pin["version"]:
         problems.append(f"{phase.name}: pin.toml last_pass is stale for this tree")
+    elif pinned_record(state, last_pass) is None:
+        problems.append(f"{phase.name}: pin.toml run {last_pass.get('run')} has no record under "
+                        f"{state / 'runs'} whose sha256 is the pinned one")
+    elif last_pass["run"] != path.parent.name:
+        problems.append(f"{phase.name}: pin.toml names run {last_pass['run']} but the newest record "
+                        f"of this tree is {path.parent.name}; run `pin --record`")
     if require_pass:
         problems += record_problems(phase, path, rec, case_ids)
         problems += structure_problems(phase, path, rec, case_ids)
@@ -166,6 +220,7 @@ def pin_record(state: Path, phase: core.Phase, probe_dir: Path = core.PROBE_DIR)
     if problems:
         return problems
     last_pass = {name: dict(entry) for name, entry in pin.get("last_pass", {}).items()}
-    last_pass[phase.name] = {"version": pin["version"], "suite_sha256": suite_hash, "record": str(path)}
+    last_pass[phase.name] = {"version": pin["version"], "suite_sha256": suite_hash,
+                             "run": path.parent.name, "record_sha256": file_sha256(path)}
     write_pin(probe_dir, pin["version"], last_pass)
     return []

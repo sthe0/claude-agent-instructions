@@ -57,7 +57,11 @@ def run_phase(phase: core.Phase, *, case_ids: set[str] | None = None, inert: boo
         ctx = CaseContext(info.case_id, events_dir, state, inert, binary)
         events_dir.mkdir(parents=True, exist_ok=True)
         (events_dir / f"{info.case_id}.jsonl").touch()
+        first_root = len(isolated.CREATED_ROOTS)
         cases[info.case_id] = run_case(info, ctx)
+        if cases[info.case_id]["status"] == record.PASS:
+            for root in isolated.CREATED_ROOTS[first_root:]:
+                isolated.remove_root(root)
     suite_hash = core.phase_hash(phase)
     version = core.read_pin()["version"]
     record.write_record(rec_dir, version, phase.name, suite_hash, cases,

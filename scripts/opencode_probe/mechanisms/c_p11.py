@@ -1,11 +1,12 @@
 """P11: a binary whose version is not the pin refuses launch.
 
-A stand-in binary reports a different version; the harness must refuse before any run is
+A stand-in binary (a wrapper script fixing the fake's version and marker path, so the process
+environment is not touched) reports a different version; the harness must refuse before any run is
 launched (the stand-in's ``run`` would leave a marker). The real binary under test must report
 exactly the pin. pass when both hold; fail when the stand-in was launched or the harness did not
 refuse; unobserved when the real binary's version cannot be read.
 """
-import os
+import shlex
 import shutil
 import stat
 
@@ -21,20 +22,19 @@ def run(ctx):
     real_version = harness.binary_version(ctx.binary or core.opencode_bin())
     fake_dir = ctx.events_dir.parent / "p11-fake"
     fake_dir.mkdir(parents=True, exist_ok=True)
-    fake = fake_dir / "opencode"
-    shutil.copyfile(FAKE, fake)
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    fake_copy = fake_dir / "opencode-fake"
+    shutil.copyfile(FAKE, fake_copy)
+    fake_copy.chmod(fake_copy.stat().st_mode | stat.S_IXUSR)
     marker = fake_dir / "launched"
-    os.environ["FAKE_OPENCODE_VERSION"] = "9.9.9"
-    os.environ["FAKE_OPENCODE_MARKER"] = str(marker)
+    fake = fake_dir / "opencode"
+    fake.write_text(f"#!/bin/sh\nFAKE_OPENCODE_VERSION=9.9.9 FAKE_OPENCODE_MARKER={shlex.quote(str(marker))} "
+                    f"exec {shlex.quote(str(fake_copy))} \"$@\"\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    refused, message = False, ""
     try:
-        refused, message = False, ""
-        try:
-            ctx.harness_for(str(fake)).run({"models": {"m1": [{"text": "x"}]}}, label="wrong-version")
-        except harness.VersionMismatch as exc:
-            refused, message = True, str(exc)
-    finally:
-        del os.environ["FAKE_OPENCODE_VERSION"], os.environ["FAKE_OPENCODE_MARKER"]
+        ctx.harness_for(str(fake)).run({"models": {"m1": [{"text": "x"}]}}, label="wrong-version")
+    except harness.VersionMismatch as exc:
+        refused, message = True, str(exc)
     evidence = {"pin": pinned, "real_binary_version": real_version, "refused": refused,
                 "refusal": message, "stand_in_launched": marker.exists()}
     if not real_version:

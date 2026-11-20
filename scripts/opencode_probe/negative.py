@@ -6,8 +6,6 @@ Output goes under ``<state>/negative/``, which ``check-record`` never reads.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from . import core, record, runner
 
 HOLDS_LINE = "NEGATIVE-HOLDS"
@@ -16,8 +14,8 @@ BROKEN_LINE = "NEGATIVE-BROKEN"
 
 def last_pass_cases(phase: core.Phase) -> dict | None:
     entry = core.read_pin().get("last_pass", {}).get(phase.name)
-    rec = record.read_record(Path(entry["record"])) if entry else None
-    return rec["cases"] if rec else None
+    found = record.pinned_record(core.state_dir(), entry)
+    return found[1]["cases"] if found else None
 
 
 def judge(phase: core.Phase, negative_cases: dict, last_pass: dict | None) -> list[str]:

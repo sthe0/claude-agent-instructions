@@ -8,10 +8,6 @@ from . import core, coverage, harness, negative, record, runner, stub, userconfi
 
 
 def _cmd_user_config(args) -> int:
-    if args.show is not None:
-        return userconfig.show_dependency_file(args.show)
-    if args.list:
-        return userconfig.list_top_level()
     if args.snapshot:
         return userconfig.write_snapshot()
     return userconfig.compare()
@@ -107,9 +103,6 @@ def build_parser() -> argparse.ArgumentParser:
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--snapshot", action="store_true")
     group.add_argument("--compare", action="store_true")
-    group.add_argument("--list", action="store_true", help="top-level entries (read-only)")
-    group.add_argument("--show", metavar="REL",
-                       help="print a file under ~/.opencode/node_modules (read-only)")
     p.set_defaults(func=_cmd_user_config)
     return parser
 
