@@ -435,7 +435,7 @@ def _frozen_stage_refusal(state: SessionState, tier, reopening: set[int]):
         if stage.outcome.status != StageStatus.PASSED.value or stage.index in reopening:
             continue
         change = tier.stages.get(stage.index)
-        paths = [p for p, cls in change.moved if cls in ("O", "I")] if change else []
+        paths = [p for p, cls in change.verdict_moved if cls in ("O", "I")] if change else []
         if paths:
             frozen[stage.index] = paths
     if not frozen:

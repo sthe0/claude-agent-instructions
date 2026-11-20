@@ -4922,9 +4922,17 @@ def leaf_class(path: str) -> str:
 @dataclass(frozen=True)
 class StageChange:
     """What moved on one stage between two plan versions: `moved` is the (leaf path,
-    class) pairs, sorted by path; `tier` the highest tier among them (0 when none)."""
+    class) pairs, sorted by path; `tier` the highest tier among them (0 when none).
+    `form_moved` names the paths of `moved` that only the stage's change of form moved
+    (see `is_stage_form_migration`): the tier counts them, the decision on a PASSED stage's
+    verdict (`verdict_moved`) does not."""
     tier: int
     moved: tuple[tuple[str, str], ...] = ()
+    form_moved: tuple[str, ...] = ()
+
+    @property
+    def verdict_moved(self) -> tuple[tuple[str, str], ...]:
+        return tuple((path, cls) for path, cls in self.moved if path not in self.form_moved)
 
 
 @dataclass(frozen=True)
@@ -4965,10 +4973,13 @@ def _flatten_leaves(value: object, path: str, sink: dict[str, object]) -> None:
 
 def is_stage_form_migration(old_stage, new_stage) -> bool:
     """Whether `new_stage` is `old_stage` put into the description form: the old one states no
-    place, the new one does. The form moves the executor's means, method, procedure and
-    conditions out of the stage and adds the description fields; it says nothing new about
-    what the stage builds, so a stage already PASSED keeps its outcome across it."""
-    return old_stage.place is None and new_stage.place is not None
+    place, the new one does and states no means, method, procedure or conditions. The form
+    moves those out of the stage and adds the description fields; it says nothing new about
+    what the stage builds, so a stage already PASSED keeps its outcome across it. A stage
+    that gains a place and still states a method is an ordinary edit."""
+    return (old_stage.place is None and new_stage.place is not None
+            and not (new_stage.means.means or new_stage.means.method
+                     or new_stage.means.procedure or new_stage.conditions))
 
 
 # The leaves the stage form itself moves: the executor's parts leave the stage and the
@@ -5003,10 +5014,11 @@ def change_tier(old: PlanDoc, new: PlanDoc) -> PlanChange:
         moved = sorted(
             (path, leaf_class(path)) for path in set(before) | set(after)
             if before.get(path, ()) != after.get(path, ())
-            and not (migrating and _moved_by_stage_form(path))
         )
+        form_moved = tuple(path for path, _ in moved if migrating and _moved_by_stage_form(path))
         stages[index] = StageChange(
-            tier=max((TIER_OF_CLASS[c] for _, c in moved), default=0), moved=tuple(moved))
+            tier=max((TIER_OF_CLASS[c] for _, c in moved), default=0), moved=tuple(moved),
+            form_moved=form_moved)
     tier = max([TIER_OF_CLASS["M"] if meta_moved else 0, *(c.tier for c in stages.values())])
     return PlanChange(tier=tier, stages=stages, meta=tuple(meta_moved))
 

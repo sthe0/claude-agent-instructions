@@ -614,7 +614,8 @@ def test_replan_of_an_old_form_plan_with_described_stages_is_accepted_and_carrie
         ostore, home, armed_env, tmp_path, monkeypatch):
     """The way out the refusal names, taken: the session holds a plan in the old form, submitted
     and approved before the order chose the stage form (the engine before this change); the
-    replan describes the same stage and is accepted, and the stage already PASSED keeps its
+    replan describes the same stage and is accepted once it has the plan review a change of
+    that tier owes (without it the replan is blocked), and the stage already PASSED keeps its
     outcome instead of being re-run. The approved snapshot the replan is compared against holds
     the old-form bytes."""
     from agentctl import submission
@@ -645,6 +646,16 @@ def test_replan_of_an_old_form_plan_with_described_stages_is_accepted_and_carrie
     cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="",
                              plan=proposal), store=ostore)
 
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+    unreviewed = cli.cmd_replan(ns(session=SESSION, plan=proposal), store=ostore)
+    assert not unreviewed.ok and "needs a thinker review" in unreviewed.detail, \
+        "putting the stage into the description form moves its interface, so the replan owes a review"
+    assert "thinker review is stale" in " ".join(unreviewed.data["blockers"])
+    assert ostore.load(SESSION).plan_path == plan
+    reviewed = cli.cmd_plan_review(
+        ns(session=SESSION, verdict="pass", reviewer="thinker", concerns=None, note="",
+           target=proposal, plan_digest=_file_sha256(proposal), scope=None), store=ostore)
+    assert reviewed.ok, reviewed.detail
     d = cli.cmd_replan(ns(session=SESSION, plan=proposal), store=ostore)
 
     assert d.ok, (d.detail, d.data.get("blockers"))

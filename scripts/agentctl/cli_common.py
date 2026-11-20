@@ -2187,7 +2187,8 @@ def _frozen_stage_survives(prev_stages, new_stages, index: int, tier) -> bool:
     from .stage_norm import interface_token
 
     change = tier.stages.get(index) if tier is not None else None
-    if change is None or any(cls not in _VERDICT_PRESERVING_CLASSES for _, cls in change.moved):
+    if change is None or any(
+            cls not in _VERDICT_PRESERVING_CLASSES for _, cls in change.verdict_moved):
         return False
     prev = {s.index: s for s in prev_stages}
     new = {s.index: s for s in new_stages}

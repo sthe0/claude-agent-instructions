@@ -157,14 +157,19 @@ def _form_change(described_extra=None):
     return old, new
 
 
-def test_putting_a_stage_into_the_description_form_moves_no_leaf_of_its_work():
-    """The form takes the executor's parts out of the stage and brings the description in; the
-    stage's work is the same, so the change moves nothing and the carry decision keeps a PASSED
-    verdict."""
+def test_putting_a_stage_into_the_description_form_is_a_change_of_its_interface_and_keeps_its_verdict():
+    """The form takes the executor's parts out of the stage and brings the description in: the
+    change is counted for what it moves (tier 3, so the replan owes the presentation and the
+    review of that tier, and the diff presentation is not waived), while the stage's work is the
+    same and the carry decision keeps a PASSED verdict."""
+    from agentctl import gates
     from agentctl.stage_norm import stage_carried
 
     old, new = _form_change()
-    assert plan.change_tier(old, new).stages[1].moved == ()
+    change = plan.change_tier(old, new)
+    assert change.tier >= 3 and change.stages[1].tier >= 3
+    assert not gates.replan_authorization_waived_by_tier(change.tier)
+    assert change.stages[1].verdict_moved == ()
     assert stage_carried(old.stages, new.stages, 1)
 
 
@@ -172,8 +177,22 @@ def test_a_stage_put_into_the_description_form_with_another_result_still_moves()
     from agentctl.stage_norm import stage_carried
 
     old, new = _form_change({"expected_result_image": "another product"})
-    moved = [path for path, _ in plan.change_tier(old, new).stages[1].moved]
+    moved = [path for path, _ in plan.change_tier(old, new).stages[1].verdict_moved]
     assert moved == ["subject.result"]
+    assert not stage_carried(old.stages, new.stages, 1)
+
+
+def test_a_stage_put_into_the_description_form_with_another_method_is_no_form_change():
+    """The exemption covers a stage that brings in the description and nothing else of the
+    executor's parts: a stage that also states a method moves it, so its verdict is not
+    carried and the frozen-stage check sees the method leaf."""
+    from agentctl.stage_norm import stage_carried
+
+    old, new = _form_change({"method": "do it another way"})
+    assert not plan.is_stage_form_migration(old.stages[0], new.stages[0])
+    change = plan.change_tier(old, new).stages[1]
+    assert ("means.method", "O") in change.verdict_moved
+    assert change.form_moved == ()
     assert not stage_carried(old.stages, new.stages, 1)
 
 
