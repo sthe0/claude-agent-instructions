@@ -5,12 +5,14 @@ root: under the agent ``toolless`` (defined through ``OPENCODE_CONFIG_CONTENT`` 
 every action) and under the default agent with the same config. HOME is seeded with stand-ins of
 the HOME-level OpenCode and Claude locations. pass when every call is refused under ``toolless``,
 every call executes under the default agent and every stand-in is byte-identical afterwards; a
-refusal counts only with its positive event, the tool part of that call in the error state with an
-error text. fail when a call executes under ``toolless`` or a stand-in changed; unobserved when a
+refusal counts only with its positive event, the tool part of that call in the error state with the
+runtime's refusal text (``paths.RUNTIME_REFUSAL_TEXTS``); any other error is no refusal. fail when a call executes under ``toolless`` or a stand-in changed; unobserved when a
 call did not execute under the default agent or a refused call has no such event. For each path
 executed under the default agent the record keeps ``fired_by``: the P13 mechanisms whose hook
-entry in the run's event log names that call id. A tool the runtime rejects as unavailable under
-the default agent is not a path (P1 leaves it out too) and is recorded in ``unavailable_tools``.
+entry in the run's event log names that call id. Only a tool of ``paths.OPTIONAL_TOOLS`` the
+runtime rejects as unavailable under the default agent is left out (P1 leaves it out too) and
+recorded in ``unavailable_tools``; any other path that is unavailable there is unobserved. Each path
+entry names the config channel and the env keys the run set.
 """
 import json
 
@@ -38,11 +40,6 @@ def _fired_by(run, call_id):
     return fired
 
 
-def _refusal_shown(outcome):
-    """The refused call left a tool part in the error state with an error text."""
-    return outcome["status"] == "error" and bool(outcome["error"])
-
-
 def run(ctx):
     h = ctx.harness()
     env = {CHANNEL: json.dumps(CONTENT)}
@@ -58,20 +55,21 @@ def run(ctx):
                                    cli=("--agent", AGENT))
         under_default = paths.outcome(default, plan, spec)
         under_toolless = paths.outcome(tool_less, plan, spec)
-        if paths.UNAVAILABLE_TEXT in str(under_default["error"]):
+        if paths.may_be_unavailable(spec, under_default):
             unavailable[spec.tool] = under_default["error"]
             continue
         if not under_default["executed"]:
             unobserved.append(path_id)
         if under_toolless["executed"]:
             leaked.append(path_id)
-        elif not _refusal_shown(under_toolless):
+        elif not paths.refusal_text_shown(under_toolless):
             no_refusal_event.append(path_id)
         for label, r in (("default", default), ("toolless", tool_less)):
             changed = r.stand_ins_changed()
             if changed:
                 stand_in_changes[f"{label}:{path_id}"] = changed
         entries.append({"id": path_id, "toolless": under_toolless, "default": under_default,
+                        "config_channel": CHANNEL, "env_keys": sorted(env),
                         "fired_by": _fired_by(default, plan.call_ids[path_id])
                         if under_default["executed"] else [],
                         "argv": {"default": default.argv, "toolless": tool_less.argv}})
@@ -86,9 +84,17 @@ def run(ctx):
 
 
 def check_record(entry, cases):
-    """Evidence for every P1 path id except ``child-run``."""
+    """Evidence for every P1 path id except ``child-run``, each naming the config channel and
+    the env keys the run set."""
     p1_ids = {p.get("id") for p in cases.get("P1", {}).get("paths") or []} - {"child-run"}
-    have = {p.get("id") for p in entry.get("evidence", {}).get("paths") or []}
+    listed = entry.get("evidence", {}).get("paths") or []
     if not p1_ids:
         return ["P1 has no paths to compare against"]
-    return [f"no evidence for P1 path {path_id!r}" for path_id in sorted(p1_ids - have)]
+    problems = [f"no evidence for P1 path {path_id!r}" for path_id in sorted(p1_ids - {p.get("id") for p in listed})]
+    problems += [f"P7 path {p.get('id')!r} names no config channel or env key" for p in listed
+                 if not p.get("config_channel") or not p.get("env_keys")
+                 or p["config_channel"] not in p["env_keys"]]
+    problems += [f"tool {t!r} is recorded unavailable but is not an optional tool"
+                 for t in sorted(entry.get("evidence", {}).get("unavailable_tools") or {})
+                 if t not in paths.OPTIONAL_TOOLS]
+    return problems

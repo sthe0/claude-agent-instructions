@@ -27,30 +27,34 @@ def data_dirs(home: Path | None = None) -> list[Path]:
     return [home / rel for rel in DATA_DIRS]
 
 
-def probe_root_needle() -> bytes:
-    return str(core.state_dir() / "runs" / "root.").encode()
+def probe_root_needles() -> tuple[bytes, ...]:
+    """The run-root prefix as the state dir is spelled and as it resolves: ``make_root`` resolves
+    its path, so a leaked session may hold either spelling."""
+    state = core.state_dir()
+    return tuple(sorted({str(base / "runs" / "root.").encode() for base in (state, state.resolve())}))
 
 
-def _holds(path: Path, needle: bytes) -> bool:
-    keep = len(needle) - 1
+def _holds(path: Path, needles: tuple[bytes, ...]) -> bool:
+    keep = max(len(n) for n in needles) - 1
     tail = b""
     with path.open("rb") as handle:
         while block := handle.read(CHUNK):
-            if needle in tail + block:
+            window = tail + block
+            if any(n in window for n in needles):
                 return True
             tail = block[-keep:]
     return False
 
 
-def leaked_probe_paths(home: Path | None = None, needle: bytes | None = None) -> list[str]:
+def leaked_probe_paths(home: Path | None = None, needle: bytes | tuple[bytes, ...] | None = None) -> list[str]:
     """Files under the user's data, state and cache directories that name a probe run root."""
-    needle = needle or probe_root_needle()
+    needles = (needle,) if isinstance(needle, bytes) else needle or probe_root_needles()
     leaked = []
     for base in data_dirs(home):
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*")):
-            if path.is_file() and not path.is_symlink() and _holds(path, needle):
+            if path.is_file() and not path.is_symlink() and _holds(path, needles):
                 leaked.append(str(path.relative_to(home or Path.home())))
     return leaked
 

@@ -96,7 +96,7 @@ def file_sha256(path: Path) -> str:
 def pinned_record(state: Path, entry: dict | None) -> tuple[Path, dict] | None:
     """The record a ``last_pass`` entry names by run id, when it is there and its bytes still hash
     to the pinned sha256."""
-    if not entry or not entry.get("run") or "/" in entry["run"]:
+    if not entry or not entry.get("run") or "/" in entry["run"] or entry["run"] in (".", ".."):
         return None
     path = state / "runs" / entry["run"] / "record.json"
     if not path.is_file() or file_sha256(path) != entry.get("record_sha256"):
@@ -195,9 +195,19 @@ def check_phase(state: Path, phase: core.Phase, *, require_pass: bool, case_ids:
         problems.append(f"{phase.name}: pin.toml has no last_pass entry (run `pin --record`)")
     elif last_pass.get("suite_sha256") != suite_hash or last_pass.get("version") != pin["version"]:
         problems.append(f"{phase.name}: pin.toml last_pass is stale for this tree")
-    elif pinned_record(state, last_pass) is None:
-        problems.append(f"{phase.name}: pin.toml run {last_pass.get('run')} has no record under "
-                        f"{state / 'runs'} whose sha256 is the pinned one")
+    else:
+        pinned = pinned_record(state, last_pass)
+        if pinned is None:
+            problems.append(f"{phase.name}: pin.toml run {last_pass.get('run')} has no record under "
+                            f"{state / 'runs'} whose sha256 is the pinned one")
+        else:
+            pinned_path, pinned_rec = pinned
+            if pinned_rec.get("version") != last_pass.get("version") \
+                    or pinned_rec.get("suite_sha256") != last_pass.get("suite_sha256") \
+                    or pinned_rec.get("phase") != phase.name:
+                problems.append(f"{phase.name}: the pinned record {pinned_path.parent.name} is of another "
+                                f"version, phase or phase hash than the pin entry")
+            problems += [f"pinned record: {p}" for p in record_problems(phase, pinned_path, pinned_rec, None)]
     if require_pass:
         problems += record_problems(phase, path, rec, case_ids)
         problems += structure_problems(phase, path, rec, case_ids)

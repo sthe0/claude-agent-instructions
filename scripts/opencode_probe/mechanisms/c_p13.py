@@ -25,7 +25,7 @@ SCENARIO = {"models": {
     "m2": [{"text": "child", "tool_calls": [{"name": "shell", "arguments": {"command": "touch {root}/m-p13-child"}}]},
            {"text": "child done"}]}}
 SHELL_CALL_ID = "call_m1_0_0"
-SESSION_START_EVENT =("session.created",)
+SESSION_START_EVENT = ("session.created",)
 SESSION_END_EVENT = ("session.execution.succeeded", "session.deleted")
 
 

@@ -545,45 +545,179 @@ def test_case_check_record_hook_problems_are_reported(tmp_path):
     assert record.pin_record(state, alpha, probe) == []
 
 
-SHELL_PATH = {"id": "shell:bash", "tool": "shell", "verdict": "refused", "refused_by": ["PreToolUse"]}
+CODE_MODE = {"before_fires_for_inner_call_under_own_name": False, "evaluate_fires_for_inner_call_under_own_name": False,
+             "before_rule_stops_inner_effect": None, "evaluate_deny_stops_inner_effect": None,
+             "execute_switchable_by_config": True, "outcome": "wrapper-only"}
+
+
+def p1_path(spec, **extra):
+    base = {"id": spec.path_id, "tool": spec.tool, "verdict": "refused", "refused_by": ["PreToolUse"]}
+    if spec.path_id == paths.INNER_PATH_ID:
+        base.update(code_mode=CODE_MODE, refused_scope="wrapper-only")
+    return {**base, **extra}
+
+
+ALL_PATHS = [p1_path(s) for s in paths.build_plan().specs]
+SHELL_PATH = p1_path(paths.build_plan().spec("root:shell"))
 EXCLUSION = {"reason": "needs the network", "schema": {"query": "string"}, "description": "searches",
              "absent_from_tool_list_when_denied": True}
-P1_OK = {"paths": [SHELL_PATH], "evidence": {"tool_list": ["shell", "websearch"],
-                                             "exclusions": {"websearch": EXCLUSION}}}
+P1_OK = {"paths": ALL_PATHS, "evidence": {"tool_list": ["shell", "websearch"],
+                                          "exclusions": {"websearch": EXCLUSION}}}
 
 
-def p1_with(**evidence):
-    return {"paths": [SHELL_PATH], "evidence": {"tool_list": ["shell"], "exclusions": {}, **evidence}}
+def p1_with(listed=None, **evidence):
+    return {"paths": ALL_PATHS if listed is None else listed,
+            "evidence": {"tool_list": ["shell"], "exclusions": {}, **evidence}}
+
+
+def without(path_id):
+    return [p for p in ALL_PATHS if p["id"] != path_id]
 
 
 def test_p1_record_needs_paths_with_refused_by():
     assert c_p1.check_record(P1_OK, {}) == []
     assert c_p1.check_record({"paths": []}, {}) == ["no `paths` list"]
-    assert c_p1.check_record({"paths": [{"id": "x"}]}, {}) == [
-        "path 'x' has no id, tool, verdict or refused_by list", "no recorded tool list (the tools the stub received)"]
-    contradictory = {"paths": [{**SHELL_PATH, "refused_by": []}], "evidence": P1_OK["evidence"]}
+    broken = c_p1.check_record({"paths": [{"id": "x"}]}, {})
+    assert broken[0] == "path 'x' has no id, tool, verdict or refused_by list"
+    assert broken[-1] == "no recorded tool list (the tools the stub received)"
+    contradictory = {"paths": [{**SHELL_PATH, "refused_by": []}, *without("root:shell")], "evidence": P1_OK["evidence"]}
     assert c_p1.check_record(contradictory, {}) == [
-        "path 'shell:bash' is refused_by [] but its verdict is 'refused'"]
+        "path 'root:shell' is refused_by [] but its verdict is 'refused'"]
+
+
+@pytest.mark.parametrize("vanished", ["mcp:probesrv:touch", "plugin-tool:probe_tool", "root:execute",
+                                      "root:execute-inner", "root:shell"])
+def test_p1_record_cannot_pass_with_a_vanished_path(vanished):
+    problems = c_p1.check_record(p1_with(listed=without(vanished)), {})
+    assert f"path {vanished!r} is missing from `paths`" in problems
+
+
+def test_p1_leaves_out_only_an_optional_tool_recorded_as_unavailable():
+    image = "root:experimental_image_generate"
+    assert c_p1.check_record(p1_with(listed=without(image)), {}) == [f"path {image!r} is missing from `paths`"]
+    unavailable = {paths.OPTIONAL_TOOLS[0]: f"{paths.UNAVAILABLE_TEXT} {paths.OPTIONAL_TOOLS[0]}"}
+    assert c_p1.check_record(p1_with(listed=without(image), unavailable_tools=unavailable), {}) == []
+    shell_gone = c_p1.check_record(p1_with(listed=without("root:shell"), unavailable_tools={"shell": "x"}), {})
+    assert "tool 'shell' is recorded unavailable but is not an optional tool" in shell_gone
+    assert "path 'root:shell' is missing from `paths`" in shell_gone
+
+
+def test_only_an_optional_tool_may_be_unavailable():
+    spec = paths.build_plan().spec("root:shell")
+    image = paths.build_plan().spec("root:experimental_image_generate")
+    unavailable = {"status": "error", "error": f"{paths.UNAVAILABLE_TEXT} \"x\" is currently available"}
+    assert paths.may_be_unavailable(image, unavailable) and not paths.may_be_unavailable(spec, unavailable)
+    assert not paths.may_be_unavailable(image, {"status": "error", "error": "boom"})
+    assert not paths.may_be_unavailable(image, {"status": "completed", "error": None})
+
+
+def test_refusal_text_shown_needs_the_error_state_and_a_runtime_refusal_text():
+    assert paths.refusal_text_shown({"status": "error", "error": f"{paths.UNAVAILABLE_TEXT} \"shell\" is not available"})
+    assert paths.refusal_text_shown({"status": "error", "error": "Permission denied: skill"})
+    assert not paths.refusal_text_shown({"status": "error", "error": "ENOENT: no such file"})
+    assert not paths.refusal_text_shown({"status": "completed", "error": "Permission denied"})
+    assert not paths.refusal_text_shown({"status": None, "error": None})
+
+
+def test_the_dispatched_effect_counts_an_answered_call_but_no_refusal():
+    spec = paths.build_plan().spec("root:question")
+    plan = paths.build_plan(include=("root:question",))
+    call = plan.call_ids["root:question"]
+
+    def part(status, error=None):
+        return SimpleNamespace(tool_part=lambda call_id: {"state": {"status": status, "error": error}})
+
+    assert paths.executed(part("completed"), plan, spec)
+    assert paths.executed(part("error", "This non-interactive run cannot ask the user questions"), plan, spec)
+    assert not paths.executed(part("error", f"{paths.UNAVAILABLE_TEXT} \"question\""), plan, spec)
+    assert not paths.executed(part("error", harness.REFUSAL_TEXT["PreToolUse"] + ": question"), plan, spec)
+    assert not paths.executed(part("error", harness.REFUSAL_TEXT["permission.evaluate"] + ": question"), plan, spec)
+    assert not paths.executed(part("running"), plan, spec)
+    assert not paths.executed(SimpleNamespace(tool_part=lambda call_id: None), plan, spec)
+    assert call in plan.call_ids.values()
+
+
+def test_a_refusal_event_prefers_the_tool_part_and_reads_the_log_only_without_one():
+    errored = {"type": "tool_use", "part": {"id": "c1", "state": {"status": "error", "error": "probe throw: shell"}}}
+    refusal = {"at": "refusal", "mechanism": "PreToolUse", "id": "c1", "tool": "shell"}
+    run = harness.Run("r", Path("."), [], {}, 0, False, "", "", events=[errored], probe=[refusal])
+    assert run.refusal_event("PreToolUse", "c1") == "tool-part-error"
+    clean = {"type": "tool_use", "part": {"id": "c1", "state": {"status": "completed", "output": "ok"}}}
+    logged_only = harness.Run("r", Path("."), [], {}, 0, False, "", "", events=[clean], probe=[refusal])
+    assert logged_only.refusal_event("PreToolUse", "c1") is None
+    no_part = harness.Run("r", Path("."), [], {}, 0, False, "", "", probe=[refusal])
+    assert no_part.refusal_event("PreToolUse", "c1") == "hook-log"
+    assert no_part.refusal_event("PreToolUse", "c2") is None
+
+
+def run_with_requests(exit_code, requests):
+    return SimpleNamespace(exit_code=exit_code, requests=requests,
+                           tool_list=lambda: sorted({t for r in requests for t in r.get("tools") or []}))
+
+
+def test_switch_off_run_counts_only_when_exited_clean_with_tools_and_the_path_tools_listed():
+    ok = run_with_requests(0, [{"tools": ["shell", "write"]}])
+    assert c_p1.switch_off_problems(ok, ["shell", "write"]) == []
+    assert c_p1.switch_off_problems(run_with_requests(1, ok.requests), ["shell"]) == ["exit code 1"]
+    assert c_p1.switch_off_problems(run_with_requests(0, [{"tools": []}]), []) == ["no chat request carried tools"]
+    assert c_p1.switch_off_problems(ok, ["shell", "grep"]) == ["path tool 'grep' not in its tool list"]
+
+
+def inner_path(**code_mode):
+    return {**p1_path(paths.build_plan().spec(paths.INNER_PATH_ID)), "code_mode": {**CODE_MODE, **code_mode}}
+
+
+def test_p1_inner_code_mode_call_is_recorded_with_its_facts():
+    assert c_p1.check_record(p1_with(), {}) == []
+    no_facts = [{k: v for k, v in inner_path().items() if k != "code_mode"}, *without(paths.INNER_PATH_ID)]
+    assert c_p1.check_record(p1_with(listed=no_facts), {}) == [
+        f"path {paths.INNER_PATH_ID!r} has no `code_mode` facts"]
+    missing = {k: v for k, v in CODE_MODE.items() if k != "execute_switchable_by_config"}
+    lacking = [{**inner_path(), "code_mode": missing}, *without(paths.INNER_PATH_ID)]
+    assert c_p1.check_record(p1_with(listed=lacking), {}) == ["code_mode lacks 'execute_switchable_by_config'"]
+
+
+def test_p1_inner_code_mode_outcome_follows_from_its_facts():
+    def problems(**code_mode):
+        listed = [inner_path(**code_mode), *without(paths.INNER_PATH_ID)]
+        return c_p1.check_record(p1_with(listed=listed), {})
+
+    assert problems(outcome="unstoppable")[0].startswith("code_mode outcome 'unstoppable' is neither")
+    assert problems(outcome="inner-call") == ["code_mode outcome is inner-call but no rule stopped the inner effect"]
+    seen = {"before_fires_for_inner_call_under_own_name": True, "before_rule_stops_inner_effect": True}
+    assert problems(outcome="inner-call", **seen) == []
+    assert problems(outcome="wrapper-only", **seen) == ["code_mode outcome is wrapper-only but a rule stopped the inner effect"]
+    unmarked = [{k: v for k, v in inner_path().items() if k != "refused_scope"}, *without(paths.INNER_PATH_ID)]
+    assert c_p1.check_record(p1_with(listed=unmarked), {}) == [
+        "code_mode outcome is wrapper-only but the path is not marked refused_scope wrapper-only"]
+    assert problems(before_rule_stops_inner_effect=False) == [
+        "code_mode says a before rule stops the inner call that no before hook saw"]
+    assert problems(evaluate_deny_stops_inner_effect=False) == [
+        "code_mode says an evaluate deny stops the inner call that no evaluate hook saw"]
 
 
 def test_p1_record_fails_for_a_listed_tool_that_is_neither_path_nor_exclusion():
-    assert c_p1.check_record(p1_with(tool_list=["shell", "execute"]), {}) == [
-        "tool 'execute' is in the model's tool list and in neither `paths` nor `exclusions`"]
+    assert c_p1.check_record(p1_with(tool_list=["shell", "todo"]), {}) == [
+        "tool 'todo' is in the model's tool list and in neither `paths` nor `exclusions`"]
     bare = {**EXCLUSION, "schema": {}}
-    assert c_p1.check_record(p1_with(tool_list=["shell", "question"], exclusions={"question": bare}), {}) == [
-        "exclusion 'question' lacks a reason, schema, description or switch-off result"]
-    assert c_p1.check_record(p1_with(tool_list=["shell", "question"], exclusions={"question": EXCLUSION}), {}) == []
+    assert c_p1.check_record(p1_with(tool_list=["shell", "todo"], exclusions={"todo": bare}), {}) == [
+        "exclusion 'todo' lacks a reason, schema, description or switch-off result"]
+    assert c_p1.check_record(p1_with(tool_list=["shell", "todo"], exclusions={"todo": EXCLUSION}), {}) == []
 
 
 def test_p1_credits_a_refusal_only_on_a_positive_event():
     spec = SimpleNamespace(path_id="shell:bash", tool="shell")
     absent = {"executed": False, "refusal_event": None}
-    seen = {"executed": False, "refusal_event": "probe throw: shell"}
     ran = {"executed": True, "refusal_event": None}
     marker_missing = c_p1._tool_entry(spec, {"executed": True}, absent, absent, True)
     assert marker_missing["refused_by"] == [] and marker_missing["verdict"] == "unconfirmed"
-    credited = c_p1._tool_entry(spec, {"executed": True}, seen, absent, True)
-    assert credited["refused_by"] == [c_p1.PRE] and credited["verdict"] == "refused"
+    for event in ("hook-log", "tool-part-error"):
+        seen = {"executed": False, "refusal_event": event}
+        credited = c_p1._tool_entry(spec, {"executed": True}, seen, absent, True)
+        assert credited["refused_by"] == [c_p1.PRE] and credited["verdict"] == "refused"
+        evaluated = c_p1._tool_entry(spec, {"executed": True}, absent, seen, True)
+        assert evaluated["refused_by"] == [c_p1.EVAL]
+        assert c_p1._tool_entry(spec, {"executed": True}, absent, seen, False)["refused_by"] == []
     assert c_p1._tool_entry(spec, {"executed": True}, ran, ran, True)["verdict"] == "unrefused"
 
 
@@ -653,12 +787,54 @@ def test_p6_record_needs_schema_and_exit_codes():
         "evidence lacks event_schema", "evidence lacks exit_codes"]
 
 
+def p7_path(path_id, **extra):
+    return {"id": path_id, "config_channel": c_p7.CHANNEL, "env_keys": [c_p7.CHANNEL], **extra}
+
+
+P7_PATHS = [p7_path(p["id"]) for p in ALL_PATHS if p["id"] != "child-run"]
+
+
 def test_p7_record_needs_evidence_per_p1_path_id():
     cases = {"P1": P1_OK}
-    assert c_p7.check_record({"evidence": {"paths": [{"id": "shell:bash"}]}}, cases) == []
-    assert c_p7.check_record({"evidence": {"paths": []}}, cases) == ["no evidence for P1 path 'shell:bash'"]
-    assert c_p7.check_record({"evidence": {"paths": [{"id": "shell:bash"}]}}, {}) == [
-        "P1 has no paths to compare against"]
+    assert c_p7.check_record({"evidence": {"paths": P7_PATHS}}, cases) == []
+    assert c_p7.check_record({"evidence": {"paths": P7_PATHS[1:]}}, cases) == [
+        f"no evidence for P1 path {P7_PATHS[0]['id']!r}"]
+    assert c_p7.check_record({"evidence": {"paths": P7_PATHS}}, {}) == ["P1 has no paths to compare against"]
+
+
+def test_p7_record_needs_the_config_channel_and_env_key_names_per_path():
+    cases = {"P1": P1_OK}
+    first = P7_PATHS[0]["id"]
+    for broken in ({"config_channel": None}, {"env_keys": []}, {"env_keys": ["HOME"]}):
+        listed = [p7_path(first, **broken), *P7_PATHS[1:]]
+        assert c_p7.check_record({"evidence": {"paths": listed}}, cases) == [
+            f"P7 path {first!r} names no config channel or env key"]
+
+
+def test_p7_leaves_out_only_an_optional_tool():
+    cases = {"P1": P1_OK}
+    ok = {"evidence": {"paths": P7_PATHS, "unavailable_tools": {paths.OPTIONAL_TOOLS[0]: "x"}}}
+    assert c_p7.check_record(ok, cases) == []
+    bad = {"evidence": {"paths": P7_PATHS, "unavailable_tools": {"write": "x"}}}
+    assert c_p7.check_record(bad, cases) == ["tool 'write' is recorded unavailable but is not an optional tool"]
+
+
+def test_run_phase_removes_the_roots_only_of_a_passing_case(monkeypatch, tmp_path):
+    state = tmp_path / "state"
+    statuses = {"A": record.PASS, "B": record.FAIL}
+    roots = {}
+
+    def load(info):
+        def run(ctx):
+            roots[info.case_id] = isolated.make_root(ctx.state)
+            return runner.result(statuses[info.case_id], {})
+        return SimpleNamespace(run=run)
+
+    infos = [core.CaseInfo(cid, tmp_path / f"c_{cid}.py", False, False, "p") for cid in statuses]
+    monkeypatch.setattr(core, "phase_cases", lambda phase: infos)
+    monkeypatch.setattr(core, "load_case", load)
+    runner.run_phase(core.get_phase("mechanisms"), state=state)
+    assert not roots["A"].exists() and roots["B"].is_dir()
 
 
 class FakeRun:
@@ -708,6 +884,45 @@ def test_leak_scan_finds_a_path_split_across_read_blocks(monkeypatch, tmp_path):
     (tmp_path / userconfig.DATA_DIRS[1]).mkdir(parents=True)
     (tmp_path / userconfig.DATA_DIRS[1] / "f").write_bytes(b"ab" + b"NEEDLE-ROOT" + b"cd")
     assert userconfig.leaked_probe_paths(tmp_path, b"NEEDLE-ROOT") == [f"{userconfig.DATA_DIRS[1]}/f"]
+
+
+def test_leak_scan_searches_the_resolved_and_the_unresolved_state_dir(monkeypatch, tmp_path):
+    real = tmp_path / "real-state"
+    real.mkdir()
+    link = tmp_path / "link-state"
+    link.symlink_to(real)
+    monkeypatch.setenv("AGENT_OPENCODE_PROBE_STATE", str(link))
+    needles = userconfig.probe_root_needles()
+    assert needles == tuple(sorted({str(link / "runs" / "root.").encode(), str(real / "runs" / "root.").encode()}))
+    for index, spelled in enumerate((link, real)):
+        home = tmp_path / f"home{index}"
+        (home / userconfig.DATA_DIRS[1]).mkdir(parents=True)
+        (home / userconfig.DATA_DIRS[1] / "f").write_bytes(str(spelled / "runs" / "root.abc").encode())
+        assert userconfig.leaked_probe_paths(home) == [f"{userconfig.DATA_DIRS[1]}/f"]
+
+
+def test_a_pinned_record_is_checked_against_the_pin_entry_and_its_own_cases(tmp_path):
+    probe = make_probe(tmp_path)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    pinned = write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.pin_record(state, alpha, probe) == []
+    write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == []
+
+    def repin(rec):
+        pinned.write_text(json.dumps(rec), encoding="utf-8")
+        entry = core.read_pin(probe)["last_pass"]["alpha"]
+        record.write_pin(probe, "2.3.2", {"alpha": {**entry, "record_sha256": record.file_sha256(pinned)}})
+
+    rec = record.read_record(pinned)
+    repin({**rec, "version": "9.9.9"})
+    problems = record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe)
+    assert problems == [f"alpha: the pinned record {pinned.parent.name} is of another version, phase or phase hash "
+                        f"than the pin entry"]
+    repin({**rec, "cases": {**rec["cases"], "A1": {"status": "fail", "evidence": {}}}})
+    assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == [
+        "pinned record: alpha/A1: fail is not accepted"]
 
 
 def env_meta(root, **env_paths):

@@ -27,7 +27,28 @@ class PathSpec:
 
 
 UNAVAILABLE_TEXT = "No tool named"
+PERMISSION_DENIED_TEXT = "Permission denied"
+RUNTIME_REFUSAL_TEXTS = (UNAVAILABLE_TEXT, PERMISSION_DENIED_TEXT)
+OPTIONAL_TOOLS = ("experimental_image_generate",)
+INNER_PATH_ID = "root:execute-inner"
+INNER_NAMESPACE = "probecm"
 NESTED_CALL_ID = "call_m3_0_0"
+
+
+def is_unavailable(out: dict) -> bool:
+    return UNAVAILABLE_TEXT in str(out.get("error"))
+
+
+def may_be_unavailable(spec: "PathSpec", out: dict) -> bool:
+    """The runtime rejects the call as unavailable and the tool is one the suite lets be missing;
+    for any other path that rejection is a missing control, not a path to leave out."""
+    return spec.tool in OPTIONAL_TOOLS and is_unavailable(out)
+
+
+def refusal_text_shown(out: dict) -> bool:
+    """The call's tool part is in the error state with a text the runtime uses for a refusal by
+    permission (the tool is not offered to the agent, or the permission is denied)."""
+    return out.get("status") == "error" and any(t in str(out.get("error")) for t in RUNTIME_REFUSAL_TEXTS)
 
 
 def _specs() -> list[PathSpec]:
@@ -51,10 +72,9 @@ def _specs() -> list[PathSpec]:
         PathSpec("root:execute", "execute",
                  {"code": "await fetch('http://127.0.0.1:{port}/m-exec-fetch'); return 'm-exec-fetch done'"},
                  "m-exec-fetch", "stub-get:/m-exec-fetch", "m-exec-fetch"),
-        PathSpec("root:execute-inner", "execute",
-                 {"code": "const r = await tools.opencode.worktree_list(); "
-                          "return 'm-exec-inner ' + JSON.stringify(r)"},
-                 "m-exec-inner", "output:m-exec-inner", "m-exec-inner"),
+        PathSpec(INNER_PATH_ID, "execute",
+                 {"code": f"await tools.{INNER_NAMESPACE}.touch({{}}); return 'm-exec-inner done'"},
+                 "m-exec-inner", "file:m-exec-inner", "m-exec-inner"),
         PathSpec("root:skill", "skill", {"id": "m-skill"}, "m-skill", "output:m-skill-body", "m-skill"),
         PathSpec("root:experimental_image_generate", "experimental_image_generate",
                  {"prompt": "m-image"}, "m-image", "dispatched", "m-image"),
@@ -106,7 +126,9 @@ def build_plan(include: tuple[str, ...] | None = None) -> Plan:
                                                             "arguments": {"command": "touch {root}/m-child-run"}}]},
                {"text": "nested done"}]}}
     config = {"mcp": {"probesrv": {"type": "local", "codemode": False,
-                                   "command": ["python3", str(_mcp_server()), "{root}/m-mcp"]}}}
+                                   "command": ["python3", str(_mcp_server()), "{root}/m-mcp"]},
+                      INNER_NAMESPACE: {"type": "local",
+                                  "command": ["python3", str(_mcp_server()), "{root}/m-exec-inner"]}}}
     return Plan(specs, scenario, dict(FILES), config, {"tool": "probe_tool"}, call_ids)
 
 

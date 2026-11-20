@@ -25,7 +25,7 @@ from . import core, isolated, stub
 PLUGIN_DIR = core.PROBE_DIR / "plugin"
 STUB_MODELS = ("m1", "m2", "m3")
 REFUSAL_TEXT = {"PreToolUse": "probe throw", "permission.evaluate": "probe deny"}
-CLI_BASE =("run", "--standalone", "--auto", "--format", "json")
+CLI_BASE = ("run", "--standalone", "--auto", "--format", "json")
 
 
 class VersionMismatch(Exception):
@@ -102,16 +102,20 @@ class Run:
         return [e for e in self.probe if e.get("at") == at]
 
     def refusal_event(self, mechanism: str, call_id: str | None = None) -> str | None:
-        """The positive event showing ``mechanism`` refused: the plugin's own ``refusal`` log
-        entry (for the call when ``call_id`` is given) or, for a call, a tool part whose error
-        text is the plugin's refusal message. None when neither is in the run's output."""
+        """The positive event showing ``mechanism`` refused: for a call, the tool part whose error
+        text is the plugin's refusal message (the runtime honoured the refusal); otherwise the
+        plugin's own ``refusal`` log entry, which is only the plugin's decision. The log entry
+        is the fallback for a call with no tool part in the output (the nested ``child-run``).
+        None when neither is there."""
+        part = self.tool_part(call_id) if call_id else None
+        if part is not None:
+            error = str((part.get("state") or {}).get("error") or "")
+            if REFUSAL_TEXT.get(mechanism, "\0") in error:
+                return "tool-part-error"
+            return None
         for entry in self.probe_entries("refusal"):
             if entry.get("mechanism") == mechanism and (call_id is None or entry.get("id") == call_id):
                 return "hook-log"
-        part = self.tool_part(call_id) if call_id else None
-        error = str(((part or {}).get("state") or {}).get("error") or "")
-        if REFUSAL_TEXT.get(mechanism, "\0") in error:
-            return "tool-part-error"
         return None
 
     def tool_schema(self, tool: str) -> dict:
