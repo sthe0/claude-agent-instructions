@@ -163,8 +163,8 @@ def test_pin_bump_requires_matching_pass(tmp_path):
     assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == []
 
 
-def test_pin_is_one_exact_version():
-    assert re.fullmatch(r"\d+\.\d+\.\d+", core.read_pin()["version"])
+def test_pin_is_exact_2x():
+    assert re.fullmatch(r"2\.\d+\.\d+", core.read_pin()["version"])
 
 
 def test_require_pass_accepts_absent_only_outside_k7(tmp_path):
