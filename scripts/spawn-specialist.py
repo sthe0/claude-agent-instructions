@@ -2918,6 +2918,11 @@ def resolve_permission_mode(
     should-fix S1).
     """
     if getattr(args, "planning_only", False):
+        if args.permission_mode not in (None, *planning_only.READ_ONLY_MODES):
+            raise SystemExit(
+                f"spawn-specialist: {planning_only.FLAG} cannot be combined with --permission-mode "
+                f"{args.permission_mode!r}: a planning child runs in one of "
+                f"{', '.join(planning_only.READ_ONLY_MODES)}, never a mode that lets it write")
         return args.permission_mode or "default"
     if args.permission_mode is not None:
         if engine_grants and any(e.get("mode") == "write" for e in engine_grants):

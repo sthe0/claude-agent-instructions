@@ -570,9 +570,12 @@ def test_spawned_decided_later_planning_dispatch(home_store, venued_fixtures_dir
     _not_started(_dispatch(store, spawns=spawns), spawns, "stage 1 is decided later")
 
     planned = _dispatch(store, spawns=spawns, subplan_only=True)
-    assert planned.action == "await_subplan_approval", planned
+    assert planned.action == "plan_again" and "no sub-plan" in planned.detail, planned
     assert planned.data["planning_dispatch"] is True
-    assert len(spawns.argvs) == 1 and planning_only.FLAG in spawns.argvs[0]
+    _put(store, _rec(1))
+    planned = _dispatch(store, spawns=spawns, subplan_only=True)
+    assert planned.action == "await_subplan_approval" and "is on record" in planned.detail, planned
+    assert len(spawns.argvs) == 2 and planning_only.FLAG in spawns.argvs[0]
     assert "is not done when you return" in " ".join(spawns.argvs[0])
     assert store.load(SESSION).stage(1).outcome.status != "PASSED"
     assert _entry(store).get("planning") is True
@@ -582,9 +585,8 @@ def test_spawned_decided_later_planning_dispatch(home_store, venued_fixtures_dir
     assert any("only to plan it" in b
                for b in gates.child_approval_blockers(child, store.load(SESSION)))
 
-    _put(store, _rec(1))
     second = _dispatch(store, spawns=spawns, subplan_only=True)
-    assert second.action == "await_subplan_approval" and len(spawns.argvs) == 2
+    assert second.action == "await_subplan_approval" and len(spawns.argvs) == 3
     assert _present_and_approve(store, tmp_path).ok
     _not_started(_dispatch(store, spawns=Spawns(), subplan_only=True), Spawns(),
                  "approved as it stands")
@@ -647,6 +649,94 @@ def test_a_stage_planned_by_two_children_is_read_from_the_one_handed_the_stage_l
     assert _dispatch(store, spawns=started).ok is not False and started.argvs
 
 
+def _record_passed(store, sid=SESSION):
+    return cli.cmd_record_result(ns(session=sid, status="passed", actual="done", control="reviewed",
+                                    observation="obs"), store=store)
+
+
+@pytest.mark.parametrize("returned", ["INCOMPLETE: nothing yet\n", "no marker at all\n",
+                                      "PERMISSION-REQUEST:\nAction: write a file\nWhy: x\n"])
+def test_a_stage_dispatched_only_to_be_planned_cannot_be_recorded_as_passed(
+        home_store, venued_fixtures_dir, tmp_path, returned):
+    """Through `dispatch --subplan-only`, `record-result` and the approval verbs: a planning child
+    that returns anything but a recorded sub-plan leads to planning again, never to accepting the
+    stage; the stage cannot be recorded as passed while the planning mark stands, the refusal
+    names the way on, and a recorded, approved, started stage is no longer refused by it."""
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True, in_thread=False)
+    planned = _dispatch(store, spawns=Spawns(returned), subplan_only=True)
+    assert planned.action == "plan_again" and planned.data["planning_dispatch"] is True
+    assert "its sub-plan is on record" not in planned.detail and "dispatch --session" in planned.detail
+    state = store.load(SESSION)
+    assert state.node == Node.EXECUTING.value and state.permission_request is None
+    assert state.stage(1).outcome.status == "ACTIVE"
+
+    refused = _record_passed(store)
+    _refused(refused, "only to plan it", "dispatch --subplan-only", "approve-subplan")
+    assert store.load(SESSION).stage(1).outcome.status == "ACTIVE"
+
+    _put(store, _rec(1))
+    assert _dispatch(store, spawns=Spawns("PLAN-READY: sub-plan recorded\n"),
+                     subplan_only=True).action == "await_subplan_approval"
+    _refused(_record_passed(store), "only to plan it")
+    assert _present_and_approve(store, tmp_path).ok
+    _refused(_record_passed(store), "only to plan it")
+    assert _approve_resources(store).ok
+    started = Spawns()
+    assert _dispatch(store, spawns=started).ok is not False and started.argvs
+    after = _record_passed(store)
+    assert "only to plan it" not in after.detail and "record-result refused" not in after.detail
+
+
+def test_a_record_of_a_stage_whose_approvals_are_missing_is_refused_with_the_verb(
+        home_store, venued_fixtures_dir):
+    """The start guards stand at the record as at the start: a stage above the line that never
+    had the parent's approval is not recorded as passed, and the refusal names the verb."""
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store)
+    _put(store, _rec(1))
+    _refused(_record_passed(store), "record-result refused", "approve-resources --stage 1")
+    state = store.load(SESSION)
+    sub_plan.write_parent_approval(state, 1, _rec(1).resource_request)
+    store.save(state)
+    assert "record-result refused" not in _record_passed(store).detail
+
+
+def test_a_planning_childs_run_is_not_the_stages_work(home_store, venued_fixtures_dir, monkeypatch):
+    """A planning child's denial is the read-only boundary working: nothing it was denied is
+    classified against the stage's grants, a once-grant is not spent, and its run is not booked as
+    the stage's estimate actuals; the stage's own work dispatch does all three."""
+    from agentctl import cli_dispatch
+
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True, in_thread=False)
+    state = store.load(SESSION)
+    state.runtime_grants["1"] = [{"scope": "once", "consumed": False, "rule": "Bash(make:*)"}]
+    store.save(state)
+    classified, booked = [], []
+    monkeypatch.setattr(cli_dispatch, "_classify_transcript_denials",
+                        lambda *a, **k: classified.append(a))
+    monkeypatch.setattr(cli_dispatch.resource_estimation, "record_stage_estimate",
+                        lambda *a, **k: booked.append(a))
+    _put(store, _rec(1))
+    assert _dispatch(store, spawns=Spawns("INCOMPLETE: denied\n"), subplan_only=True).ok is not False
+    assert not classified and not booked
+    assert store.load(SESSION).runtime_grants["1"][0]["consumed"] is False
+    assert store.load(SESSION).node == Node.EXECUTING.value
+
+    assert _dispatch(store, spawns=Spawns(), subplan_only=True).ok is not False
+    state = store.load(SESSION)
+    sub_plan.write_user_approval(state, 1, _rec(1))
+    sub_plan.write_parent_approval(state, 1, _rec(1).resource_request)
+    store.save(state)
+    assert _dispatch(store, spawns=Spawns()).ok is not False
+    assert classified and booked
+    assert store.load(SESSION).runtime_grants["1"][0]["consumed"] is True
+
+
 def test_subplan_only_is_refused_for_a_stage_not_decided_later(store, venued_fixtures_dir):
     _executing(store, venued_fixtures_dir)
     _described(store, in_thread=False)
@@ -701,6 +791,37 @@ def test_the_planning_child_is_told_it_plans_and_holds_no_execution_grants(tmp_p
                {"rule": "Bash(make:*)"}]
     assert planning_only.grants(entries) == [{"path": "/docs", "mode": "read"}]
     assert planning_only.grants(None) is None
+
+
+@pytest.mark.parametrize("mode", ["acceptEdits", "auto", "bypassPermissions", "dontAsk"])
+def test_planning_only_cannot_be_combined_with_a_mode_that_lets_the_child_write(tmp_path, mode, capsys):
+    """A planning child never runs in a writing mode: the flag parser does not offer one, and
+    `resolve_permission_mode` itself refuses one handed to it; `default` and `plan` pass. The
+    cursor wrapper starts its agent with `--force`, so it refuses a planning child outright."""
+    spawn = _load_spawn_script()
+    plan = tmp_path / "plan.md"
+    plan.write_text("# plan\n**<<this step>>**\n", encoding="utf-8")
+    base = ["--kind", "developer", "--plan", str(plan), "--done-criterion", "dc",
+            "--criterion-type", "measurable", "--effort", "low", "--complexity", "medium",
+            planning_only.FLAG]
+    with pytest.raises(SystemExit):
+        spawn.build_parser().parse_args(base + ["--permission-mode", mode])
+    args = spawn.build_parser().parse_args(base)
+    args.permission_mode = mode
+    with pytest.raises(SystemExit, match="cannot be combined"):
+        spawn.resolve_permission_mode(args, [{"path": "/work", "mode": "write"}])
+    for allowed in planning_only.READ_ONLY_MODES:
+        args.permission_mode = allowed
+        assert spawn.resolve_permission_mode(args, None) == allowed
+
+    cursor_spec = importlib.util.spec_from_file_location(
+        "spawn_cursor_planning", SCRIPTS / "spawn-cursor-specialist.py")
+    cursor = importlib.util.module_from_spec(cursor_spec)
+    cursor_spec.loader.exec_module(cursor)
+    rc = cursor.main(["--kind", "developer", "--plan", str(plan), "--done-criterion", "dc",
+                      "--criterion-type", "measurable", "--budget", "small", "--workspace",
+                      str(tmp_path), "--complexity", "medium", planning_only.FLAG])
+    assert rc == 2 and "--force" in capsys.readouterr().err
 
 
 def test_the_planning_child_of_a_dry_run_main_holds_no_rule_grants(
@@ -1007,7 +1128,7 @@ def test_the_agents_own_approval_does_not_seed_the_approved_set(store, venued_fi
     assert entry["parent_resource_approval"] and "approved" not in entry
     assert _dispatch(store).action == "execute_in_thread"
     _put(store, _rec(1, allow=("Edit", "Bash(rm:*)")))
-    _refused(_approve_resources(store), "the user's approval comes first")
+    _refused(_approve_resources(store), "approve-resources --stage 1")
 
 
 @pytest.mark.parametrize("allow, written", [(("Edit",), True), (("Edit", "Read"), False)])
@@ -1033,6 +1154,47 @@ def test_a_childs_own_plan_is_approved_inside_the_set_its_parent_approved(
     child.store.save(state)
     assert child.run("approve", session="child-1", by="agent")["ok"] is True
     assert bool(child.state().stage_approvals.get("0:1", {}).get("parent_resource_approval")) is written
+
+
+@pytest.mark.parametrize("allow, written", [(("Edit",), True), (("Edit", "Read"), False)])
+def test_a_plan_approved_under_a_mandate_leaves_its_children_a_set_to_be_approved_inside(
+        tmp_path, monkeypatch, venued_fixtures_dir, allow, written):
+    """The set a child of a mandate-approved stage is checked against is the request the
+    mandate-approved plan states for that stage: the mandate approval is the user's standing
+    authority for the item (the mandate checks bound the plan), so it records the set as the user's
+    approval does; a child's request inside it is approved, one outside it is not."""
+    approver = "mandate:m1"
+    import test_child_approval as tca
+
+    monkeypatch.setattr(cli_approval, "_mandate_basis_problems", lambda *a, **k: [])
+    child = tca.Child(tmp_path, monkeypatch)
+    child.start_parent = False
+    root = child.store
+    _planning(root, "parent-s")
+    plan = _new_form_plan(venued_fixtures_dir, tmp_path, in_thread=(1, 2))
+    cli.cmd_submit_plan(ns(session="parent-s", plan=plan), store=root)
+    parent = root.load("parent-s")
+    sub_plan.store(parent, _rec(1, allow=("Edit",)), level=0)
+    sub_plan.store(parent, _rec(2, allow=("Edit",)), level=0)
+    root.save(parent)
+    approved = cli.cmd_approve(ns(session="parent-s", by=approver), store=root)
+    assert approved.ok is True, approved
+    entry = root.load("parent-s").stage_approvals["0:1"]
+    assert entry["parent_resource_approval"]
+    assert entry.get("approved")
+
+    text = tca._spliced(parent_norm=child.digest, final_checks=((tca.PARENT_CHECK, 0),))
+    text = text.replace("depends_on = []\n", 'depends_on = []\nplace = "the engine"\n'
+                        'binding_conditions = []\n', 1)
+    tca._linked_submit(child, plan_text=text)
+    state = child.state()
+    state.stages[0].place = ENGINE
+    state.stages[0].binding_conditions_stated = True
+    sub_plan.store(state, _rec(1, allow=allow), level=0)
+    child.store.save(state)
+    assert child.run("approve", session="child-1", by="agent")["ok"] is True
+    got = bool(child.state().stage_approvals.get("0:1", {}).get("parent_resource_approval"))
+    assert got is written
 
 
 def test_user_approval_writes_resource_approval_and_the_set(store, venued_fixtures_dir):
@@ -1082,8 +1244,74 @@ def test_stage_resource_approval_needs_an_approved_set(store, venued_fixtures_di
     _described(store)
     _put(store, _rec(1))
     out = _approve_resources(store)
-    _refused(out, "the user's approval comes first")
+    _refused(out, "approve-resources --stage 1")
     assert "parent_resource_approval" not in _entry(store)
+
+
+def _user_verb(store, by="fedor", stage=1, sid=SESSION):
+    return cli_approval.cmd_approve_resources(ns(session=sid, stage=stage, by=by), store=store)
+
+
+def test_a_session_approved_before_approvals_were_recorded_goes_on_by_the_verb_the_refusal_names(
+        store, venued_fixtures_dir):
+    """A plan approved before per-stage approvals were written (or with no order at all, as
+    here: an old-form plan driven to EXECUTING) has no approval entry for a stage above the line.
+    Every way of going on is refused naming `approve-resources`, the agent cannot take it, and the
+    user's verb works and also leaves the set the agent's later requests are checked against."""
+    _executing(store, venued_fixtures_dir)
+    _described(store)
+    _put(store, _rec(1))
+    assert not store.load(SESSION).stage_approvals
+    spawns = Spawns()
+    for refused in (_dispatch(store, spawns=spawns), _dispatch(store, dry_run=True),
+                    _approve_resources(store), _record_passed(store)):
+        _refused(refused, "approve-resources --stage 1")
+    assert not spawns.argvs
+    _refused(_user_verb(store, by="agent"), "approve-stage-resources")
+    _refused(_user_verb(store, by=""), "approve-stage-resources")
+    assert not store.load(SESSION).stage_approvals
+
+    assert _user_verb(store).ok
+    assert _entry(store)["parent_resource_approval"] and _entry(store)["approved"]
+    assert _dispatch(store).action == "execute_in_thread"
+    _put(store, _rec(1, allow=("Edit", "Read")))
+    assert _approve_resources(store).ok is False
+    _refused(_dispatch(store), "approve-resources --stage 1")
+
+
+def test_approve_resources_refuses_what_it_cannot_approve_and_says_what_to_do(
+        store, venued_fixtures_dir, tmp_path):
+    _executing(store, venued_fixtures_dir)
+    _described(store, minutes=5)
+    _put(store, _rec(1))
+    _refused(_user_verb(store), "below the size line")
+    _refused(_user_verb(store, stage=9), "no stage 9")
+
+    _described(store)
+    state = store.load(SESSION)
+    state.sub_plan_records.clear()
+    store.save(state)
+    _refused(_user_verb(store), "no sub-plan on record")
+
+    _described(store, lazy=True)
+    _put(store, _rec(1))
+    _refused(_user_verb(store), "approve-subplan")
+
+    _described(store)
+    state = store.load(SESSION)
+    state.parent_link = {"session_id": "the-parent"}
+    store.save(state)
+    _refused(_user_verb(store), "root session")
+    assert not store.load(SESSION).stage_approvals
+
+
+def test_approve_resources_is_registered_as_the_users_verb():
+    assert "approve-resources" in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
+    assert "approve-resources" in cli_common._SESSION_COMMANDS
+    assert "approve-resources" not in own_contour.OWN_CONTOUR_VERBS
+    args = cli.build_parser().parse_args(
+        ["approve-resources", "--session", "s", "--stage", "1", "--by", "fedor"])
+    assert (args.stage, args.by) == (1, "fedor")
 
 
 def test_stage_resource_approval_is_refused_for_a_stage_of_another_session(

@@ -9,6 +9,10 @@ the flag that carries it.
 from __future__ import annotations
 
 FLAG = "--planning-only"
+# The permission modes under which a child cannot write on its own say-so: an edit asks, and a
+# headless child's ask is denied. Any wider mode (acceptEdits, auto, bypassPermissions, dontAsk)
+# lets the planning child do the stage's work.
+READ_ONLY_MODES = ("default", "plan")
 
 
 def brief_lines() -> list[str]:

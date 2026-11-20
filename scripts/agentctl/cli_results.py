@@ -281,6 +281,11 @@ def _record_result(args, *, store: StateStore, runner: Runner | None = None) -> 
                 f"stage {stage.index} cannot pass: it is the re-norming stage of a "
                 "normative difficulty and the norm file is unchanged",
                 data={"blockers": renorm_block})
+        unstarted = gates.recorded_pass_blockers(state, stage, store=store)
+        if unstarted:
+            return Directive(
+                False, state.node, "await_user_approval",
+                "record-result refused: " + "; ".join(unstarted), data={"blockers": unstarted})
         segment_fire = gates.open_fire_record(state)
         if segment_fire is not None and segment_fire.get("arming_id") and gates.effort_active(state):
             efblock = gates.effort_fire_blockers(state)

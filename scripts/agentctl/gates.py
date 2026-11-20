@@ -3448,14 +3448,23 @@ def planning_dispatch_refusal(stage, entry: dict, record) -> str | None:
     return None
 
 
+def _planning_dispatch_blockers(state: SessionState, stage, record, subplan_only: bool) -> list[str] | None:
+    """What both start guards answer for `dispatch --subplan-only`: None when the start is not a
+    planning dispatch (the guard then applies its own rule), else the reasons it is refused."""
+    if not subplan_only:
+        return None
+    reason = planning_dispatch_refusal(stage, sub_plan.approval_entry(state, stage.index), record)
+    return [reason] if reason else []
+
+
 def decided_later_dispatch_blockers(state: SessionState, stage, record, *,
                                     subplan_only: bool = False) -> list[str]:
     """A decided-later stage starts (spawned or in-thread) only on the user's approval of its
     presented sub-plan for the sub-plan as it stands. Old-form stages are not decided later."""
     entry = sub_plan.approval_entry(state, stage.index)
-    if subplan_only:
-        reason = planning_dispatch_refusal(stage, entry, record)
-        return [reason] if reason else []
+    planning = _planning_dispatch_blockers(state, stage, record, subplan_only)
+    if planning is not None:
+        return planning
     if stage.place is None or not sub_plan.is_decided_later(stage):
         return []
     problem = sub_plan.subplan_approval_problem(entry, record)
@@ -3468,20 +3477,23 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
                                       subplan_only: bool = False) -> list[str]:
     """A stage above the line starts only while the parent's approval of its resources and
     permissions is set and was given for the request as it stands."""
-    entry = sub_plan.approval_entry(state, stage.index)
-    if subplan_only:
-        reason = planning_dispatch_refusal(stage, entry, record)
-        return [reason] if reason else []
+    planning = _planning_dispatch_blockers(state, stage, record, subplan_only)
+    if planning is not None:
+        return planning
     if stage.place is None or not stage_above_threshold(stage, Thresholds()):
         return []
-    approved = entry.get("parent_resource_approval")
+    approved = sub_plan.approval_entry(state, stage.index).get("parent_resource_approval")
     if not approved:
         return [f"stage {stage.index} cannot start: the parent has not approved its resources and "
-                f"permissions (the user's approval of the plan, or approve-stage-resources)"]
+                f"permissions: the user approves them with `approve-resources --stage {stage.index} "
+                f"--by <their name>` (or approves the plan), then the agent's approve-stage-resources "
+                f"works inside that set"]
     live = sub_plan.resource_request_digest(record.resource_request if record else [])
     if live != approved:
         return [f"stage {stage.index} cannot start: its resource request changed since the parent "
-                f"approved it (approve-stage-resources, or the user's approval of the changed plan)"]
+                f"approved it: `approve-stage-resources --stage {stage.index}` re-approves it inside "
+                f"the set the user approved, `approve-resources --stage {stage.index} --by <the "
+                f"user's name>` approves a request outside it"]
     return []
 
 
@@ -3497,6 +3509,21 @@ def stage_start_blockers(state: SessionState, stage, *, store=None,
     return list(dict.fromkeys(
         decided_later_dispatch_blockers(state, stage, record, subplan_only=subplan_only)
         + parent_resource_dispatch_blockers(state, stage, record, subplan_only=subplan_only)))
+
+
+def recorded_pass_blockers(state: SessionState, stage, *, store=None) -> list[str]:
+    """Why a stage may not be recorded as passed: it was dispatched only to be planned and its
+    work was never started, or the start guards refuse it as they would a start now. A stage of an
+    old-form plan has neither. Each reason names the verb that goes on."""
+    if stage.place is None:
+        return []
+    if sub_plan.approval_entry(state, stage.index).get("planning"):
+        return [f"stage {stage.index} was dispatched only to plan it (dispatch --subplan-only): its "
+                f"work has not been done and cannot be recorded as passed. Plan it again with "
+                f"`dispatch --subplan-only`, or present its sub-plan (present-plan --kind subplan "
+                f"--stage {stage.index}), have the user `approve-subplan`, and dispatch the stage "
+                f"itself"]
+    return stage_start_blockers(state, stage, store=store)
 
 
 def child_approval_blockers(child: SessionState, parent: SessionState | None) -> list[str]:

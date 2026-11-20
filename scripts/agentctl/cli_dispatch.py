@@ -1323,6 +1323,19 @@ def _brief_method_refusal(state, stage, method_runner, unread_by: str = "") -> D
     return refusal
 
 
+# What a planning child may return that the ordinary routing already handles to the point: a
+# question to answer, a plan-level objection, an escalation, a spawn that never ran.
+_PLANNING_RETURNS_ROUTED_AS_ORDINARY = ("CLARIFY", "REPLAN", "ESCALATE", "LOOP_DETECTED",
+                                        CHILD_INFRA_FAILURE, CHILD_EXHAUSTED)
+
+
+def _planning_record_exists(state, store, stage_index: int) -> bool:
+    try:
+        return sub_plan.read(state, stage_index, store) is not None
+    except sub_plan.SubPlanError:
+        return False
+
+
 def _stage_approval_refusal(state, store, stage, *, subplan_only: bool,
                             dry_run: bool) -> Directive | None:
     """The refusal of a start the user's or the parent's approval does not cover: a decided-later
@@ -1563,16 +1576,20 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # above). The PERMISSION-REQUEST branch below covers the same ground via its own
     # self-reported `Rule:`-line fallback for the case this transcript-based path
     # finds nothing (announcer-thread timeout, or discovery failed).
-    _classify_transcript_denials(state, stage, coverage, _parse_transcript_path(result.stderr))
-    resource_estimation.record_stage_estimate(
-        state, stage, state_root=getattr(store, "root", None), new_misses=state.planning_misses[_misses_before:],
-        since=_dispatch_started)
-    if child_launched and marker not in (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED):
-        # A transient/resource marker means the child never meaningfully ran
-        # against the once-scoped grant this launch was meant to spend — the
-        # launch didn't count, so consuming a single-use grant here would
-        # burn it for a re-dispatch that gets no benefit from having used it.
-        _consume_once_grants(state, stage.index)
+    # A planning child is read-only and is not the stage's work: what it was denied is the
+    # read-only boundary working, its once-grants are not spent, and its duration and cost are
+    # not the stage's actuals.
+    if not subplan_only:
+        _classify_transcript_denials(state, stage, coverage, _parse_transcript_path(result.stderr))
+        resource_estimation.record_stage_estimate(
+            state, stage, state_root=getattr(store, "root", None),
+            new_misses=state.planning_misses[_misses_before:], since=_dispatch_started)
+        if child_launched and marker not in (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED):
+            # A transient/resource marker means the child never meaningfully ran
+            # against the once-scoped grant this launch was meant to spend — the
+            # launch didn't count, so consuming a single-use grant here would
+            # burn it for a re-dispatch that gets no benefit from having used it.
+            _consume_once_grants(state, stage.index)
 
     if grant_widening:
         # A delegation that would widen authority beyond what the session was
@@ -1610,14 +1627,24 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
             },
         )
 
-    if subplan_only and marker in ("COMPLETED", "PLAN-READY"):
+    if subplan_only and marker not in _PLANNING_RETURNS_ROUTED_AS_ORDINARY:
         store.save(state)
+        recorded = _planning_record_exists(state, store, stage.index)
+        if marker in ("COMPLETED", "PLAN-READY") and recorded:
+            return Directive(
+                True, state.node, "await_subplan_approval",
+                f"stage {stage.index}'s planning child returned {marker}: its sub-plan is on record, "
+                f"the stage is not done and its result is not recorded. Present the sub-plan "
+                f"(present-plan --kind subplan --stage {stage.index}), wait for the user's "
+                f"approve-subplan, then dispatch the stage itself",
+                marker=marker, data={**base, "planning_dispatch": True})
         return Directive(
-            True, state.node, "await_subplan_approval",
-            f"stage {stage.index}'s planning child returned {marker}: its sub-plan is on record, "
-            f"the stage is not done and its result is not recorded. Present the sub-plan "
-            f"(present-plan --kind subplan --stage {stage.index}), wait for the user's "
-            f"approve-subplan, then dispatch the stage itself",
+            True, state.node, "plan_again",
+            f"stage {stage.index}'s planning child returned {marker or 'no marker'} and no sub-plan "
+            f"of the stage is on record: the stage is not accepted and its result is not recorded. "
+            f"Plan it again with `dispatch --session {state.session_id} --subplan-only`; a request "
+            f"for more than reading belongs in the sub-plan's resource request, which the parent "
+            f"approves before the stage is dispatched to execute",
             marker=marker, data={**base, "planning_dispatch": True})
     if marker == "COMPLETED":
         store.save(state)

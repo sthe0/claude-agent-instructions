@@ -365,6 +365,11 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    if args.planning_only:
+        print(f"error: {planning_only.FLAG} is refused: this wrapper starts the agent with --force, "
+              "which lets it write, and a planning child must not", file=sys.stderr)
+        return 2
+
     workspace = args.workspace.resolve()
     if not workspace.is_dir():
         print(f"error: workspace not found: {workspace}", file=sys.stderr)

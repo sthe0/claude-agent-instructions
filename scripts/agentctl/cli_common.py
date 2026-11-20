@@ -3729,7 +3729,7 @@ _SESSION_COMMANDS = (
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
-    "approve-subplan", "approve-stage-resources", "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "approve-subplan", "approve-resources", "approve-stage-resources", "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "record-landing", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
@@ -3850,7 +3850,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("mandate_id", ("mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry",
                     "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
-    ("by", ("confirm-delivery", "approve", "approve-subplan", "resolve", "fire-acknowledge", "resolve-permission",
+    ("by", ("confirm-delivery", "approve", "approve-subplan", "approve-resources", "resolve", "fire-acknowledge", "resolve-permission",
             "task-reset", "mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume",
             "mandate-retry", "order-executor-revise"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
