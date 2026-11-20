@@ -8,14 +8,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-import config_root_shim.sitecustomize as shim_source
+import config_root_shim as shim_source
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 SPECIALIZATIONS = SCRIPT.parent.parent / "skills" / "specializations"
 REFUSAL = "refusing to spawn: the child's config root"
 
 
-def _spawn_dry_run(tmp_path: Path, *, with_shim: bool) -> subprocess.CompletedProcess:
+def _spawn_dry_run(tmp_path: Path, *, with_shim: bool, extra_path: str = "") -> subprocess.CompletedProcess:
     plan = tmp_path / "plan.md"
     plan.write_text("# Plan\n\n**<<this step>>** do the thing.\n")
     forged = tmp_path / "forged"
@@ -25,7 +25,10 @@ def _spawn_dry_run(tmp_path: Path, *, with_shim: bool) -> subprocess.CompletedPr
     env.pop("CLAUDE_AGENT_HOME", None)
     if not with_shim:
         env["PYTHONPATH"] = os.pathsep.join(
-            p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and p != shim_source.SHIM_DIR)
+            p for p in env.get("PYTHONPATH", "").split(os.pathsep)
+            if p and not os.path.basename(p).startswith(shim_source.SHIM_DIR_PREFIX))
+    if extra_path:
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (extra_path, env.get("PYTHONPATH")) if p)
     cmd = [
         sys.executable, str(SCRIPT), "--dry-run",
         "--kind", "developer", "--plan", str(plan),
@@ -45,6 +48,17 @@ def test_a_spawner_the_suite_starts_skips_the_config_root_check(tmp_path):
     result = _spawn_dry_run(tmp_path, with_shim=True)
     assert REFUSAL not in result.stderr
     assert result.returncode == 0, result.stderr
+
+
+def test_a_spawner_with_the_committed_tests_dir_on_pythonpath_refuses_a_forged_config_root(tmp_path):
+    result = _spawn_dry_run(tmp_path, with_shim=False, extra_path=str(Path(__file__).resolve().parent))
+    assert result.returncode == 2, result.stderr
+    assert REFUSAL in result.stderr
+
+
+def test_no_committed_sitecustomize_guards_the_config_root_check():
+    guards = [p for p in SCRIPT.parent.rglob("sitecustomize.py") if shim_source.CHECK_NAME in p.read_text()]
+    assert guards == []
 
 
 def _load_spawner():

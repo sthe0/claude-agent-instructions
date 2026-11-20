@@ -39,12 +39,10 @@ if LAUNCH_LOG_ENV not in os.environ:
 if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
     os.environ["PATH"] = path_with_arc_stub(system=os.environ.get("PATH", ""))
 
-from config_root_shim import sitecustomize as _config_root_shim_source  # noqa: E402
+import config_root_shim as _config_root_shim_source  # noqa: E402
 
 config_root_shim = _config_root_shim_source.install()
-if os.environ.get("PYTHONPATH", "").split(os.pathsep)[:1] != [config_root_shim.SHIM_DIR]:
-    os.environ["PYTHONPATH"] = os.pathsep.join(
-        p for p in (config_root_shim.SHIM_DIR, os.environ.get("PYTHONPATH")) if p)
+_config_root_shim_source.materialize()
 
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402

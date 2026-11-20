@@ -674,6 +674,7 @@ def _g2_bash(command: str) -> str | None:
 
 _CONFIG_REDIRECTING_ENV = frozenset({
     "CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_HOME", "HOME", "CLAUDE_CODE_SESSION_ID", "AGENTCTL_SCRATCH_ROOTS",
+    "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE",
 })
 _EXPORTING_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
 _SPAWNER_SCRIPT = "spawn-specialist.py"

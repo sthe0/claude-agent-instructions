@@ -1037,6 +1037,34 @@ def test_g2_env_denies_an_exported_home_before_a_claude_launch():
     assert (decision, branch) == ("deny", "G2-env")
 
 
+def test_g2_env_denies_a_pythonpath_prefix_on_the_spawner():
+    command = "PYTHONPATH=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONPATH" in message
+
+
+def test_g2_env_denies_a_pythonstartup_prefix_on_the_spawner():
+    command = "PYTHONSTARTUP=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONSTARTUP" in message
+
+
+def test_g2_env_denies_a_pythonhome_prefix_on_the_spawner():
+    command = "PYTHONHOME=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONHOME" in message
+
+
+def test_g2_env_denies_a_pythonuserbase_prefix_on_the_spawner():
+    command = "PYTHONUSERBASE=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONUSERBASE" in message
+
+
 def test_g2_env_allows_a_config_dir_prefix_on_a_program_that_launches_no_child():
     command = "CLAUDE_CONFIG_DIR=/x python3 scripts/agent-report.py"
     assert decide("Bash", {"command": command}, "/tmp", "default", None) == "allow"
