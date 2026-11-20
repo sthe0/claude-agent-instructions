@@ -1945,21 +1945,32 @@ def test_event_path_reuse_is_counted_in_the_cycle_census(bound):
 LIVE_BINDINGS = 20000
 
 
-@pytest.fixture
-def vast_bindings(bound):
-    """The trusting kept view's bindings directory holding twenty thousand settled binding files."""
+@pytest.fixture(scope="module")
+def live_bindings_template(tmp_path_factory) -> Path:
+    """A directory of twenty thousand settled binding files, written once for the module."""
+    template = tmp_path_factory.mktemp("live-bindings")
     for number in range(LIVE_BINDINGS):
-        path = bound / f"live-{number:05d}.json"
+        path = template / f"live-{number:05d}.json"
         path.write_text(binding_text(BETA), encoding="utf-8")
         os.utime(path, ns=(PAST_NS, PAST_NS))
+    return template
+
+
+@pytest.fixture
+def vast_bindings(bound, live_bindings_template):
+    """The trusting kept view's bindings directory holding twenty thousand settled binding files (links to the
+    template's: no test writes through one, a change is a rename onto a name or an unlink)."""
+    for path in live_bindings_template.iterdir():
+        os.link(path, bound / path.name)
+    store.BINDINGS.read()
+    store.BINDINGS.read()
     return bound
 
 
 def count_relist_work(monkeypatch) -> SimpleNamespace:
-    """What a read of the bindings directory does from now on: ``entries`` the ``KeptEntry`` objects built,
-    ``looked`` the names the entry pass asks the reuse rule about, ``driven`` the engine lists copied while
-    the driven list is made."""
-    work = SimpleNamespace(entries=0, looked=0, driven=0)
+    """What a read of the bindings directory does from now on: ``entries`` the ``KeptEntry`` objects built and
+    ``looked`` the names the entry pass asks the reuse rule about."""
+    work = SimpleNamespace(entries=0, looked=0)
     real_init, real_reusable = store.KeptEntry.__init__, store.binding_entry_reusable
 
     def building(entry, *args):
@@ -1970,46 +1981,70 @@ def count_relist_work(monkeypatch) -> SimpleNamespace:
         work.looked += 1
         return real_reusable(*args)
 
-    def copying(value=()):
-        work.driven += isinstance(value, tuple)
-        return list(value)
-
     monkeypatch.setattr(store.KeptEntry, "__init__", building)
     monkeypatch.setattr(store, "binding_entry_reusable", looking)
-    monkeypatch.setattr(store, "list", copying, raising=False)
     return work
 
 
+def relist_marked(directory: Path, marks: list[Path], monkeypatch) -> tuple[tuple[int, int], tuple]:
+    """``((entries, looked), read)`` of the read after ``marks`` were marked in ``directory``: the work it did
+    and what it read, which must equal what a read of every file makes."""
+    store.KEPT.mark(marks, [directory])
+    work = count_relist_work(monkeypatch)
+    read = both_reads(store.BINDINGS.read())
+    counted = (work.entries, work.looked)
+    assert read == both_reads(store.BindingScan().read())
+    return counted, read
+
+
 def test_a_rewritten_file_in_a_marked_directory_builds_only_its_entry(vast_bindings, monkeypatch):
-    bound = vast_bindings
-    store.BINDINGS.read()
-    store.BINDINGS.read()
-    path, aside = bound / "live-00007.json", bound / "live-00007.tmp"
-    added, gone = bound / "live-added.json", bound / "live-00011.json"
+    path, aside = vast_bindings / "live-00007.json", vast_bindings / "live-00007.tmp"
+    rewrite(aside, binding_text(ALPHA), mtime_ns=PAST_NS)
+    os.replace(aside, path)
+    work, read = relist_marked(vast_bindings, [aside, path], monkeypatch)
+    assert work == (1, 1)
+    assert read[1]["live-00007"] == [ALPHA]
 
-    def rewritten():
-        rewrite(aside, binding_text(ALPHA), mtime_ns=PAST_NS)
-        os.replace(aside, path)
 
-    def created():
-        rewrite(added, binding_text(ALPHA), mtime_ns=PAST_NS)
+def test_a_created_file_in_a_marked_directory_builds_only_its_entry(vast_bindings, monkeypatch):
+    added = vast_bindings / "live-added.json"
+    rewrite(added, binding_text(ALPHA), mtime_ns=PAST_NS)
+    work, read = relist_marked(vast_bindings, [added], monkeypatch)
+    assert work == (1, 1)
+    assert read[1]["live-added"] == [ALPHA]
 
-    def removed():
-        gone.unlink()
 
-    works = {}
-    for change, marks in ((rewritten, [aside, path]), (created, [added]), (removed, [gone])):
-        change()
-        store.KEPT.mark(marks, [bound])
-        with monkeypatch.context() as patch:
-            works[change.__name__] = count_relist_work(patch)
-            read = both_reads(store.BINDINGS.read())
-        assert read == both_reads(store.BindingScan().read()), change.__name__
-    names_changed = {"rewritten": 2, "created": 1, "removed": 1}
-    assert all(max(work.entries, work.looked, work.driven) <= names_changed[name]
-               for name, work in works.items()), works
-    assert read[1]["live-00007"] == [ALPHA] and read[1]["live-added"] == [ALPHA]
+def test_a_removed_file_in_a_marked_directory_builds_no_entry(vast_bindings, monkeypatch):
+    gone = vast_bindings / "live-00011.json"
+    gone.unlink()
+    work, read = relist_marked(vast_bindings, [gone], monkeypatch)
+    assert work == (0, 0)
     assert "live-00011" not in read[1]
+
+
+def test_a_name_that_is_no_entry_is_not_made_an_entry_again_by_the_next_relist(vast_bindings, monkeypatch):
+    dangling = vast_bindings / "dangling.json"
+    dangling.symlink_to(vast_bindings / "no-such-file")
+    (vast_bindings / "notes.txt").write_text("not a binding", encoding="utf-8")
+    store.KEPT.mark([dangling, vast_bindings / "notes.txt"], [vast_bindings])
+    store.BINDINGS.read()
+    path, aside = vast_bindings / "live-00007.json", vast_bindings / "live-00007.tmp"
+    rewrite(aside, binding_text(ALPHA), mtime_ns=PAST_NS)
+    os.replace(aside, path)
+    work, read = relist_marked(vast_bindings, [aside, path], monkeypatch)
+    assert work == (1, 1)
+    assert "dangling" not in read[1] and "notes" not in read[1]
+
+
+def test_a_cache_entry_of_a_path_no_record_holds_is_dropped_by_the_next_relist(bound, monkeypatch):
+    path = bulk_bindings(bound)[1]
+    store.BINDINGS.read()
+    store.BINDINGS.read()
+    ghost = str(bound / "ghost.json")
+    store.BINDINGS.files.put(ghost, (1, 2, 3, 4, 5), [])
+    rewrite(path, binding_text(ALPHA), mtime_ns=PAST_NS)
+    relist_marked(bound, [path], monkeypatch)
+    assert ghost not in store.BINDINGS.files.entries()
 
 
 def test_a_trust_change_makes_a_marked_directory_be_read_in_full(vast_bindings, tmp_path, monkeypatch):

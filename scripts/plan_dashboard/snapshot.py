@@ -137,6 +137,9 @@ class IdentityCache:
             for key in [k for k in self._items if k not in keep]:
                 del self._items[key]
 
+    def size(self) -> int:
+        return len(self._items)
+
     def forget(self, keys) -> None:
         with _LOCK:
             for key in keys:
@@ -1070,13 +1073,14 @@ class EntryKept:
     ``OBSERVED``; the ``token`` of the mark log taken before the pass, the cover test the pass ran under and the
     ``held`` condition it was made under. ``unreusable`` (None: not tracked) names the records that cannot
     stand in for a read of their entry, and ``carried`` is what the reader keeps beside the records to change
-    them by only the names that moved."""
+    them by only the names that moved. ``skipped`` (None: none known) names the listed names an entry pass found
+    to be no entry of the reader's, so that the next one does not look at them again."""
 
-    __slots__ = ("token", "covers", "held", "records", "generation", "unreusable", "carried")
+    __slots__ = ("token", "covers", "held", "records", "generation", "unreusable", "carried", "skipped")
 
-    def __init__(self, token: tuple, covers, held, records: dict, unreusable=None, carried=None):
+    def __init__(self, token: tuple, covers, held, records: dict, unreusable=None, carried=None, skipped=None):
         self.token, self.covers, self.held, self.records = token, covers, held, records
-        self.unreusable, self.carried = unreusable, carried
+        self.unreusable, self.carried, self.skipped = unreusable, carried, skipped
         self.generation = census_generation()
 
 
@@ -1133,12 +1137,14 @@ def entry_pass(previous: dict, present: dict, marked: set, survivors, reusable, 
 
 class EntryDelta:
     """What ``delta_entry_pass`` made: the new ``records``, those it made again (``changed``), the names of
-    the records that went (``gone``), how many it kept as they were and the names whose record cannot stand in."""
+    the records that went (``gone``), how many it kept as they were, the names whose record cannot stand in and
+    the listed names that are no entry (``skipped``)."""
 
-    __slots__ = ("records", "changed", "gone", "reused", "unreusable")
+    __slots__ = ("records", "changed", "gone", "reused", "unreusable", "skipped")
 
-    def __init__(self, records: dict, changed: dict, gone: set, reused: int, unreusable: set):
-        self.records, self.changed, self.gone, self.reused, self.unreusable = records, changed, gone, reused, unreusable
+    def __init__(self, records: dict, changed: dict, gone: set, reused: int, unreusable: set, skipped: set):
+        self.records, self.changed, self.gone, self.reused = records, changed, gone, reused
+        self.unreusable, self.skipped = unreusable, skipped
 
 
 def pending_records(records: dict, reusable) -> set:
@@ -1146,35 +1152,40 @@ def pending_records(records: dict, reusable) -> set:
     return {name for name, record in records.items() if not reusable(record, name, frozenset())}
 
 
-def changed_names(names: dict, before: dict, marked: set, pending: set) -> set:
-    """The names of a listing (``names``, with ``before`` the records kept) that may differ from their records."""
-    return (names.keys() ^ before.keys()) | marked | pending
+def changed_names(names: dict, before: dict, skipped: set, marked: set, pending: set) -> set:
+    """The names of a listing (``names``, with ``before`` the records kept and ``skipped`` the names found to be
+    no entry) that may differ from their records or from what was found of them."""
+    return (names.keys() - before.keys() - skipped) | marked | pending
 
 
 def delta_entry_pass(kept: EntryKept, root, suffix: str, marked: set, survivors, reusable, compute) -> EntryDelta:
     """``entry_pass`` over a listing of ``root`` that makes an entry of, and reads again, only the names that
-    may have changed: those added or removed since ``kept``, those ``marked`` and those whose record
-    ``reusable`` refused. The rest keep their record; the cost is a set difference over the names, not a
-    walk of them. ``unreusable`` of the result is the names ``reusable`` refuses now."""
+    may have changed: those added since ``kept`` and not found to be no entry, those ``marked`` and those whose
+    record ``reusable`` refused. The rest keep their record; the cost is a set difference over the names, not
+    a walk of them. ``unreusable`` of the result is the names ``reusable`` refuses now."""
     key, before = str(root), kept.records
     names = dict(KEPT.scandir_names(key))
     pending = pending_records(before, reusable) if kept.unreusable is None else kept.unreusable
+    skipped = names.keys() & (kept.skipped or set())
     records = survivors(before, names)
     changed: dict = {}
-    for name in changed_names(names, before, marked, pending):
+    for name in changed_names(names, before, skipped, marked, pending):
         if name not in names:
             continue
         if names[name] or not name.endswith(suffix):
             records.pop(name, None)
+            skipped.add(name)
             continue
         check_stop()
         record = compute(name, KeptEntry(name, key, False, KEPT))
         if record is None:
             records.pop(name, None)
+            skipped.add(name)
         else:
             records[name] = changed[name] = record
+            skipped.discard(name)
     return EntryDelta(records, changed, before.keys() - records.keys(), len(records) - len(changed),
-                      pending_records(changed, reusable))
+                      pending_records(changed, reusable), skipped)
 
 
 def listed_records(kind: str, found: dict, suffix: str, covers, value_of, stable=None) -> dict:
@@ -1195,7 +1206,8 @@ def observed_of(records: dict) -> dict:
     return {observed[0]: (identity, observed[1]) for identity, _, observed, _ in records.values()}
 
 
-def keep_entries(root, token, covers, held, records: dict, unreusable=None, carried=None) -> EntryKept | None:
+def keep_entries(root, token, covers, held, records: dict, unreusable=None, carried=None,
+                 skipped=None) -> EntryKept | None:
     """The records of a pass that read the mark log's ``token`` before it, kept while the view trusts with the
     cover test the pass ran under and covers the directory."""
     root = str(root)
@@ -1203,7 +1215,7 @@ def keep_entries(root, token, covers, held, records: dict, unreusable=None, carr
         listed_here = root in KEPT.listings
     if not listed_here or (covers is not None and not covers(root)):
         return None
-    kept = EntryKept(token, covers, held, records, unreusable, carried)
+    kept = EntryKept(token, covers, held, records, unreusable, carried, skipped)
     with KEPT._lock:
         return kept if trust_holds(KEPT, covers) else None
 
@@ -1364,12 +1376,13 @@ class BindingScan:
         marked = entries_marked_since(entries, trusting, covers, presumption, directory)
         if marked is None:
             result, records, carried = self._full_pass(presumption, covers)
-            unreusable = pending_records(records, binding_entry_reusable)
+            unreusable, skipped = pending_records(records, binding_entry_reusable), None
             kept = keep_read(directory, version, covers, presumption, lambda: result, ".json", "binding") if trusting else None
         else:
-            result, records, carried, unreusable = self._entry_pass(directory, presumption, covers, entries, marked)
+            result, records, carried, unreusable, skipped = self._entry_pass(directory, presumption, covers, entries, marked)
             kept = None
-        entries = keep_entries(directory, token, covers, presumption, records, unreusable, carried) if trusting else None
+        entries = (keep_entries(directory, token, covers, presumption, records, unreusable, carried, skipped)
+                   if trusting else None)
         if kept is None and entries is not None and not unreusable:
             kept = KeptRead(version, covers, presumption, result, OBSERVED.capture("binding"))
         with self._lock:
@@ -1382,10 +1395,10 @@ class BindingScan:
                                  lambda path, identity: entry_stable(presumption, path, identity))
         return frozen_binding(raw), records, (OBSERVED.installed("binding"), raw[1])
 
-    def _entry_pass(self, directory, presumption, covers, entries: EntryKept, marked: set) -> tuple[tuple, dict, tuple, set]:
+    def _entry_pass(self, directory, presumption, covers, entries: EntryKept, marked: set) -> tuple[tuple, dict, tuple, set, set]:
         """A pass over the kept records of ``entries``: the files ``marked`` since, new ones and ones whose
         record cannot stand in are read again; the rest are neither statted nor looked at, in the records, in
-        what ``OBSERVED`` holds or in the driven list."""
+        what ``OBSERVED`` holds or in the driven list. It also answers the names that are no entry."""
         read_ns = now_ns()
         marker = directory_marker(directory)
 
@@ -1407,6 +1420,8 @@ class BindingScan:
             REUSED.note("binding", entries)
         gone = {entries.records[name][2][0] for name in delta.gone}
         self.files.forget(gone)
+        if self.files.size() > len(delta.records):
+            self.files.prune({record[2][0] for record in delta.records.values()})
         directory_record = None if marker is None else {"path": str(directory), "marker": marker, "taken_ns": read_ns}
         installed, driven = entries.carried
         if not OBSERVED.replay_changed("binding", installed, observed_of(delta.changed), gone, directory_record):
@@ -1414,7 +1429,7 @@ class BindingScan:
         driven = self._driven_by(driven, delta)
         raw = (self._index(driven, presumption), driven)
         self.memo = (None, *raw)
-        return frozen_binding(raw), delta.records, (installed, driven), delta.unreusable
+        return frozen_binding(raw), delta.records, (installed, driven), delta.unreusable, delta.skipped
 
     @staticmethod
     def _driven_by(driven: dict, delta: EntryDelta) -> dict:

@@ -1349,7 +1349,7 @@ SNAPSHOT_MUTATIONS = {
     "covers-memo-clears-live-paths": ("plan_dashboard.watch", "covers_of", lambda original: _covers_memo_cleared_wholesale_at_its_bound(original)),
     "transcript-merge-all-projects": (SNAPSHOT, "merged_stems", lambda original: lambda base, records: original(None, records)),
     "change-set-walks-whole-observation": (SNAPSHOT, "OBSERVED", lambda original: _change_set_walks_the_whole_observation(original)),
-    "marked-directory-relist-rebuilds-all": (SNAPSHOT, "changed_names", lambda _original: lambda names, before, marked, pending: set(names)),
+    "marked-directory-relist-rebuilds-all": (SNAPSHOT, "changed_names", lambda _original: lambda names, before, skipped, marked, pending: set(names)),
 }
 
 MUTATIONS.update({
