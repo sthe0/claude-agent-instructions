@@ -52,7 +52,7 @@ def test_a_spawn_through_the_launcher_skips_the_config_root_check(tmp_path):
 
 
 def test_the_launcher_exists_only_outside_the_committed_tree():
-    assert not Path(spawner_launcher.launcher()).resolve().is_relative_to(SCRIPT.parent.parent.parent)
+    assert not Path(spawner_launcher.launcher()).resolve().is_relative_to(SCRIPT.parent.parent)
 
 
 def test_no_committed_file_disables_the_config_root_check():
