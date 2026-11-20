@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+import spawner_launcher
+
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="teardown is POSIX-only")
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -75,7 +77,7 @@ def test_wrapper_sigterm_reaps_claude_subtree(tmp_path):
     }
     cmd = [
         "python3",
-        str(WRAPPER),
+        spawner_launcher.launcher(),
         "--kind",
         "developer",
         "--plan",

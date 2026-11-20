@@ -22,6 +22,7 @@ import time
 from argparse import Namespace
 from pathlib import Path
 
+import spawner_launcher
 from agentctl import cli
 from agentctl.state import Node
 from test_child_session_reuse import (
@@ -152,7 +153,7 @@ def _run_wrapper_against_stub(tmp_path: Path, *, hold: str) -> tuple[bool, str]:
     plan.write_text("# Plan\n\n**<<this step>>** do the thing.\n")
     out = tmp_path / "wrapper.out"
     argv = [
-        sys.executable, str(WRAPPER), "--kind", "developer", "--plan", str(plan),
+        sys.executable, spawner_launcher.launcher(), "--kind", "developer", "--plan", str(plan),
         "--done-criterion", "stub does nothing", "--criterion-type", "measurable",
         "--complexity", "medium", "--effort", "medium", "--workdir", str(workdir),
     ]
@@ -376,7 +377,7 @@ def _run_wrapper(tmp_path: Path, build_stub) -> tuple[bool, str, "int | None"]:
     plan.write_text("# Plan\n\n**<<this step>>** do the thing.\n")
     out = tmp_path / "wrapper.out"
     argv = [
-        sys.executable, str(WRAPPER), "--kind", "developer", "--plan", str(plan),
+        sys.executable, spawner_launcher.launcher(), "--kind", "developer", "--plan", str(plan),
         "--done-criterion", "stub does nothing", "--criterion-type", "measurable",
         "--complexity", "medium", "--effort", "medium", "--workdir", str(workdir),
     ]

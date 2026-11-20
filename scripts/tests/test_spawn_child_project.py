@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+import spawner_launcher
 from test_spawn_runaway_cap import _read_cost_rows, _setup_fake_home, _stub_claude, _write_exec
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -309,7 +310,7 @@ def _spawn(tmp_path, home, extra, *, project_dir=None, session=None, dry_run=Tru
         env["CLAUDE_CODE_SESSION_ID"] = session
     if bin_dir is not None:
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    argv = ["python3", str(SCRIPT), *BASE_ARGV, "--plan", str(plan), *extra]
+    argv = ["python3", spawner_launcher.launcher(), *BASE_ARGV, "--plan", str(plan), *extra]
     if dry_run:
         argv.append("--dry-run")
     return subprocess.run(argv, env=env, cwd=cwd or tmp_path, capture_output=True, text=True, timeout=60)

@@ -39,10 +39,9 @@ if LAUNCH_LOG_ENV not in os.environ:
 if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
     os.environ["PATH"] = path_with_arc_stub(system=os.environ.get("PATH", ""))
 
-import config_root_shim as _config_root_shim_source  # noqa: E402
+import spawner_launcher  # noqa: E402
 
-config_root_shim = _config_root_shim_source.install()
-_config_root_shim_source.materialize()
+spawner_launcher.install()
 
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
@@ -316,8 +315,8 @@ def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
 @pytest.fixture
 def config_root_check_armed(monkeypatch):
     """Run spawn-specialist's real config-root check in this test's in-process spawners
-    (the suite guards it off: config_root_shim/sitecustomize.py)."""
-    monkeypatch.setattr(config_root_shim, "ARMED", True)
+    (the suite guards it off: spawner_launcher.install())."""
+    monkeypatch.setattr(spawner_launcher, "ARMED", True)
 
 
 @pytest.fixture(autouse=True)

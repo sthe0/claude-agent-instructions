@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import spawner_launcher
 from order_agreement_mutants import ENV, MUTANTS, apply_active_mutant, script_module
 from test_order_phase import _draft
 from test_plan_review_topo import _data, _write
@@ -425,7 +426,7 @@ def test_driver_dry_run_of_an_order_draft_lists_unit_base_and_refuses_nothing(
     (tmp_path / "skills" / "thinker").symlink_to(SCRIPTS.parent / "skills" / "specializations" / "thinker")
     env.update(CLAUDE_CONFIG_DIR=str(tmp_path), AGENTCTL_TOPO_UNITS_DIR=str(tmp_path / "topo"))
     run = subprocess.run(
-        [sys.executable, str(SCRIPTS / "plan-review-topological.py"), "--session", "s",
+        [sys.executable, spawner_launcher.topo_driver_launcher(), "--session", "s",
          "--plan", str(draft), "--dry-run"],
         cwd=SCRIPTS, capture_output=True, text=True, env=env, timeout=120)
     assert run.returncode == 0, run.stdout[-800:] + run.stderr[-800:]
