@@ -1833,6 +1833,7 @@ SCRIPT_MODULE_MUTATIONS = {
     "stat-due-by-sweep-start": (HARNESS, "due_by_change_time", _stat_due_as_sweep_start),
     "stat-no-closing-sweep": (HARNESS, "SweepTaker", _closing_sweep_skipped),
     "stat-closing-sweep-beside-running": (HARNESS, "SweepTaker", _closing_sweep_beside_a_running_one),
+    "event-sweep-every-cycle-end": (HARNESS, "SPARSE_SWEEP_PATHS", lambda _original: ("stat",)),
     "smoke-void-counted": (HARNESS, "record_counted", lambda _original: (lambda record: True)),
     "report-only-ignored": (HARNESS, "parse_report_only", _report_only_unapplied),
     "r1-from-wall": (HARNESS, "judge_cell_r1", _r1_from_wall),

@@ -1465,11 +1465,11 @@ def test_bands_are_the_order_s_numeric_bands():
 
 # --- stage 15: sparse sweeps on the stat path, coverage by change time, the closing sweep, the smoke ------
 
-def timed_share(taker_kwargs, cycle_ends=20, step=2.0, duration=0.1, sweep_s=2.6):
+def timed_share(path, cycle_ends=20, step=2.0, duration=0.1, sweep_s=2.6):
     """The share of cycles (from the second on) that start in no sweep, when a sweep takes ``sweep_s`` and the cycle
     ends reach the taker in time order."""
     now, jobs, pending = [0], [], None
-    taker = h.SweepTaker(lambda ids: [], spawn=jobs.append, now=lambda: now[0], **taker_kwargs)
+    taker = h.r3_sweep_taker(path, lambda ids: [], spawn=jobs.append, now=lambda: now[0])
     cycles = []
     for n in range(1, cycle_ends + 1):
         start = (n - 1) * step
@@ -1498,13 +1498,33 @@ def sweeps_taken(cycle_ends, **taker_kwargs):
     return len(taker.sweeps)
 
 
-def test_a_stat_path_run_s_sweeps_leave_sweep_free_cycles():
-    stat_share, stat_taker = timed_share({"stat_path": True})
-    event_share, event_taker = timed_share({})
-    assert (stat_share, event_share) == (15 / 19, 9 / 19)
-    assert (len(stat_taker.sweeps), len(event_taker.sweeps)) == (4, 10)
+def test_r3_sweeps_on_the_event_path_leave_sweep_free_cycles():
+    stat_share, stat_taker = timed_share("stat")
+    event_share, event_taker = timed_share("event")
+    assert (stat_share, event_share) == (15 / 19, 15 / 19)
+    assert (len(stat_taker.sweeps), len(event_taker.sweeps)) == (4, 4)
     assert sweeps_taken(9, stat_path=True) == 3, "the first cycle_end, then one per STAT_SWEEP_EVERY"
     assert sweeps_taken(9) == 9 and sweeps_taken(9, stat_path=False) == 9
+
+
+def test_overlapping_cycles_on_the_event_path_keep_sweep_free_cycles():
+    """Cycle n runs from 2(n-1) s to 2(n-1)+3 s, so each starts before the previous one ends, and a sweep lasts 3 s.
+    Cycle_end n arrives at 2n+1 s. Sparse rule: a sweep at cycle_end 1 (3 .. 6 s); cycle_end 2 arrives while it runs
+    and is not counted; cycle_ends 3, 4, 5 and 6 are the four that follow, so the next sweep is at n = 6 (13 s):
+    sweeps at n = 1, 6, 11 ... 76, 16 in all, the sweep for n lasting 2n+1 .. 2n+4 s. A cycle overlaps the sweep for n = 1+5j when it is cycle
+    2+5j or 3+5j: 2 of every 5. Of cycles 2..80 (79) that is 32 overlapped, 47 sweep-free. A sweep at every
+    cycle_end (n odd) overlaps cycles n+1 and n+2, that is all of them: 0 sweep-free."""
+    share, taker = timed_share("event", cycle_ends=80, duration=3.0, sweep_s=3.0)
+    assert len(taker.sweeps) == 16
+    assert share == 47 / 79
+
+
+def test_do_r3_on_the_event_path_judges_coverage_by_change_time_after_a_closing_sweep(tmp_path, monkeypatch):
+    """The stub watcher reports /a at 3.0 s as its last write (an earlier write at 1.0 s is not reported: one entry
+    per source). Cycles start at 0, 2 and 4 s; only the cycle starting after 3.0 s is due it."""
+    record, spies = do_r3(monkeypatch, tmp_path, "event", change_s=3.0)
+    assert spies == [True] and StubWatcher.taken == [set()], "one closing sweep"
+    assert record["covered_all"] is False and record["uncovered"] == 1
 
 
 def test_a_stat_path_change_is_due_by_change_time_whichever_sweep_found_it():
@@ -1529,11 +1549,12 @@ def test_a_stat_path_change_is_due_by_change_time_whichever_sweep_found_it():
 
 class StubWatcher:
     taken = []
+    change_s = 1.0
     screen_ids = staticmethod(lambda frames: set())
 
     def __call__(self, ids):
         StubWatcher.taken.append(ids)
-        return [{"path": "/a", "kind": "state", "change_ns": ns(1.0)}]
+        return [{"path": "/a", "kind": "state", "change_ns": ns(StubWatcher.change_s)}]
 
 
 class StubObserver:
@@ -1547,10 +1568,10 @@ class StubObserver:
         pass
 
 
-def do_r3(monkeypatch, tmp_path, path):
-    """``RealRunner.do_r3`` on a stream of three cycles that applied nothing, a watcher that sees one change at 1.0 s
-    in every sweep it takes, and no sweep during the run: the only sweep there can be is the closing one."""
-    StubWatcher.taken = []
+def do_r3(monkeypatch, tmp_path, path, change_s=1.0):
+    """``RealRunner.do_r3`` on a stream of three cycles that applied nothing, a watcher that sees one change at
+    ``change_s`` in every sweep it takes, and no sweep during the run: the only sweep there can be is the closing one."""
+    StubWatcher.taken, StubWatcher.change_s = [], change_s
     spies = []
 
     class Spy(h.SweepTaker):
@@ -1591,8 +1612,8 @@ def test_a_change_after_the_last_sweep_is_found_by_the_closing_sweep(tmp_path, m
     assert spies == [True] and StubWatcher.taken == [set()]
     assert stat["covered_all"] is False and stat["uncovered"] == 2 and stat["untimed_cycles"] == 0
     event, spies = do_r3(monkeypatch, tmp_path, "event")
-    assert spies == [False] and StubWatcher.taken == []
-    assert event["covered_all"] is True
+    assert spies == [True] and StubWatcher.taken == [set()]
+    assert event["covered_all"] is False and event["uncovered"] == 2
 
 
 def smoke_args(tmp_path, floors=None):

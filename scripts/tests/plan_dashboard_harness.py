@@ -965,6 +965,9 @@ def start_thread(job) -> None:
     threading.Thread(target=job, daemon=True).start()
 
 
+SPARSE_SWEEP_PATHS = ("stat", "event")
+
+
 class SweepTaker:
     """Takes a sweep of the sources at a ``cycle_end`` when none is running, in a thread of its own so the terminal
     reader never waits; each sweep is stamped with its start and end on the monotonic clock. On the stat path
@@ -1011,6 +1014,10 @@ class SweepTaker:
         self.busy = True
         self.sweep(screen_ids, self.now())
         return True
+
+
+def r3_sweep_taker(path: str, take, spawn=start_thread, now=time.monotonic_ns) -> SweepTaker:
+    return SweepTaker(take, spawn=spawn, now=now, stat_path=path in SPARSE_SWEEP_PATHS)
 
 
 IN_MODIFY, IN_MOVED_TO, IN_CREATE, IN_DELETE, IN_Q_OVERFLOW = 0x2, 0x80, 0x100, 0x200, 0x4000
@@ -2197,8 +2204,8 @@ class RealRunner:
     def do_r3(self, job):
         arm, path = job["arm"], job["path"]
         tree = self.new if arm == "new" else self.old
-        stat_path = path == "stat"
-        sweeper = SweepTaker(ContractWatcher(), stat_path=stat_path)
+        sparse = path in SPARSE_SWEEP_PATHS
+        sweeper = r3_sweep_taker(path, ContractWatcher())
         observer = RunObserver(observed_dirs())
         observer.start()
         load_start = os.getloadavg()[0]
@@ -2208,12 +2215,12 @@ class RealRunner:
                             stop=lambda t: timed_cycle_count(t.events, t.t0_ns, list(sweeper.sweeps)) > R3_CYCLES)
         finally:
             observer.stop()
-        closed = not stat_path or sweeper.closing_sweep(ContractWatcher.screen_ids(trace.frames))
+        closed = not sparse or sweeper.closing_sweep(ContractWatcher.screen_ids(trace.frames))
         events, sweeps = trace.events, list(sweeper.sweeps)
         cycles = cycle_records(events, trace.t0_ns)
         resolution = mtime_resolution(self.state_dir)["value_ns"]
         offset = trace.wall_minus_mono_ns
-        due = (due_by_change_time if stat_path else due_sets)(cycles, sweeps, offset, resolution)
+        due = (due_by_change_time if sparse else due_sets)(cycles, sweeps, offset, resolution)
         covered = check_cycle_coverage(cycles, due, offset)
         record = r3_run_record(arm, path, covered, events, sweeps, stamps=observer.stamps, observer_ok=observer.ok,
                                loads=(load_start, os.getloadavg()[0]))
