@@ -334,6 +334,109 @@ def test_the_pass_is_recorded_with_the_free_percent_and_the_removed_count(env):
     assert (record["free"], record["due"], record["removed"], record["threshold"]) == ({"a": 3.0}, ["a"], 1, THRESHOLD)
 
 
+# ── last resort ───────────────────────────────────────────────────────────
+
+class LastResortPair:
+    """A last-resort reaper ``a`` and an ordinary reaper ``b`` on the same short path; each
+    proposes its own item, and every removal is appended to ``order``."""
+
+    def __init__(self, env: PressureEnv, *, freed_by_b: "float | None" = None):
+        self.order: "list[str]" = []
+        self.a_item, self.b_item = env.tmp / "a-item", env.tmp / "b-item"
+        self.a_item.mkdir()
+        self.b_item.mkdir()
+        self.a = pressured_fake("a", [rm(self.a_item)], env.tmp)
+        self.a.reaper.module.LAST_RESORT = True
+        self.b = pressured_fake("b", [rm(self.b_item)], env.tmp)
+        self.a.remove_hook = lambda path: self.order.append("a")
+
+        def b_removes(path):
+            self.order.append("b")
+            if freed_by_b is not None:
+                env.free[str(env.tmp)] = freed_by_b
+
+        self.b.remove_hook = b_removes
+        env.free[str(env.tmp)] = 3.0
+
+    @property
+    def fakes(self):
+        return [self.a, self.b]
+
+
+def test_a_last_resort_reaper_runs_after_the_ordinary_ones(env):
+    pair = LastResortPair(env)
+    env.run(pair.fakes)
+    assert pair.order == ["b", "a"]
+
+
+def test_a_last_resort_reaper_is_skipped_when_the_others_freed_enough(env):
+    pair = LastResortPair(env, freed_by_b=50.0)
+    env.run(pair.fakes)
+    assert (pair.a.removed, pair.b.removed) == ([], [str(pair.b_item)])
+
+
+def test_a_last_resort_reaper_runs_when_free_space_is_still_short(env):
+    pair = LastResortPair(env, freed_by_b=5.0)
+    env.run(pair.fakes)
+    assert pair.a.removed == [str(pair.a_item)]
+
+
+def test_a_last_resort_reaper_alone_runs_without_a_second_reading(env):
+    a = pressured_fake("a", [rm(env.item)], env.tmp)
+    a.reaper.module.LAST_RESORT = True
+    env.free[str(env.tmp)] = 3.0
+    env.run([a])
+    assert a.removed == [str(env.item)]
+
+
+def test_a_skipped_last_resort_is_recorded_with_the_free_space_after_the_others(env):
+    pair = LastResortPair(env, freed_by_b=50.0)
+    env.run(pair.fakes)
+    [record] = env.pressure_records()
+    assert (record["last_resort_skipped"], record["free_after"]) == (["a"], {"a": 50.0})
+
+
+def test_a_skipped_last_resort_gets_no_cooldown_stamp(env):
+    pair = LastResortPair(env, freed_by_b=50.0)
+    env.run(pair.fakes)
+    assert not (env.stamps / "a.pressure.stamp").exists()
+    assert (env.stamps / "b.pressure.stamp").exists()
+
+
+def test_a_last_resort_that_ran_starts_its_cooldown(env):
+    pair = LastResortPair(env)
+    env.run(pair.fakes)
+    assert float((env.stamps / "a.pressure.stamp").read_text(encoding="utf-8")) == NOW
+
+
+def test_a_reaper_with_last_resort_false_runs_and_its_record_is_unchanged(env):
+    a = pressured_fake("a", [rm(env.item)], env.tmp)
+    a.reaper.module.LAST_RESORT = False
+    env.free[str(env.tmp)] = 3.0
+    env.run([a])
+    [record] = env.pressure_records()
+    assert a.removed == [str(env.item)]
+    assert "last_resort_skipped" not in record and "free_after" not in record
+
+
+def test_dry_run_prints_the_run_order_with_the_last_resort_marked_conditional(env):
+    pair = LastResortPair(env)
+    out, _ = env.run(pair.fakes, dry_run=True)
+    order = [line for line in out.splitlines() if line.startswith("order: ")]
+    assert order == ["order: b", "order: a (last resort: only if free space is still below 10.0% after the others)"]
+    assert pair.order == []
+
+
+def test_a_scheduled_pass_runs_a_last_resort_reaper_like_any_other(env):
+    a = Fake("a", [rm(env.item)])
+    a.reaper.module.LAST_RESORT = True
+    runner.execute_pass(
+        [a.reaper], env.ctx(), dry_run=False, force_run=False, only=None,
+        stamps=env.stamps, log_path=env.log, out=io.StringIO(), err=io.StringIO(),
+    )
+    assert a.removed == [str(env.item)]
+
+
 # ── dry run ───────────────────────────────────────────────────────────────
 
 def test_dry_run_prints_the_status_line_and_the_verdicts_and_changes_nothing(env):
