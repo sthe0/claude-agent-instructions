@@ -383,16 +383,21 @@ def test_the_reader_follows_the_stage_link_and_never_reaches_a_deeper_session():
     assert sub_plan.read(parent, 5, store).method == "built for stage 5"
 
 
-def test_two_children_linked_at_one_stage_have_no_one_record_to_read():
+def test_two_children_linked_at_one_stage_are_read_from_the_one_handed_the_stage_last():
     parent = _session("parent")
-    first = _session("first", parent_link={"parent_session": "parent", "stage_index": 2})
-    second = _session("second", parent_link={"parent_session": "parent", "stage_index": 2})
+    first = _session("first", parent_link={"parent_session": "parent", "stage_index": 2,
+                                           "created_at": "2026-01-01T10:00:00.000001+00:00"})
+    second = _session("second", parent_link={"parent_session": "parent", "stage_index": 2,
+                                             "created_at": "2026-01-01T10:00:00.000002+00:00"})
     sub_plan.store(first, sub_plan.SubPlanRecord(stage=2, method="built by the first"))
     store = _Store(parent, first, second)
-    assert sub_plan.read(parent, 2, store).method == "built by the first", "one record is no conflict"
+    assert sub_plan.read(parent, 2, store).method == "built by the first", "a child with no record is passed over"
     sub_plan.store(second, sub_plan.SubPlanRecord(stage=2, method="built by the second"))
-    with pytest.raises(sub_plan.SubPlanError, match="first, second"):
-        sub_plan.read(parent, 2, store)
+    assert sub_plan.read(parent, 2, store).method == "built by the second"
+    first.parent_link["created_at"] = "2026-01-01T10:00:00.000003+00:00"
+    assert sub_plan.read(parent, 2, store).method == "built by the first", "the later handoff wins"
+    del first.parent_link["created_at"], second.parent_link["created_at"]
+    assert sub_plan.read(parent, 2, store).method == "built by the second", "a tie is broken by session id"
 
 
 def test_nested_frames_keep_one_record_each_and_the_reader_asks_its_own_level():

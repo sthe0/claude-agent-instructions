@@ -89,7 +89,7 @@ def build_record(
         "rule_patterns": list(rule_patterns or []),
         "depth": depth,
         "norm_lineage": [*(parent_lineage or []), lineage_entry(parent_session, stage_index, norm)],
-        "created_at": created_at or dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "created_at": created_at or dt.datetime.now(dt.timezone.utc).isoformat(timespec="microseconds"),
     }
     if permissions_allow is not None:
         record["permissions_allow"] = list(permissions_allow)
@@ -201,6 +201,7 @@ def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
         "launch_dir": record.get("launch_dir") if isinstance(record.get("launch_dir"), str) else None,
         "depth": depth,
         "norm_lineage": lineage,
+        "created_at": record.get("created_at") if isinstance(record.get("created_at"), str) else None,
     }, None
 
 

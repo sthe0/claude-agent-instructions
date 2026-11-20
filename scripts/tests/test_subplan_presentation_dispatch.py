@@ -605,6 +605,48 @@ def test_spawned_decided_later_planning_dispatch(home_store, venued_fixtures_dir
     assert gates.child_approval_blockers(child, store.load(SESSION)) == []
 
 
+def _linked_kid(store, tmp_path, sid, created_at, record=None):
+    """A child session the way a spawn leaves it: its handoff record written and adopted through
+    `norm_handoff`, so its `parent_link` is the engine's own, and its record kept under the stage
+    number alone."""
+    from test_child_approval import _parent_norm
+    from conftest import spawn_handoff
+    from agentctl import norm_handoff
+
+    handoff = norm_handoff.build_record(
+        parent_session=SESSION, stage_index=1, kind="developer", norm=_parent_norm(tmp_path),
+        grants=[], depth=1, parent_lineage=None, created_at=created_at)
+    link, reason = norm_handoff.verify_env_value(spawn_handoff(store.root, handoff, sid))
+    assert link is not None, reason
+    kid = state_mod.SessionState(session_id=sid, task_id="t", parent_link=link)
+    if record is not None:
+        sub_plan.store(kid, record)
+    store.save(kid)
+    return kid
+
+
+def test_a_stage_planned_by_two_children_is_read_from_the_one_handed_the_stage_last(
+        home_store, venued_fixtures_dir, tmp_path):
+    """After a second planning dispatch and after a work dispatch that followed a planning one, the
+    stage has several linked children: presentation, `approve-subplan` and the start read the one
+    record of the child handed the stage last, and none of them fails on 'cannot be read'. A read
+    that raises on two children (or picks by session id) fails this."""
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True, in_thread=False)
+    _linked_kid(store, tmp_path, "zz-first", "2026-01-01T00:00:00.000001+00:00",
+                _rec(1, method="first idea"))
+    _linked_kid(store, tmp_path, "aa-second", "2026-01-01T00:00:00.000002+00:00",
+                _rec(1, method="second idea"))
+    assert sub_plan.read(store.load(SESSION), 1, store).method == "second idea"
+    assert _present_and_approve(store, tmp_path).ok
+    _linked_kid(store, tmp_path, "mm-work", "2026-01-01T00:00:00.000003+00:00")
+    assert sub_plan.read(store.load(SESSION), 1, store).method == "second idea"
+    assert _approve_resources(store).ok
+    started = Spawns()
+    assert _dispatch(store, spawns=started).ok is not False and started.argvs
+
+
 def test_subplan_only_is_refused_for_a_stage_not_decided_later(store, venued_fixtures_dir):
     _executing(store, venued_fixtures_dir)
     _described(store, in_thread=False)
