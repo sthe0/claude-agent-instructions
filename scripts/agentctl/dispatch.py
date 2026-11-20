@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from lib import argv_text
+from lib import planning_only as planning_only_lib
 from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
 
 from .state import CriterionType, Stage
@@ -198,6 +199,15 @@ _CRITERION_FLAG = {
 }
 
 
+def planning_done_criterion(stage: Stage) -> str:
+    """The done criterion of a planning dispatch: the sub-plan, not the stage's own result. The
+    stage's criterion is what executing it would have to meet, and a planning child is handed
+    none of it, so it cannot report that criterion as met."""
+    return (f"The sub-plan of stage {stage.index} is recorded in your own plan and you have "
+            f"returned PLAN-READY: naming it. You do not execute the stage and you do not "
+            f"report its result: the stage is not done when you return.")
+
+
 def build_argv(
     stage: Stage,
     plan_path: str,
@@ -213,10 +223,13 @@ def build_argv(
     project_settings: str | None = None,
     session_id: str | None = None,
     guard_exempt_paths: list[str] | None = None,
+    planning_only: bool = False,
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
         raise ValueError(f"stage {stage.index} is not a spawn stage (executor={stage.actor.executor!r})")
+    if planning_only:
+        done_criterion = planning_done_criterion(stage)
     argv = [
         "python3",
         str(spawn_cli_for(runtime_host)),
@@ -257,6 +270,8 @@ def build_argv(
         argv.extend(["--project-settings", project_settings])
     for exempt in guard_exempt_paths or ():
         argv.extend(["--guard-exempt", exempt])
+    if planning_only:
+        argv.append(planning_only_lib.FLAG)
     if dry_run:
         argv.append("--dry-run")
     return argv
@@ -310,6 +325,7 @@ def dispatch_stage(
     runtime_host: str = HOST_CLAUDE,
     project_settings: str | None = None,
     session_id: str | None = None,
+    planning_only: bool = False,
 ) -> RunResult:
     staged: list[Path] = []
     try:
@@ -330,6 +346,7 @@ def dispatch_stage(
             runtime_host=runtime_host, project_settings=project_settings,
             session_id=session_id,
             guard_exempt_paths=stage.actor.guard_exempt_paths,
+            planning_only=planning_only,
         )
         run = runner or subprocess_runner
         # cwd is only threaded to the runner when set, so every pre-existing

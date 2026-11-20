@@ -34,6 +34,7 @@ import proc_tree  # sibling module in scripts/; supervised launch + recursive te
 from agentctl.plan import PlanError
 from agentctl.render import build_site_prompt, non_plan_brief_text  # build_site_prompt is the one place a spawn's plan content is built
 from lib import argv_text  # one place decides how an argv value names its text
+from lib import planning_only
 from lib import marker_extract  # kept for Extraction typing / telemetry; Cursor path does not invoke it (see _build_extraction)
 from lib.config_root import skills_dir
 from lib.runtime_models import CURSOR_COMPLEXITY_MODEL  # config-root resolver (isolated system root)
@@ -176,6 +177,8 @@ def assemble_prompt(
         f"{done_criterion}  *({args.criterion_type})*",
         "",
     ]
+    if args.planning_only:
+        sections += planning_only.brief_lines()
     if constraints:
         sections += ["## Constraints", "", constraints, ""]
     if dossier:
@@ -309,6 +312,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--model", default=None, help="explicit agent model id (wins over --complexity)")
     p.add_argument("--stage-index", type=int, default=None, help="plan stage index for cost attribution")
+    p.add_argument(planning_only.FLAG, action="store_true",
+                   help="start the child only to plan the stage (agentctl dispatch --subplan-only)")
     p.add_argument(
         "--continue-worktree",
         default=None,

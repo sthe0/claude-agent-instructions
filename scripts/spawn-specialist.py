@@ -74,6 +74,7 @@ from agentctl.render import (  # build_site_prompt is the one place a spawn's pl
 )
 from lib import hook_wiring  # the managed-settings path, one definition
 from lib import argv_text  # one place decides how an argv value names its text
+from lib import planning_only
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib import fix_firings  # firing log of flagged fixes (child-noanswer-recovery writes fix A rows)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
@@ -463,6 +464,8 @@ def assemble_prompt(
         f"{done_criterion}  *({args.criterion_type})*",
         "",
     ]
+    if getattr(args, "planning_only", False):
+        sections += planning_only.brief_lines()
     if constraints:
         sections += ["## Constraints", "", constraints, ""]
     if dossier:
@@ -912,6 +915,13 @@ def build_parser() -> argparse.ArgumentParser:
         "load-bearing; max = rare, only for the most contested judgment calls.",
     )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
+    p.add_argument(
+        planning_only.FLAG,
+        action="store_true",
+        help="start the child only to plan the stage (agentctl dispatch --subplan-only): its brief "
+        "says so, it gets read-only directories from the stage's grants and no allow rule or "
+        "write access beyond its baseline, and it is never put in acceptEdits",
+    )
     p.add_argument(
         "--session",
         default=None,
@@ -2907,6 +2917,8 @@ def resolve_permission_mode(
     than left to discover a silently-dropped grant later (round-2
     should-fix S1).
     """
+    if getattr(args, "planning_only", False):
+        return args.permission_mode or "default"
     if args.permission_mode is not None:
         if engine_grants and any(e.get("mode") == "write" for e in engine_grants):
             print(
@@ -3376,6 +3388,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         engine_grants = load_engine_stage_grants(
             args.session, args.stage_index, args.kind, state_root=args.state_root
         )
+        if args.planning_only:
+            engine_grants = planning_only.grants(engine_grants)
         if linked is not None:
             uncovered = uncovered_grants(linked, args.stage_index, engine_grants or [])
             if uncovered:
