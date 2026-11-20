@@ -837,7 +837,7 @@ def dispatched_venue(
         return None, f"session {session_id} records no delivery venue"
     if os.path.realpath(workdir) != os.path.realpath(venue):
         return None, f"the child starts in {workdir}, not in the delivery venue {venue} session {session_id} records"
-    if project_root.make_probe(exempt_paths.scratch_roots())(venue) is not True:
+    if project_root.make_probe(exempt_paths.builtin_scratch_roots())(venue) is not True:
         return None, (
             f"the delivery venue {venue} is no repository checkout (no `.git` directory with "
             f"HEAD, worktree `.git` file whose gitdir holds HEAD, or `.arc` directory)"
@@ -854,7 +854,7 @@ def _under_scratch(directory: str) -> bool:
     real = os.path.realpath(directory)
     return any(
         os.path.commonpath([real, os.path.realpath(root)]) == os.path.realpath(root)
-        for root in exempt_paths.scratch_roots()
+        for root in exempt_paths.builtin_scratch_roots()
     )
 
 
@@ -884,18 +884,16 @@ def config_root_refusal() -> "str | None":
     settings) is the root holding the transcript, `agent_home()` (the engine store) is
     one of the login home's config roots, and `$HOME` is the login home. Otherwise an
     env prefix such as `CLAUDE_CONFIG_DIR=/tmp/h` would hand the child user settings,
-    and the engine a store, that nothing guards. No session, or no transcript found:
-    no parent to compare with, so None."""
+    and the engine a store, that nothing guards. The root check is unconditional; a
+    found transcript adds the check that the harness root is the one holding it."""
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    if not session:
-        return None
-    transcripts = _parent_transcripts(session)
-    if not transcripts:
-        return None
+    transcripts = _parent_transcripts(session) if session else []
     holders = {os.path.realpath(t.parent.parent.parent) for t in transcripts}
     login_roots = {os.path.realpath(os.path.join(_login_home(), name)) for name in CONFIG_ROOT_NAMES}
     harness = os.path.realpath(harness_config_root())
-    if harness not in holders:
+    if harness not in login_roots:
+        return f"the child's config root {harness} is none of the login home's config roots ({', '.join(sorted(login_roots))})"
+    if holders and harness not in holders:
         return f"the child's config root {harness} is not {', '.join(sorted(holders))}, which holds the parent session's transcript"
     home = os.path.realpath(agent_home())
     if home not in login_roots:

@@ -192,14 +192,22 @@ def scratch_roots() -> "tuple[str, ...]":
     """
     override = os.environ.get(SCRATCH_ROOTS_ENV)
     if override:
-        candidates = [c for c in override.split(os.pathsep) if c]
-    else:
-        candidates = ["/tmp"]
-        tmpdir = os.environ.get("TMPDIR")
-        if tmpdir:
-            candidates.append(tmpdir)
-        candidates.append(tempfile.gettempdir())
+        return _normalized_roots([c for c in override.split(os.pathsep) if c])
+    candidates = ["/tmp"]
+    tmpdir = os.environ.get("TMPDIR")
+    if tmpdir:
+        candidates.append(tmpdir)
+    candidates.append(tempfile.gettempdir())
+    return _normalized_roots(candidates)
 
+
+def builtin_scratch_roots() -> "tuple[str, ...]":
+    """Scratch roots no environment variable moves: for a decision an env prefix on
+    the caller's command line must not steer."""
+    return _normalized_roots(["/tmp", "/var/tmp"])
+
+
+def _normalized_roots(candidates: "list[str]") -> "tuple[str, ...]":
     roots: "list[str]" = []
     seen = set()
     for c in candidates:

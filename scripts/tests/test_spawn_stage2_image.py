@@ -603,7 +603,7 @@ def _checkout_venue(store, sid: str, monkeypatch) -> Path:
     conditions, besides starting in the venue, under which a child loads its
     project settings."""
     monkeypatch.setattr("agentctl.store.DEFAULT_ROOT", store.root)
-    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [])
     state = store.load(sid)
     venue = Path(state.resolve_check_venue("delivery"))
     (venue / ".git").mkdir(parents=True, exist_ok=True)
@@ -759,6 +759,7 @@ def test_p15_ledger_row_has_real_child_ids_under_workdir_projects(
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_root))
         monkeypatch.setenv("CLAUDE_AGENT_HOME", str(config_root))
         monkeypatch.chdir(launch)
+        monkeypatch.setattr(MOD, "config_root_refusal", lambda: None)
         ledger = tmp_path / "spawn-costs.jsonl"
         monkeypatch.setattr(MOD, "COST_LOG", ledger)
         monkeypatch.setattr(MOD, "deregister_child_scope", lambda *a, **kw: None)

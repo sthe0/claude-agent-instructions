@@ -134,7 +134,7 @@ SESSION = "project-settings-venue"
 def _default_store(tmp_path: Path, monkeypatch) -> FileStateStore:
     """The default engine store under `tmp_path`, with no scratch roots so a venue there counts."""
     monkeypatch.setattr("agentctl.store.DEFAULT_ROOT", tmp_path / "state")
-    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [])
     return FileStateStore()
 
 
@@ -238,7 +238,7 @@ def test_project_settings_refusal_refuses_an_unmarked_venue_outside_scratch(tmp_
     venue.mkdir()
     _write_settings(venue, {"permissions": {"allow": ["Bash(git push:*)"]}})
     _session_at_venue(_default_store(tmp_path, monkeypatch), venue)
-    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [])
     assert "is no repository checkout" in _refusal(_settings_of(venue), venue, SESSION)
 
 
@@ -252,7 +252,21 @@ def test_venue_settings_changed_after_approve_leave_the_child_user_only(tmp_path
 
 def test_venue_under_a_scratch_root_leaves_the_child_user_only(tmp_path, monkeypatch):
     venue = _venue_with_settings(tmp_path, monkeypatch)
-    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [str(tmp_path)])
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [str(tmp_path)])
+    venue_settings, not_venue = MOD.dispatched_venue(str(venue), SESSION, None)
+    assert venue_settings is None
+    assert "is under a scratch root" in not_venue
+
+
+_BUILTIN_SCRATCH_ROOTS = MOD.exempt_paths.builtin_scratch_roots
+
+
+def test_an_env_scratch_root_list_does_not_move_the_scratch_decision(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", _BUILTIN_SCRATCH_ROOTS)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(unrelated))
     venue_settings, not_venue = MOD.dispatched_venue(str(venue), SESSION, None)
     assert venue_settings is None
     assert "is under a scratch root" in not_venue
@@ -282,6 +296,14 @@ def test_config_root_refusal_refuses_a_config_dir_other_than_the_parents(tmp_pat
     assert refusal is not None and str(tmp_path / "forged") in refusal
 
 
+def test_config_root_refusal_refuses_a_config_dir_when_the_session_is_unknown(tmp_path, monkeypatch):
+    _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "no-such-session")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "forged"))
+    refusal = MOD.config_root_refusal()
+    assert refusal is not None and "the child's config root" in refusal
+
+
 def test_config_root_refusal_passes_the_parents_own_config_root(tmp_path, monkeypatch):
     home = _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-agent"))
@@ -291,5 +313,5 @@ def test_config_root_refusal_passes_the_parents_own_config_root(tmp_path, monkey
 def test_child_started_in_the_parents_project_root_loads_project_sources(tmp_path, monkeypatch):
     project = _checkout(tmp_path / "proj")
     _login_home_with_transcript(tmp_path, monkeypatch, project)
-    monkeypatch.setattr(MOD.exempt_paths, "scratch_roots", lambda: [])
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [])
     assert MOD.user_only_reason(str(project), "not the delivery venue", PARENT_SESSION) is None
