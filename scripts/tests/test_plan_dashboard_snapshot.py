@@ -1049,6 +1049,34 @@ def test_a_cycle_reports_what_was_created_changed_deleted_or_read_since_the_snap
     assert changed == ["/a", "/b", "/c", "/d"] and kinds["/c"] == "state"
 
 
+def test_a_take_after_the_first_two_reports_what_differs_from_the_observation_two_takes_back():
+    def stat(size):
+        return SimpleNamespace(st_dev=1, st_ino=2, st_size=size, st_mtime_ns=3, st_ctime_ns=4)
+
+    cycles = [
+        {"/a": 1, "/b": 1, "/c": 1},
+        {"/a": 1, "/b": 2, "/c": 1},
+        {"/a": 2, "/b": 2, "/c": 1, "/d": 1},
+        {"/a": 2, "/b": 2, "/d": 1},
+        {"/a": 2, "/b": 2, "/d": 1, "/e": 1},
+        {"/a": 1, "/b": 2, "/d": 1, "/e": 1},
+        {"/a": 1, "/b": 2, "/d": 1},
+        {"/a": 1, "/b": 2, "/d": 1},
+        {"/a": 1, "/b": 2, "/d": 1},
+    ]
+    store.OBSERVED.reset()
+    seen = []
+    for number, files in enumerate(cycles, start=1):
+        store.OBSERVED.scanned("state", {path: (stat(size), 0) for path, size in files.items()})
+        seen.append(files)
+        peeked = store.OBSERVED.peek()
+        assert store.OBSERVED.take() == peeked
+        if number >= 3:
+            reference = seen[number - 3]
+            moved = {path for path in files.keys() | reference.keys() if files.get(path) != reference.get(path)}
+            assert peeked == sorted(moved), number
+
+
 def test_a_jump_from_an_old_row_whose_window_is_gone_finds_a_live_window_of_the_task(root, tmp_path):
     marks = {"tasks": {ALPHA: {"waiting": "none", "harness_session": "h-gone"}}, "sessions": []}
     path = tmp_path / store.FILE_NAME

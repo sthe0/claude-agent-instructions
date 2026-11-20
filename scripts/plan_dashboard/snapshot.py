@@ -210,7 +210,7 @@ class Observed:
     The first ``LEGACY_TAKES`` takes compare whole observations (``previous`` and ``base``, which may be the
     snapshot's ``Recorded``). From then on the reference is the observation two takes back and a take looks at
     the paths that moved since: ``log`` holds, for each path that moved since the last take, the ``(kind,
-    identity)`` it had then (None: it was not there), and ``older`` the same for the take before."""
+    identity)`` it had then (None: it was not there), and ``older`` the same for the take before. A path belongs to one kind."""
 
     def __init__(self):
         self.reset()
@@ -330,6 +330,7 @@ class Observed:
         """``_changed`` for the observation two takes back: only the paths that moved since are looked at."""
         changed = set(self.read)
         for path in self.log.keys() | self.older.keys():
+            # the entry in ``older`` predates the one in ``log``, so it is the one two takes back
             before = self.older[path] if path in self.older else self.log[path]
             now = self._entry(path)
             if (before is None) != (now is None) or (now is not None and not same_identity(now[0], before[1], now[1])):
@@ -355,7 +356,7 @@ class Observed:
                 self.base, self.previous = self.previous, self._now()
             self.takes += 1
             if self.takes == LEGACY_TAKES:
-                self.base = self.previous = None
+                self.base = self.previous = None  # from here ``log`` and ``older`` are the reference
             self.older, self.log, self.read, self.touched = self.log, {}, set(), set()
             return sorted(changed)
 

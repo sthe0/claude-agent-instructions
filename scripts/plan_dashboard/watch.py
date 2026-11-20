@@ -91,8 +91,8 @@ class CoversMemo(dict):
     def settle(self) -> None:
         if len(self) < max(COVERS_MEMO_MAX, 2 * self.kept):
             return
-        for key in [key for key in self if not os.path.lexists(key[1])]:
-            del self[key]
+        for key in [key for key in list(self) if not os.path.lexists(key[1])]:
+            self.pop(key, None)
         self.kept = len(self)
 
     def clear(self) -> None:
