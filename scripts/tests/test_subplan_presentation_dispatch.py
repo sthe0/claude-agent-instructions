@@ -917,6 +917,7 @@ def test_a_linked_child_whose_parent_state_cannot_be_read_is_refused_its_own_app
     import test_child_approval as tca
 
     child = tca.Child(tmp_path, monkeypatch)
+    child.start_parent = False
     tca._linked_submit(child)
     refused = child.run("approve", session="child-1", by="agent")
     assert refused["ok"] is False
@@ -967,10 +968,12 @@ def test_the_agents_own_approval_does_not_seed_the_approved_set(store, venued_fi
     _refused(_approve_resources(store), "the user's approval comes first")
 
 
-def test_a_childs_own_plan_is_approved_inside_the_set_its_parent_approved(tmp_path, monkeypatch):
-    """A linked child's `approve --by agent` of its own new-form plan, through the CLI: the stage
-    starts after it when the request lies inside the resources the parent approved for the
-    stage the child was handed, and does not when it lies outside."""
+@pytest.mark.parametrize("allow, written", [(("Edit",), True), (("Edit", "Read"), False)])
+def test_a_childs_own_plan_is_approved_inside_the_set_its_parent_approved(
+        tmp_path, monkeypatch, allow, written):
+    """A linked child's `approve --by agent` of its own new-form plan, through the CLI: the
+    child's per-stage approval is written when the request lies inside the resources the parent
+    approved for the stage the child was handed, and is not when it lies outside."""
     import test_child_approval as tca
 
     child = tca.Child(tmp_path, monkeypatch)
@@ -984,10 +987,10 @@ def test_a_childs_own_plan_is_approved_inside_the_set_its_parent_approved(tmp_pa
     state = child.state()
     state.stages[0].place = ENGINE
     state.stages[0].binding_conditions_stated = True
-    sub_plan.store(state, _rec(1, allow=("Edit", "Read")), level=0)
+    sub_plan.store(state, _rec(1, allow=allow), level=0)
     child.store.save(state)
     assert child.run("approve", session="child-1", by="agent")["ok"] is True
-    assert "parent_resource_approval" not in child.state().stage_approvals.get("0:1", {})
+    assert bool(child.state().stage_approvals.get("0:1", {}).get("parent_resource_approval")) is written
 
 
 def test_user_approval_writes_resource_approval_and_the_set(store, venued_fixtures_dir):
