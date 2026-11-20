@@ -483,10 +483,13 @@ def test_an_empty_binding_condition_list_is_a_statement_not_a_missing_part():
 
 
 def _sized_plan(*sizes):
+    """One in-thread described stage per entry: a line count, or (line count, size flags)."""
+    declared = [(size, []) if not isinstance(size, tuple) else (size[0], list(size[1]))
+                for size in sizes]
     stages = [{"title": f"s{n}", "executor": "in_thread", "expected_result_image": "the product",
                "done_criterion": "the check passes", "place": "the engine",
                "binding_conditions": [], "declared_size": size, "expected_minutes": 2,
-               "size_flags": []} for n, size in enumerate(sizes, 1)]
+               "size_flags": flags} for n, (size, flags) in enumerate(declared, 1)]
     raw = _raw_plan({})
     raw["stage"] = stages
     raw["meta"]["order"] = json.loads(json.dumps(TWO_SIDED_ORDER))
@@ -499,12 +502,19 @@ def _above(doc, max_lines):
 
 
 def test_below_threshold_stage_needs_only_description():
-    """Stages at or below the size line (5, 40 and 50 lines against a line of 50) are the
-    description alone: no record, no means, no estimate at submission."""
-    doc = _sized_plan(5, 40, 50)
-    assert _above(doc, 50) == [False, False, False]
+    """Of three stages — a large one, a flagged one and a small one (400 lines, 5 lines with the
+    `architectural` flag, 60 lines) — the ones above the size line follow the threshold, and none
+    of them, above or below it, is asked a record, a means or an estimate at submission."""
+    doc = _sized_plan(400, (5, ["architectural"]), 60)
+    assert _above(doc, 500) == [False, True, False]
+    assert _above(doc, 100) == [True, True, False], "the third stage is below a line of 100"
+    assert _above(doc, 10) == [True, True, True], "and above a line of 10"
     assert _problems(doc) == []
     assert _problems(doc, _ctx()) == []
+    below = _sized_plan(5, 40, 50)
+    assert _above(below, 50) == [False, False, False]
+    assert _problems(below) == []
+    assert _problems(below, _ctx()) == []
 
     refused = _problems(_new_form({"declared_size": 5}, drop=("place",)), _ctx())
     assert any("states no place" in p for p in refused), refused
@@ -682,6 +692,12 @@ def test_the_release_is_read_from_the_record_of_the_level_that_set_the_condition
     assert released(contour, framed_parent, on_b) == frozenset({"C2"}), \
         "a contour under a parent running a frame reads the record that frame carries"
 
+    two_frames = _session("p", plan_stack=[_frame(1, root_stages), _frame(2, [_cstage(2, C1)])],
+                          sub_plan_records={"0:1": _setter_record(("C3", "withdrawn")),
+                                            "1:2": r_a})
+    assert released(contour, two_frames, on_b) == frozenset({"C2"}), \
+        "of the parent's two frames the top one's record is read, not the lowest one's"
+
     unknown_above = _session("s", plan_stack=[_frame(1), _frame(2)], sub_plan_records={"0:1": r_a})
     assert released(unknown_above, None, on_b) == frozenset(), \
         "a setter level whose own carried conditions are unknown releases nothing"
@@ -765,6 +781,44 @@ def test_a_decision_in_a_levels_record_names_a_condition_it_set_on_its_own_stage
         "a carrier whose stage conditions are unknown skips the known-id rule"
 
 
+def _restating(text, ctx):
+    """Problems of a plan whose stage restates C1 (carried by the stage it builds) as `text`."""
+    restated = {"id": "C1", "text": text, "set_by": "the middle level"}
+    return [p for p in submission._stage_order_violations(
+        _new_form({"binding_conditions": [restated]}), ctx) if "restates" in p]
+
+
+def test_a_stage_restating_an_inherited_condition_with_another_text_is_refused_by_its_id():
+    ctx = StageOrderContext(expected_stage=1, binding_conditions=(C1,))
+    problems = _restating("anything goes", ctx)
+    assert len(problems) == 1 and "stage 1 restates binding condition 'C1'" in problems[0], problems
+    assert "`changed` or `withdrawn`" in problems[0], "the refusal names the way out"
+    with_record = _new_form({"binding_conditions": [{"id": "C1", "text": "anything goes",
+                                                     "set_by": "x"}]},
+                            record=_record(stage=1, how_kept=[{"condition": "C1", "how": "kept"}]))
+    assert any("restates binding condition 'C1'" in p
+               for p in submission._stage_order_violations(with_record, ctx)), \
+        "a plan that also carries a record meets the same refusal"
+
+
+def test_a_restated_condition_the_setter_level_released_may_change_its_text():
+    released = StageOrderContext(expected_stage=1, binding_conditions=(C1,),
+                                 released=frozenset({"C1"}))
+    assert _restating("anything goes", released) == []
+    other = StageOrderContext(expected_stage=1, binding_conditions=(C1,),
+                              released=frozenset({"C2"}))
+    assert _restating("anything goes", other), "a release is per condition"
+
+
+def test_a_restated_condition_with_the_same_text_passes_whatever_its_label_and_spacing():
+    ctx = StageOrderContext(expected_stage=1, binding_conditions=(C1,))
+    assert _restating("condition C1", ctx) == []
+    assert _restating("  condition \n   C1 ", ctx) == [], "trimmed and whitespace-folded only"
+    assert _restating("Condition C1", ctx), "no other normalization"
+    unknown = StageOrderContext(expected_stage=1)
+    assert _restating("anything goes", unknown) == [], "a carrier whose conditions are unknown"
+
+
 def test_an_inherited_condition_released_by_a_non_user_labelled_middle_level_stays_binding():
     """(b) C0 stage a carries (labelled by a middle level, not the user) is decided `withdrawn`
     in R_a: the child still owes it."""
@@ -832,7 +886,7 @@ def test_a_malformed_record_part_is_refused_by_name():
     assert any("malformed part: building_place" in p for p in _record_problems(meta, _ctx()))
 
 
-def _described_parent(store, sid):
+def _described_parent(store, sid, conditions=BINDING):
     from agentctl.state import Stage as _Stage
 
     parent = _Stage(
@@ -840,7 +894,7 @@ def _described_parent(store, sid):
         means=Means(means="", method=""), actor=Actor(executor="spawn:developer"),
         criterion=Criterion(criterion_type="measurable", done_criterion="crit"),
         outcome=Outcome(status=StageStatus.ACTIVE.value), place="the engine",
-        binding_conditions=[dict(c) for c in BINDING], binding_conditions_stated=True)
+        binding_conditions=[dict(c) for c in conditions], binding_conditions_stated=True)
     state = SessionState(
         session_id=sid, task_id="parent-task", goal="g", overall_done_criterion="d",
         weight_class=WeightClass.SUBSTANTIVE.value, route=Route.SPAWN.value,
@@ -1089,6 +1143,106 @@ def test_a_good_record_is_stored_at_submit_with_all_its_elements_and_its_buildin
     assert closed.popped > closed.pushed
     assert after.history[closed.popped - 1]["event"] != "pop_subplan"
     assert sub_plan.read(after, 1).method == record.method
+
+
+_MIDDLE = "the middle level"
+_C1_RELABELLED = f'{{id = "C1", text = "condition C1", set_by = "{_MIDDLE}"}}'
+_C2_OF_MIDDLE = f'{{id = "C2", text = "condition C2", set_by = "{_MIDDLE}"}}'
+
+_MIDDLE_DECISIONS = f"""
+[[meta.how_kept]]
+condition = "C1"
+how = "no push verb is run"
+
+[[meta.sub_plan.setter_decisions]]
+condition = "C1"
+value = "kept"
+setter = "user"
+decided_by = "user"
+
+[[meta.sub_plan.setter_decisions]]
+condition = "C2"
+value = "withdrawn"
+setter = "{_MIDDLE}"
+decided_by = "{_MIDDLE}"
+"""
+
+
+def _middle_level_plan(tmp_path):
+    """The plan of the level between the user's stage and the deepest one: a copy of the usual
+    stage as its stage 2, which carries C1 relabelled by this level and C2 that this level set."""
+    from test_submit_plan_surfaces import _write_plan
+
+    plan_file = _write_plan(tmp_path, tier="small")
+    text = plan_file.read_text(encoding="utf-8")
+    head, tail = text.split("[[final_check]]")
+    second = head[head.index("[[stage]]"):].replace("index = 1", "index = 2").replace(
+        '"Produce a file"', '"Produce another file"').replace(
+        'invariants = "inv"',
+        f'invariants = "inv"\nbinding_conditions = [{_C1_RELABELLED}, {_C2_OF_MIDDLE}]')
+    plan_file.write_text(head + second + "[[final_check]]" + tail + _RECORD_HEAD
+                         + _MIDDLE_DECISIONS, encoding="utf-8")
+    return plan_file
+
+
+def _push_to_the_deepest_level(store, tmp_path):
+    """Push a sub-plan on the user's stage 1 (carrying C1), submit the middle level's plan with
+    its record, then push again on that plan's stage 2; return the deepest level's plan file."""
+    from test_submit_plan_surfaces import _write_plan
+
+    _described_parent(store, "w", conditions=(C1,))
+    cli.cmd_push_subplan(Namespace(session="w", plan=str(tmp_path / "plan.toml"), task=None,
+                                   originating_stage=1), store=store)
+    classify_args = Namespace(session="w", chat=False, changed_lines=200, files=5,
+                              wall_clock_min=60, tracker_key=None, architectural=True,
+                              external_effect=False, new_dependency=False,
+                              public_api_change=False)
+    cli.cmd_classify(classify_args, store=store)
+    cli.cmd_plan(Namespace(session="w"), store=store)
+    middle = cli.cmd_submit_plan(Namespace(session="w", plan=str(_middle_level_plan(tmp_path))),
+                                 store=store)
+    assert middle.ok, middle.data.get("problems")
+    state = store.load("w")
+    state.approval = GateRecord("plan_approval", armed=True, passed=True, by="tester")
+    state.partition = Partition(verdict="single")
+    state.node, state.current_stage = Node.EXECUTING.value, 2
+    state.stage(2).outcome.status = StageStatus.ACTIVE.value
+    store.save(state)
+    deepest_dir = tmp_path / "deepest"
+    deepest_dir.mkdir()
+    pushed = cli.cmd_push_subplan(Namespace(session="w", plan=str(deepest_dir / "plan.toml"),
+                                            task=None, originating_stage=2), store=store)
+    assert pushed.ok, pushed
+    assert [f.originating_stage for f in store.load("w").plan_stack] == [1, 2]
+    cli.cmd_classify(classify_args, store=store)
+    cli.cmd_plan(Namespace(session="w"), store=store)
+    return _write_plan(deepest_dir, tier="small")
+
+
+def _deepest_record(*kept):
+    how = "".join(f'\n[[meta.how_kept]]\ncondition = "{c}"\nhow = "no push verb is run"\n'
+                  for c in kept)
+    return _RECORD_HEAD.replace("stage = 1", "stage = 2") + how
+
+
+def test_the_deepest_plan_is_bound_by_the_conditions_its_level_did_not_release(store, tmp_path):
+    """Two pushes, then the deepest level submits. The middle level set C2 and released it in
+    its own record, so C2 does not bind the deepest plan; it relabelled C1, which the user's
+    stage carries, so C1 still does, whatever the middle level's record says of it."""
+    deepest = _push_to_the_deepest_level(store, tmp_path)
+    plan_text = deepest.read_text(encoding="utf-8")
+
+    deepest.write_text(plan_text + _deepest_record(), encoding="utf-8")
+    refused = cli.cmd_submit_plan(Namespace(session="w", plan=str(deepest)), store=store)
+    named = " | ".join(_stage_order_problems(refused))
+    assert refused.ok is False and "'C1'" in named and "'C2'" not in named, refused.data
+    assert store.load("w").sub_plan_records.get("1:2") is None
+
+    deepest.write_text(plan_text + _deepest_record("C1"), encoding="utf-8")
+    accepted = cli.cmd_submit_plan(Namespace(session="w", plan=str(deepest)), store=store)
+    assert accepted.ok, accepted.data.get("problems")
+    assert [h.condition for h in sub_plan.SubPlanRecord.from_dict(
+        store.load("w").sub_plan_records["1:2"]).how_kept] == ["C1"]
 
 
 # --- 3. The stage-description review ---------------------------------------------------------

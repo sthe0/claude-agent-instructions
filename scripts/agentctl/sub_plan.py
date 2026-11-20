@@ -338,9 +338,9 @@ RELEASING_VALUES = ("changed", "withdrawn")
 def parent_set_ids(conditions, carried_above) -> frozenset[str]:
     """The ids, among the binding conditions `conditions` stated on the stage a child builds,
     that the parent level set itself: the ones that level does not itself carry from above
-    (`carried_above`, the conditions of the stage the parent level builds, or for the root level
-    the order's). Decided by id, never by the label a condition carries: a level that restates
-    an inherited condition under its own name has not set it."""
+    (`carried_above`, the conditions of the stage the parent level builds). Decided by id, never
+    by the label a condition carries: a level that restates an inherited condition under its own
+    name has not set it."""
     above = {c["id"] for c in carried_above or ()}
     return frozenset(c["id"] for c in conditions or () if c["id"] not in above)
 

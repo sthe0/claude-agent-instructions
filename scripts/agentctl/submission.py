@@ -1486,6 +1486,28 @@ def _sub_plan_binding_violations(doc, record, prefix: str, ctx: StageOrderContex
     return out
 
 
+def _restated_condition_violations(doc, ctx: StageOrderContext) -> list[str]:
+    """A stage of this plan that restates a binding condition the stage it builds carries must
+    keep its text (compared after trimming and folding whitespace); another text is a change,
+    which only the setter level's record may make (`ctx.released`)."""
+    if ctx.binding_conditions is None:
+        return []
+    carried = {c["id"]: " ".join(str(c.get("text", "")).split()) for c in ctx.binding_conditions}
+    out: list[str] = []
+    for stage in doc.stages:
+        for cond in stage.binding_conditions:
+            text = " ".join(str(cond.get("text", "")).split())
+            cid = cond.get("id")
+            if cid in carried and cid not in ctx.released and text != carried[cid]:
+                out.append(
+                    f"stage {stage.index} restates binding condition {cid!r} with another text "
+                    f"than the stage this plan builds carries: only the level that set it can "
+                    f"change it, by a `changed` or `withdrawn` decision in its own sub-plan "
+                    f"record; keep the text, or ask that level to decide"
+                )
+    return out
+
+
 def _sub_plan_record_violations(doc, record, ctx: StageOrderContext) -> list[str]:
     prefix = f"sub-plan record of stage {record.stage}"
     if record.stage <= 0:
@@ -1493,9 +1515,9 @@ def _sub_plan_record_violations(doc, record, ctx: StageOrderContext) -> list[str
             record, "the sub-plan record", ctx)
     out: list[str] = []
     if ctx.parent_unreadable:
-        out.append(f"{prefix}: {ctx.parent_unreadable}; a `[means: stage N]` mark cannot be "
-                   f"checked against it (restore the parent session's state, or submit from "
-                   f"the session that holds it)")
+        out.append(f"{prefix}: {ctx.parent_unreadable}; the record cannot be checked against "
+                   f"it (the `[means: stage N]` marks, the stage's binding conditions): restore "
+                   f"the parent session's state, or submit from the session that holds it")
     if ctx.expected_stage is not None and record.stage != ctx.expected_stage:
         out.append(f"{prefix}: this plan builds stage {ctx.expected_stage}, not stage {record.stage}")
     out.extend(_sub_plan_text_violations(record, prefix, ctx))
@@ -1512,6 +1534,7 @@ def _stage_order_violations(doc, ctx: StageOrderContext | None = None) -> list[s
     frame or in a child contour. A plan with neither draws nothing."""
     ctx = ctx or StageOrderContext()
     out = _stage_description_violations(doc, ctx)
+    out.extend(_restated_condition_violations(doc, ctx))
     record = doc.meta.sub_plan
     if record is not None:
         out.extend(_sub_plan_record_violations(doc, record, ctx))

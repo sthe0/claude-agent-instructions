@@ -618,15 +618,22 @@ def test_replan_of_an_old_form_plan_with_described_stages_is_accepted_and_carrie
     from agentctl.state import StageStatus
 
     plan = _plan_ready(ostore, home, tmp_path)
+    cli.cmd_order_raise(ns(session=SESSION, id="O1", element="the release is one command"),
+                        store=ostore)
+    cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="",
+                             plan=plan), store=ostore)
+    assert _plan_review(ostore, "pass", plan_digest=_file_sha256(plan)).ok
+    approved = cli.cmd_approve(ns(session=SESSION, by="user"), store=ostore)
+    assert approved.ok, (approved.detail, approved.data.get("blockers"))
     Path(plan).write_text(Path(_plan(tmp_path, describe=False, name="scratch.toml")).read_text(
         encoding="utf-8"), encoding="utf-8")
     state = ostore.load(SESSION)
+    assert state.node == "APPROVED" and state.plan_path == plan, "the old-form plan is the approved one"
+    assert "means" in Path(plan).read_text(encoding="utf-8"), "its stage is in the old form"
     state.stage(1).outcome.status = StageStatus.PASSED.value
     state.stage(1).outcome.actual = "done before the order chose the form"
     ostore.save(state)
     proposal = _plan(tmp_path, name="proposal.toml")
-    cli.cmd_order_raise(ns(session=SESSION, id="O1", element="the release is one command"),
-                        store=ostore)
     cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="",
                              plan=proposal), store=ostore)
 
