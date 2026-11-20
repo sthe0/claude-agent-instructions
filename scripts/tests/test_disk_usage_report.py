@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -285,6 +286,58 @@ def test_deadline_keeps_partial_output_and_lists_unreached_roots(planted: Plante
     assert report["deadline_exceeded"] is True
     assert f"{planted.root}/b" in report["unknown"]["a_paths"] and f"{planted.root}/a" not in report["unknown"]["a_paths"]
     assert all(not e["path"].startswith(f"{planted.root}/b") for e in report["entries"])
+
+
+def build_with_temp_du(planted: Planted, monkeypatch: pytest.MonkeyPatch, temp_du: "Callable") -> dict:
+    """Builds a report whose main walk runs the real du on the planted root; the temp root's du is `temp_du`."""
+    planted.blob("a", 1 * MIB)
+    for key, value in planted.env().items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(disk_report, "apply_self_priority", lambda: None)
+    temp_real = str(planted.ttmp.resolve())
+
+    def run(argv: list, timeout_s: float) -> "tuple[bytes, str, bool]":
+        if argv[-1] == temp_real:
+            return temp_du(temp_real)
+        return disk_report.run_du(argv, timeout_s)
+
+    return disk_report.build_report(
+        root=str(planted.root), home=str(planted.home), names_paths=[disk_report.DEFAULT_TABLE, planted.names],
+        mountinfo=str(planted.mountinfo), deadline_min=1, min_bytes=1, max_depth=4,
+        temp_roots=[str(planted.ttmp)], argv=["t"], run=run)
+
+
+def assert_temp_root_unreached(report: dict, temp_real: str) -> None:
+    root = next(r for r in report["temp"]["roots"] if r["realpath"] == temp_real)
+    assert root["unreached"] is True and root["bytes"] == 0
+    assert report["deadline_exceeded"] is True
+    assert temp_real in report["unknown"]["a_paths"]
+    assert "(EXCEEDED)" in disk_report.render_md(report)
+
+
+def test_unreached_temp_root_deadline_before_du(planted: Planted, monkeypatch: pytest.MonkeyPatch) -> None:
+    report = build_with_temp_du(planted, monkeypatch, lambda real: (b"", "", True))
+    assert_temp_root_unreached(report, str(planted.ttmp.resolve()))
+
+
+def test_unreached_temp_root_du_cut_off_without_total(planted: Planted, monkeypatch: pytest.MonkeyPatch) -> None:
+    report = build_with_temp_du(planted, monkeypatch, lambda real: (f"{MIB}\t{real}/tmp.xyz\0".encode(), "", True))
+    assert_temp_root_unreached(report, str(planted.ttmp.resolve()))
+
+
+def test_unreached_temp_root_no_total_without_timeout(planted: Planted, monkeypatch: pytest.MonkeyPatch) -> None:
+    report = build_with_temp_du(planted, monkeypatch, lambda real: (b"", "du: cannot read", False))
+    assert_temp_root_unreached(report, str(planted.ttmp.resolve()))
+
+
+def test_measured_temp_roots_keep_deadline_and_a_paths(planted: Planted, monkeypatch: pytest.MonkeyPatch) -> None:
+    report = build_with_temp_du(planted, monkeypatch, lambda real: (f"{2 * MIB}\t{real}\0".encode(), "", False))
+    temp_real = str(planted.ttmp.resolve())
+    root = next(r for r in report["temp"]["roots"] if r["realpath"] == temp_real)
+    assert root["unreached"] is False and root["bytes"] == 2 * MIB
+    assert report["deadline_exceeded"] is False
+    assert report["unknown"]["a_paths"] == []
+    assert "(EXCEEDED)" not in disk_report.render_md(report)
 
 
 def test_du_runs_at_idle_priority_and_the_report_records_it(planted: Planted) -> None:
