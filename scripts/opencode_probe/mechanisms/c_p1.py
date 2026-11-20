@@ -55,3 +55,12 @@ def run(ctx):
     else:
         status = record.FAIL if unrefused else record.PASS
     return runner.result(status, evidence, paths=entries)
+
+
+def check_record(entry, cases):
+    """A non-empty ``paths`` list whose entries carry an id and a ``refused_by`` list."""
+    listed = entry.get("paths")
+    if not listed:
+        return ["no `paths` list"]
+    return [f"path {p.get('id')!r} has no id or no refused_by list" for p in listed
+            if not p.get("id") or not isinstance(p.get("refused_by"), list)]

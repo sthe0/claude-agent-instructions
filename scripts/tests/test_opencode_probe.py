@@ -7,6 +7,7 @@ skip with an ``opencode live:`` reason when there is none.
 """
 import json
 import os
+import re
 import shutil
 import stat
 import threading
@@ -18,7 +19,7 @@ import pytest
 
 import opencode_live
 from opencode_probe import cli, core, coverage, harness, isolated, negative, record, runner, stub, subject_only, userconfig
-from opencode_probe.mechanisms import c_p6
+from opencode_probe.mechanisms import c_p1, c_p6, c_p7, c_p13
 
 FAKE = Path(__file__).resolve().parent / "fixtures" / "opencode-fake" / "opencode"
 STUB_REQUEST = {"stream": False, "tools": [{"function": {"name": "t", "parameters": {}}}]}
@@ -52,10 +53,14 @@ def phase_of(probe, name):
     return core.get_phase(name, probe)
 
 
-def write_run(state, phase, probe, statuses, version="2.3.2", kind="runs"):
+def write_run(state, phase, probe, statuses, version="2.3.2", kind="runs", event_logs=True):
     cases = {cid: {"status": status, "evidence": {}} for cid, status in statuses.items()}
     rec_dir = record.new_record_dir(state, kind)
     record.write_record(rec_dir, version, phase.name, core.phase_hash(phase, probe), cases)
+    if event_logs:
+        (rec_dir / "events").mkdir()
+        for case_id in cases:
+            (rec_dir / "events" / f"{case_id}.jsonl").touch()
     return rec_dir / "record.json"
 
 
@@ -465,3 +470,92 @@ def test_latest_record_takes_the_newest_matching_one(tmp_path):
     (state / "runs" / "29990101T000000Z").mkdir()
     found = record.latest_record(state, "alpha", "2.3.2", core.phase_hash(alpha, probe))
     assert found[0] == second and found[0] != first
+
+
+def test_check_record_requires_an_event_log_per_case(tmp_path):
+    probe = make_probe(tmp_path)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    path = write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.pin_record(state, alpha, probe) == []
+    assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == []
+    (path.parent / "events" / "A2.jsonl").unlink()
+    assert record.check_phase(state, alpha, require_pass=True, case_ids=None, probe_dir=probe) == [
+        "alpha/A2: no raw event log A2.jsonl beside the record"]
+
+
+def test_pin_refuses_a_record_without_event_logs(tmp_path):
+    probe = make_probe(tmp_path)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"}, event_logs=False)
+    assert record.pin_record(state, alpha, probe) == [
+        "alpha/A1: no raw event log A1.jsonl beside the record",
+        "alpha/A2: no raw event log A2.jsonl beside the record"]
+
+
+def test_case_check_record_hook_problems_are_reported(tmp_path):
+    probe = make_probe(tmp_path)
+    hook = "\n\ndef check_record(entry, cases):\n    return [] if entry['evidence'] else ['shape wrong']\n"
+    (probe / "alpha" / "c_a1.py").write_text(case_source("A1", True) + hook, encoding="utf-8")
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    path = write_run(state, alpha, probe, {"A1": "pass", "A2": "pass"})
+    assert record.pin_record(state, alpha, probe) == ["alpha/A1: shape wrong"]
+    rec = record.read_record(path)
+    rec["cases"]["A1"]["evidence"] = {"k": 1}
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    assert record.pin_record(state, alpha, probe) == []
+
+
+P1_OK = {"paths": [{"id": "shell:bash", "refused_by": ["PreToolUse"]}, {"id": "child-run", "refused_by": []}]}
+
+
+def test_p1_record_needs_paths_with_refused_by():
+    assert c_p1.check_record(P1_OK, {}) == []
+    assert c_p1.check_record({"paths": []}, {}) == ["no `paths` list"]
+    assert c_p1.check_record({"paths": [{"id": "x"}]}, {}) == ["path 'x' has no id or no refused_by list"]
+
+
+def test_p13_record_needs_mechanisms():
+    assert c_p13.check_record({"mechanisms": [{"mechanism": "Stop", "fired": True, "can_refuse": False}]}, {}) == []
+    assert c_p13.check_record({}, {}) == ["no `mechanisms` list"]
+    assert c_p13.check_record({"mechanisms": [{"mechanism": "Stop", "fired": True}]}, {}) == [
+        "mechanism 'Stop' lacks fired or can_refuse"]
+
+
+def test_p6_record_needs_schema_exit_codes_and_store_or_missing():
+    base = {"event_schema": ["type"], "exit_codes": {"success": 0}}
+    store = {"columns": {"id": "text"}, "tokens": {"stored": {}}}
+    assert c_p6.check_record({"evidence": {**base, "store": store}}, {}) == []
+    assert c_p6.check_record({"evidence": {**base, "store": {}, "missing": ["store"]}}, {}) == []
+    assert c_p6.check_record({"evidence": {**base, "store": {}}}, {}) == [
+        "evidence has neither the usage-store columns and tokens nor a `missing` list"]
+    assert c_p6.check_record({"evidence": {"store": store}}, {}) == [
+        "evidence lacks event_schema", "evidence lacks exit_codes"]
+
+
+def test_p7_record_needs_evidence_per_p1_path_id():
+    cases = {"P1": P1_OK}
+    assert c_p7.check_record({"evidence": {"paths": [{"id": "shell:bash"}]}}, cases) == []
+    assert c_p7.check_record({"evidence": {"paths": []}}, cases) == ["no evidence for P1 path 'shell:bash'"]
+    assert c_p7.check_record({"evidence": {"paths": [{"id": "shell:bash"}]}}, {}) == [
+        "P1 has no paths to compare against"]
+
+
+def test_live_record_passes_the_structural_check():
+    path, rec = opencode_live.latest_record("mechanisms")
+    assert record.structure_problems(core.get_phase("mechanisms"), path, rec, None) == []
+
+
+def test_tree_never_names_the_forbidden_product():
+    forbidden = re.compile("a" + "i" + r"[\s_.-]?" + "su" + "ite", re.IGNORECASE)
+    root = Path(__file__).resolve().parents[2]
+    hits = []
+    for directory, subdirs, names in os.walk(root):
+        subdirs[:] = [d for d in subdirs if d not in {".git", "__pycache__", ".pytest_cache"}]
+        for name in names:
+            file = Path(directory) / name
+            if forbidden.search(file.read_bytes().decode("utf-8", errors="ignore")):
+                hits.append(str(file.relative_to(root)))
+    assert hits == []

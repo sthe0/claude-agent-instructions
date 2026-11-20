@@ -89,3 +89,12 @@ def run(ctx):
         return runner.result(record.FAIL, evidence, mechanisms=mechanisms)
     status = record.PASS if all(m["fired"] for m in mechanisms) else record.ABSENT
     return runner.result(status, evidence, mechanisms=mechanisms)
+
+
+def check_record(entry, cases):
+    """A non-empty ``mechanisms`` list, each entry saying whether it fired and whether it can refuse."""
+    listed = entry.get("mechanisms")
+    if not listed:
+        return ["no `mechanisms` list"]
+    return [f"mechanism {m.get('mechanism')!r} lacks fired or can_refuse" for m in listed
+            if not m.get("mechanism") or "fired" not in m or "can_refuse" not in m]

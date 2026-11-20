@@ -67,3 +67,12 @@ def run(ctx):
     if leaked or stand_in_changes:
         return runner.result(record.FAIL, evidence)
     return runner.result(record.UNOBSERVED if unobserved else record.PASS, evidence)
+
+
+def check_record(entry, cases):
+    """Evidence for every P1 path id except ``child-run``."""
+    p1_ids = {p.get("id") for p in cases.get("P1", {}).get("paths") or []} - {"child-run"}
+    have = {p.get("id") for p in entry.get("evidence", {}).get("paths") or []}
+    if not p1_ids:
+        return ["P1 has no paths to compare against"]
+    return [f"no evidence for P1 path {path_id!r}" for path_id in sorted(p1_ids - have)]

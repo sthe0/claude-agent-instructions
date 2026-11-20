@@ -1,6 +1,7 @@
 """Records of a probe run: where they live, what counts as acceptable, and how the pin follows them.
 
-A record is ``<state>/runs/<UTC timestamp>/record.json`` plus ``events/<case>.jsonl`` beside it;
+A record is ``<state>/runs/<UTC timestamp>/record.json`` plus ``events/<case>.jsonl`` beside it
+(one per case, empty when the case launched nothing);
 a ``runs/`` entry without ``record.json`` is no record. A negative run writes under
 ``<state>/negative/<timestamp>/`` which no reader of this module opens.
 """
@@ -114,6 +115,23 @@ def record_problems(phase: core.Phase, path: Path, rec: dict, case_ids: set[str]
     return problems
 
 
+def structure_problems(phase: core.Phase, path: Path, rec: dict, case_ids: set[str] | None) -> list[str]:
+    """Why the record does not carry what each case is meant to leave behind: one raw event log
+    per case, and whatever the case's own ``check_record(entry, cases)`` asks of its entry."""
+    problems = []
+    infos = {c.case_id: c for c in core.phase_cases(phase)}
+    for case_id, entry in sorted(rec["cases"].items()):
+        if case_ids and case_id not in case_ids:
+            continue
+        log = path.parent / "events" / f"{case_id}.jsonl"
+        if not log.is_file():
+            problems.append(f"{phase.name}/{case_id}: no raw event log {log.name} beside the record")
+        hook = getattr(core.load_case(infos[case_id]), "check_record", None) if case_id in infos else None
+        if hook:
+            problems += [f"{phase.name}/{case_id}: {problem}" for problem in hook(entry, rec["cases"])]
+    return problems
+
+
 def check_phase(state: Path, phase: core.Phase, *, require_pass: bool, case_ids: set[str] | None,
                 probe_dir: Path = core.PROBE_DIR) -> list[str]:
     """Reasons the phase has no acceptable record; empty when it has one."""
@@ -131,6 +149,7 @@ def check_phase(state: Path, phase: core.Phase, *, require_pass: bool, case_ids:
         problems.append(f"{phase.name}: pin.toml last_pass is stale for this tree")
     if require_pass:
         problems += record_problems(phase, path, rec, case_ids)
+        problems += structure_problems(phase, path, rec, case_ids)
     return problems
 
 
@@ -143,7 +162,7 @@ def pin_record(state: Path, phase: core.Phase, probe_dir: Path = core.PROBE_DIR)
     if found is None:
         return [f"{phase.name}: no record for version {pin['version']} and phase hash {suite_hash[:12]}"]
     path, rec = found
-    problems = record_problems(phase, path, rec, None)
+    problems = record_problems(phase, path, rec, None) + structure_problems(phase, path, rec, None)
     if problems:
         return problems
     last_pass = {name: dict(entry) for name, entry in pin.get("last_pass", {}).items()}

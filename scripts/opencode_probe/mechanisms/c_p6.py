@@ -210,3 +210,13 @@ def run(ctx):
     evidence["missing"] = [item for item in MISSING_ITEMS if item in missing]
     evidence["missing_observations"] = {item: missing[item] for item in evidence["missing"]}
     return runner.result(record.ABSENT if missing else record.PASS, json.loads(json.dumps(evidence, default=str)))
+
+
+def check_record(entry, cases):
+    """The event schema, the exit codes, and either the usage-store facts or a ``missing`` list."""
+    evidence = entry.get("evidence", {})
+    problems = [f"evidence lacks {key}" for key in ("event_schema", "exit_codes") if not evidence.get(key)]
+    store = evidence.get("store") or {}
+    if not (store.get("columns") and store.get("tokens")) and not evidence.get("missing"):
+        problems.append("evidence has neither the usage-store columns and tokens nor a `missing` list")
+    return problems

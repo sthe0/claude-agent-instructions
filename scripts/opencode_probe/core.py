@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -126,6 +127,14 @@ def case_info(path: Path) -> CaseInfo:
 
 def phase_cases(phase: Phase) -> list[CaseInfo]:
     return [case_info(p) for p in phase.case_files]
+
+
+def load_case(info: CaseInfo):
+    """The case module, imported from its file."""
+    spec = importlib.util.spec_from_file_location(f"opencode_probe_case_{info.case_id}", info.path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _hash_files(root: Path, files: list[Path], digest) -> None:

@@ -1,7 +1,6 @@
 """Runs the cases of a phase and writes the record; the negative run reuses the same driver."""
 from __future__ import annotations
 
-import importlib.util
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,16 +28,9 @@ def result(status: str, evidence: dict, **extra) -> dict:
     return {"status": status, "evidence": evidence, **extra}
 
 
-def _load(info: core.CaseInfo):
-    spec = importlib.util.spec_from_file_location(f"opencode_probe_case_{info.case_id}", info.path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def run_case(info: core.CaseInfo, ctx: CaseContext) -> dict:
     try:
-        outcome = _load(info).run(ctx)
+        outcome = core.load_case(info).run(ctx)
     except VersionMismatch:
         raise
     except isolated.ScratchNotInEffect as exc:
@@ -63,6 +55,8 @@ def run_phase(phase: core.Phase, *, case_ids: set[str] | None = None, inert: boo
         if case_ids and info.case_id not in case_ids:
             continue
         ctx = CaseContext(info.case_id, events_dir, state, inert, binary)
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / f"{info.case_id}.jsonl").touch()
         cases[info.case_id] = run_case(info, ctx)
     suite_hash = core.phase_hash(phase)
     version = core.read_pin()["version"]

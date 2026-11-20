@@ -44,14 +44,18 @@ def record_problem(phase_name):
     return None if found else f"opencode live: record none of phase {phase_name} for the current tree"
 
 
-def latest_case(phase_name, case_id):
-    """The latest record's entry of one case; skips the calling test when there is none."""
+def latest_record(phase_name):
+    """The latest record of the phase for the current tree as ``(path, record)``; skips the calling test when there is none."""
     problem = record_problem(phase_name)
     if problem:
         pytest.skip(problem)
     phase = core.get_phase(phase_name)
-    _, rec = record.latest_record(core.state_dir(), phase_name, core.read_pin()["version"], core.phase_hash(phase))
-    return rec["cases"][case_id]
+    return record.latest_record(core.state_dir(), phase_name, core.read_pin()["version"], core.phase_hash(phase))
+
+
+def latest_case(phase_name, case_id):
+    """The latest record's entry of one case; skips the calling test when there is none."""
+    return latest_record(phase_name)[1]["cases"][case_id]
 
 
 def require_binary():
