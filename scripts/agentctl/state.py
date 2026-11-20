@@ -3747,3 +3747,21 @@ SESSION_SCOPED_FIELDS = frozenset({
     "order_searches", "order_beside", "executor_side_revisions", "sub_plan_records",
     "stage_approvals", "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
 })
+
+
+def restamp_subplan_digest(state: "SessionState", stage_index: int, record) -> bool:
+    """Carry the user's approval of a sub-plan over an edit another approval covers (stage 8's
+    in-boundary route is its one caller): set the approved sub-plan digest to the live `record`'s.
+    Only a field approve-subplan already set is moved, and only its sub-plan digest: when the live
+    request's allow rules or added directories differ from the ones the user approved, the whole
+    field stays as it was and the stage stays refused until approve-subplan --by user runs on the
+    changed sub-plan. True when the field moved."""
+    from . import sub_plan
+
+    entry = state.stage_approvals.get(sub_plan.approval_key(state, stage_index)) or {}
+    if not entry.get("user_subplan_approval"):
+        return False
+    if sub_plan.resource_request_digest(record.resource_request) != entry.get("user_subplan_request"):
+        return False
+    entry["user_subplan_approval"] = sub_plan.approval_digest(record)
+    return True

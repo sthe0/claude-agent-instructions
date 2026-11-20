@@ -2064,7 +2064,7 @@ def render_subplans(doc: PlanDoc, state, store=None) -> str:
     by name, and each stage below the size line with the price of its cost tier and the resources
     it is shown with. A projection of the typed plan and the engine's records, like
     `render_plan_grants`; empty for an old-form plan and for a plan with nothing of the kind."""
-    from . import sub_plan
+    from . import effort, sub_plan
     from .config import Thresholds
     from .plan import stage_above_threshold
 
@@ -2088,7 +2088,7 @@ def render_subplans(doc: PlanDoc, state, store=None) -> str:
                                 "the stage starts only after you approve that sub-plan")
             continue
         if not stage_above_threshold(stage, thr):
-            tier = stage.actor.cost_tier or "medium"
+            tier = effort._stage_tier(stage)
             price = (f"tier {tier}: ${thr.budget_usd_float(tier):.2f}, "
                      f"{thr.effort_stage_minutes(tier)} min")
             lines.append(head + f"below the size line, priced at {price}; resources: "
@@ -2108,17 +2108,20 @@ def render_subplans(doc: PlanDoc, state, store=None) -> str:
                   + (f", confirmed by {est.confirmer}" if est.confirmer else ""))
         lines.append(head + f"sub-plan recorded — {figure}; resources: "
                      + _request_text(sub_plan.request_parts(record.resource_request)))
-    for key, raw in sorted(state.sub_plan_records.items()):
+    deeper = [("", key, raw) for key, raw in sorted(state.sub_plan_records.items())
+              if key.partition(":")[2] and key.partition(":")[0] != str(len(state.plan_stack))]
+    for child in children:
+        deeper += [(f"child {child.session_id}, ", key, raw)
+                   for key, raw in sorted(child.sub_plan_records.items()) if ":" in key]
+    for owner, key, raw in deeper:
         level, _, number = key.partition(":")
-        if not number or level == str(len(state.plan_stack)):
-            continue
         record = sub_plan.SubPlanRecord.from_dict(raw)
         est = record.estimate
         figure = ("no estimate" if est is None else
                   f"estimate {est.minutes if est.minutes is not None else '?'} min"
                   f" / ${est.usd if est.usd is not None else '?'}")
-        lines.append(f"- level {level}, stage {number}: sub-plan recorded — {figure}; resources: "
-                     + _request_text(sub_plan.request_parts(record.resource_request)))
+        lines.append(f"- {owner}level {level}, stage {number}: sub-plan recorded — {figure}; "
+                     f"resources: " + _request_text(sub_plan.request_parts(record.resource_request)))
     if not lines:
         return ""
     return "Sub-plans, resources and permissions\n" + "\n".join(lines) + "\n"

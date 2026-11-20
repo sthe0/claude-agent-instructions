@@ -285,7 +285,7 @@ def write_parent_approval(state, stage_index: int, rows, *, widens_set: bool = T
     against; an agent's approval inside that set leaves it as it was."""
     entry = state.stage_approvals.setdefault(approval_key(state, stage_index), {})
     entry["parent_resource_approval"] = resource_request_digest(rows)
-    if widens_set or "approved" not in entry:
+    if widens_set:
         entry["approved"] = request_parts(rows)
     return entry
 
@@ -313,9 +313,11 @@ def set_planning_mark(state, stage_index: int, planning: bool) -> None:
 def subplan_approval_problem(entry: dict, record: SubPlanRecord | None) -> str | None:
     """Why the user's approval in `entry` does not cover the live `record`, or None when it does."""
     if not entry.get("user_subplan_approval"):
-        return "the user has not approved a sub-plan for it (approve-subplan --by user)"
+        return ("the user has not approved a sub-plan for it (present it with present-plan "
+                "--kind subplan --stage <n>, then approve-subplan --by user)")
     if record is None:
-        return "the sub-plan the user approved is no longer on record"
+        return ("the sub-plan the user approved is no longer on record (build it again with "
+                "dispatch --subplan-only or push-subplan, present it, then approve-subplan --by user)")
     if approval_digest(record) != entry["user_subplan_approval"]:
         return "the sub-plan changed since the user approved it (approve-subplan --by user again)"
     return None

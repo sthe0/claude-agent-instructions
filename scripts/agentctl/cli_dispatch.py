@@ -1328,18 +1328,12 @@ def _stage_approval_refusal(state, store, stage, *, subplan_only: bool,
     """The refusal of a start the user's or the parent's approval does not cover: a decided-later
     stage whose sub-plan the user has not approved, an above-line stage whose resources and
     permissions the parent has not approved. It covers the in-thread start as well as the spawned
-    one. A dry run starts nothing and is not refused. No model judge stands behind it: both
-    decisions are read from state the engine wrote."""
-    if dry_run:
+    one. A dry run of a spawned stage only previews the command and is not refused; a dry run of
+    an in-thread stage is the same directive as its start, so it meets the same refusal. No
+    model judge stands behind it: both decisions are read from state the engine wrote."""
+    if dry_run and stage.is_spawn():
         return None
-    try:
-        record = sub_plan.read(state, stage.index, store)
-    except sub_plan.SubPlanError as exc:
-        return Directive(False, state.node, "noop",
-                         f"dispatch refused: the sub-plan record of stage {stage.index} cannot be read: {exc}")
-    blockers = list(dict.fromkeys(
-        gates.decided_later_dispatch_blockers(state, stage, record, subplan_only=subplan_only)
-        + gates.parent_resource_dispatch_blockers(state, stage, record, subplan_only=subplan_only)))
+    blockers = gates.stage_start_blockers(state, stage, store=store, subplan_only=subplan_only)
     if not blockers:
         return None
     return Directive(
@@ -1470,6 +1464,7 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
             runtime_host=host,
             project_settings=_dispatch_project_settings_path(state),
             session_id=state.session_id,
+            planning_only=subplan_only,
         )
     finally:
         if child_run is None:
@@ -1615,6 +1610,15 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
             },
         )
 
+    if subplan_only and marker in ("COMPLETED", "PLAN-READY"):
+        store.save(state)
+        return Directive(
+            True, state.node, "await_subplan_approval",
+            f"stage {stage.index}'s planning child returned {marker}: its sub-plan is on record, "
+            f"the stage is not done and its result is not recorded. Present the sub-plan "
+            f"(present-plan --kind subplan --stage {stage.index}), wait for the user's "
+            f"approve-subplan, then dispatch the stage itself",
+            marker=marker, data={**base, "planning_dispatch": True})
     if marker == "COMPLETED":
         store.save(state)
         return Directive(

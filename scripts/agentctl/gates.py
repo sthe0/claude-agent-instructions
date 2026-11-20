@@ -3428,12 +3428,20 @@ def unplanned_stage_blockers(state: SessionState, target_plan: str | None, *, st
 
 
 def planning_dispatch_refusal(stage, entry: dict, record) -> str | None:
-    """The one test both dispatch blockers apply to `dispatch --subplan-only`: only a
+    """The one test both dispatch blockers apply to `dispatch --subplan-only`: only a spawned
     decided-later stage whose sub-plan the user has not approved for its live digest is let
-    through to be planned. None when it is; else the reason it is refused."""
+    through to be planned. None when it is; else the reason it is refused. An in-thread stage
+    has no child to plan it, and an old-form stage has no sub-plan record: neither is planned."""
+    if stage.place is None:
+        return (f"dispatch --subplan-only plans a decided-later stage of a plan with sub-plans; "
+                f"stage {stage.index} is an old-form stage with no sub-plan record")
     if not sub_plan.is_decided_later(stage):
         return (f"dispatch --subplan-only plans a decided-later stage; stage {stage.index} is "
                 f"not marked decided-later (`lazy = true`)")
+    if not stage.is_spawn():
+        return (f"dispatch --subplan-only starts a planning child; stage {stage.index} is "
+                f"in-thread, so its sub-plan is built in this session (push-subplan), not "
+                f"through a dispatch")
     if sub_plan.subplan_approval_problem(entry, record) is None:
         return (f"dispatch --subplan-only plans a sub-plan the user has not approved; stage "
                 f"{stage.index}'s sub-plan is approved as it stands: dispatch the stage itself")
@@ -3444,13 +3452,11 @@ def decided_later_dispatch_blockers(state: SessionState, stage, record, *,
                                     subplan_only: bool = False) -> list[str]:
     """A decided-later stage starts (spawned or in-thread) only on the user's approval of its
     presented sub-plan for the sub-plan as it stands. Old-form stages are not decided later."""
-    if stage.place is None:
-        return []
     entry = sub_plan.approval_entry(state, stage.index)
     if subplan_only:
         reason = planning_dispatch_refusal(stage, entry, record)
         return [reason] if reason else []
-    if not sub_plan.is_decided_later(stage):
+    if stage.place is None or not sub_plan.is_decided_later(stage):
         return []
     problem = sub_plan.subplan_approval_problem(entry, record)
     if problem is None:
@@ -3462,13 +3468,11 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
                                       subplan_only: bool = False) -> list[str]:
     """A stage above the line starts only while the parent's approval of its resources and
     permissions is set and was given for the request as it stands."""
-    if stage.place is None:
-        return []
     entry = sub_plan.approval_entry(state, stage.index)
     if subplan_only:
         reason = planning_dispatch_refusal(stage, entry, record)
         return [reason] if reason else []
-    if not stage_above_threshold(stage, Thresholds()):
+    if stage.place is None or not stage_above_threshold(stage, Thresholds()):
         return []
     approved = entry.get("parent_resource_approval")
     if not approved:
@@ -3481,15 +3485,35 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
     return []
 
 
+def stage_start_blockers(state: SessionState, stage, *, store=None,
+                         subplan_only: bool = False) -> list[str]:
+    """Why a stage may not start: the two start guards over the stage's live sub-plan. The one
+    call every way of starting a stage makes (dispatch, and next-stage for an in-thread stage),
+    so a start through one verb is no looser than through the other."""
+    try:
+        record = sub_plan.read(state, stage.index, store)
+    except sub_plan.SubPlanError as exc:
+        return [f"the sub-plan record of stage {stage.index} cannot be read: {exc}"]
+    return list(dict.fromkeys(
+        decided_later_dispatch_blockers(state, stage, record, subplan_only=subplan_only)
+        + parent_resource_dispatch_blockers(state, stage, record, subplan_only=subplan_only)))
+
+
 def child_approval_blockers(child: SessionState, parent: SessionState | None) -> list[str]:
     """Why a linked child may not approve its own plan (`approve --by agent`): its parent's
     stage is being planned (a planning dispatch is no work dispatch, whatever the digest says),
     or the parent's stage is decided later and the user has not approved this sub-plan as it
-    stands. Without the parent's state there is no copy to read, so nothing is refused."""
+    stands. A child whose parent's state cannot be read has no copy to check and is refused:
+    an unreadable parent is not an approval."""
     link = child.parent_link or {}
-    if parent is None or not link:
+    if not link:
         return []
     index = link.get("stage_index")
+    if parent is None:
+        return [f"the state of the parent session {link.get('parent_session') or '(not recorded)'} "
+                f"cannot be read, so the parent's approval of stage {index} cannot be checked: "
+                f"report this to your parent, who restores its state (agentctl status --session "
+                f"<parent>) and dispatches the stage again"]
     entry = sub_plan.approval_entry(parent, index)
     if entry.get("planning"):
         return [f"the parent dispatched stage {index} only to plan it (dispatch --subplan-only): "

@@ -18,6 +18,8 @@ from . import (
     task_accumulator,
     mandate_store,
 )
+from lib import config_root
+from .own_contour import OWN_SESSION_ENV
 from .partition import render_section, render_units, verdict
 from .directive import Directive
 from .dispatch import Runner
@@ -816,8 +818,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             state.order_effort_base = {}
         else:
             _flush_order_effort(state, store=store)
-    if not mandate_basis:
-        _write_stage_approvals(state, store, by_agent=by_agent)
+    _write_stage_approvals(state, store, by_agent=by_agent or bool(mandate_basis))
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -936,6 +937,13 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
     second_current = _second_current_stage_refusal(state, stage.index)
     if second_current is not None:
         return second_current
+    if not stage.is_spawn():
+        blockers = gates.stage_start_blockers(state, stage, store=store)
+        if blockers:
+            return Directive(
+                False, state.node, "await_user_approval",
+                "next-stage refused: " + "; ".join(blockers),
+                data={"blockers": blockers})
     # pick the entry edge into EXECUTING from the current node
     if state.node == Node.PARTITIONED.value:
         event = "execute_approved"
@@ -1031,7 +1039,7 @@ def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: 
         approved = _approved_set(state, store, stage)
         if approved is None:
             if not state.parent_link:
-                sub_plan.write_parent_approval(state, stage.index, rows)
+                sub_plan.write_parent_approval(state, stage.index, rows, widens_set=False)
             continue
         if not sub_plan.request_within(rows, approved):
             sub_plan.write_parent_approval(state, stage.index, rows, widens_set=False)
@@ -1086,6 +1094,12 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
     """The agent's approval of one stage's resources and permissions, inside the set the user (or
     the parent) approved. It asks no method question: only whether the request lies in the set."""
     state = _require(store, args.session)
+    own = os.environ.get(OWN_SESSION_ENV, "").strip()
+    if own and config_root.sanitize_session_id(own) != config_root.sanitize_session_id(state.session_id):
+        return Directive(False, state.node, "noop",
+                         "approve-stage-resources approves the stages of the calling session's own "
+                         "plan: a linked child names its own session through agentctl-own.py and "
+                         "never the session that handed it a stage")
     try:
         stage = state.stage(args.stage)
     except KeyError:
@@ -1098,7 +1112,13 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
     if record is None:
         return Directive(False, state.node, "noop", f"stage {stage.index} has no sub-plan on record")
     if sub_plan.is_decided_later(stage):
-        problem = sub_plan.subplan_approval_problem(sub_plan.approval_entry(state, stage.index), record)
+        entry = sub_plan.approval_entry(state, stage.index)
+        granted = entry.get("user_subplan_request")
+        if granted is not None and sub_plan.resource_request_digest(record.resource_request) != granted:
+            return Directive(False, state.node, "await_user_approval",
+                             f"stage {stage.index}: the user's approval does not cover the live "
+                             f"resource request (approve-subplan --by user on the changed sub-plan)")
+        problem = sub_plan.subplan_approval_problem(entry, record)
         if problem:
             return Directive(False, state.node, "await_user_approval",
                              f"stage {stage.index} is decided later and {problem}")

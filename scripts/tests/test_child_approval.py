@@ -119,6 +119,9 @@ class Child:
 
     def link(self, *, norm: StageNorm | None = None, grants=(), depth: int = 1,
              sid: str = "child-1") -> None:
+        if not hasattr(self, "_parent_started"):
+            self.run("start", session="parent-s", task="parent", goal="g", done_criterion="dc")
+            self._parent_started = True
         record = norm_handoff.build_record(
             parent_session="parent-s", stage_index=1, kind="developer",
             norm=norm or self.norm, grants=list(grants), depth=depth, parent_lineage=None,
