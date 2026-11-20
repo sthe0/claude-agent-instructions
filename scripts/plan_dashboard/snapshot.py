@@ -200,9 +200,17 @@ def _unchanged(reference: dict, path: str, kind: str, ident, live_marker=None) -
     return live_marker == marker or _last_change(ident) <= _last_change(marker)
 
 
+LEGACY_TAKES = 2
+
+
 class Observed:
     """The identities the dashboard saw this cycle, against those of the cycle before (or of the snapshot it
-    started from): the set a cycle reports as ``applied``, and the ``sources`` of the next snapshot."""
+    started from): the set a cycle reports as ``applied``, and the ``sources`` of the next snapshot.
+
+    The first ``LEGACY_TAKES`` takes compare whole observations (``previous`` and ``base``, which may be the
+    snapshot's ``Recorded``). From then on the reference is the observation two takes back and a take looks at
+    the paths that moved since: ``log`` holds, for each path that moved since the last take, the ``(kind,
+    identity)`` it had then (None: it was not there), and ``older`` the same for the take before."""
 
     def __init__(self):
         self.reset()
@@ -216,16 +224,36 @@ class Observed:
             self.loaded: set[str] = set()
             self.touched: set[str] = set()
             self.read: set[str] = set()
+            self.log: dict[str, tuple | None] = {}
+            self.older: dict[str, tuple | None] = {}
+            self.takes = 0
 
     def seed(self, recorded: Recorded) -> None:
         with _LOCK:
             self.previous = self.base = recorded
+            self.log, self.older, self.takes = {}, {}, 0
+
+    def _moved(self, kind: str, old: dict, new: dict) -> None:
+        """Log the paths of ``kind`` whose identity differs between ``old`` and ``new``."""
+        if old == new:
+            return
+        for path, (ident, _) in new.items():
+            before = old.get(path)
+            if before is None:
+                self.log.setdefault(path, None)
+            elif before[0] != ident:
+                self.log.setdefault(path, (kind, before[0]))
+        for path, (ident, _) in old.items():
+            if path not in new:
+                self.log.setdefault(path, (kind, ident))
 
     def scanned(self, kind: str, items: dict[str, tuple], directory: dict | None = None) -> None:
         """Replace every identity of ``kind`` by those of one full directory pass: ``{path: (stat, read_ns)}``;
         ``directory`` is the pass's ``{"path", "marker", "taken_ns"}``, the marker stat'ed before the listing."""
         with _LOCK:
-            self.current[kind] = {path: (identity_of(st), settled(st, read_ns)) for path, (st, read_ns) in items.items()}
+            new = {path: (identity_of(st), settled(st, read_ns)) for path, (st, read_ns) in items.items()}
+            self._moved(kind, self.current[kind], new)
+            self.current[kind] = new
             if directory is not None:
                 self.directories[kind] = directory
 
@@ -236,6 +264,7 @@ class Observed:
     def replay(self, kind: str, captured: tuple[dict, dict | None]) -> None:
         current, directory = captured
         with _LOCK:
+            self._moved(kind, self.current[kind], current)
             self.current[kind] = dict(current)
             if directory is not None:
                 self.directories[kind] = directory
@@ -263,8 +292,14 @@ class Observed:
 
     def note(self, kind: str, path, st) -> None:
         with _LOCK:
-            self.current[kind][str(path)] = (identity_of(st), settled(st))
-            self.touched.add(str(path))
+            key, ident = str(path), identity_of(st)
+            before = self.current[kind].get(key)
+            if before is None:
+                self.log.setdefault(key, None)
+            elif before[0] != ident:
+                self.log.setdefault(key, (kind, before[0]))
+            self.current[kind][key] = (ident, settled(st))
+            self.touched.add(key)
 
     def note_read(self, path: str) -> None:
         with _LOCK:
@@ -282,28 +317,69 @@ class Observed:
     def _now(self) -> dict:
         return {path: (kind, ident) for kind, items in self.current.items() for path, (ident, _) in items.items()}
 
+    def _entry(self, path: str) -> tuple | None:
+        """``(kind, identity)`` of ``path`` now, the last kind winning, or None."""
+        found = None
+        for kind, items in self.current.items():
+            entry = items.get(path)
+            if entry is not None:
+                found = (kind, entry[0])
+        return found
+
+    def _moved_since_reference(self) -> set[str]:
+        """``_changed`` for the observation two takes back: only the paths that moved since are looked at."""
+        changed = set(self.read)
+        for path in self.log.keys() | self.older.keys():
+            before = self.older[path] if path in self.older else self.log[path]
+            now = self._entry(path)
+            if (before is None) != (now is None) or (now is not None and not same_identity(now[0], before[1], now[1])):
+                changed.add(path)
+        return changed
+
+    def _reported(self) -> set[str]:
+        if self.takes < LEGACY_TAKES:
+            return self._changed(self._now())
+        return self._moved_since_reference()
+
     def take(self) -> list[str]:
         """The paths created, changed or deleted since the observation before the last one, and every path read
         since the last call: sorted. The observation is then rotated, so that a poll made at any moment of a
         cycle is covered by the report of that cycle. With no snapshot behind it a first call reports only
         what was read."""
         with _LOCK:
-            self.current["transcript"] = {p: v for p, v in self.current["transcript"].items() if p in self.touched}
-            now = self._now()
-            changed = self._changed(now)
-            self.base, self.previous, self.read, self.touched = self.previous, now, set(), set()
+            transcripts = self.current["transcript"]
+            for path in [path for path in transcripts if path not in self.touched]:
+                self.log.setdefault(path, ("transcript", transcripts.pop(path)[0]))
+            changed = self._reported()
+            if self.takes < LEGACY_TAKES:
+                self.base, self.previous = self.previous, self._now()
+            self.takes += 1
+            if self.takes == LEGACY_TAKES:
+                self.base = self.previous = None
+            self.older, self.log, self.read, self.touched = self.log, {}, set(), set()
             return sorted(changed)
 
     def peek(self) -> list[str]:
         """What ``take`` would report, without rotating anything."""
         with _LOCK:
-            return sorted(self._changed(self._now()))
+            return sorted(self._reported())
 
-    def kinds(self) -> dict[str, str]:
+    def kinds(self, paths=None) -> dict[str, str]:
+        """The kind of each of ``paths`` (default: of every path the observations know); a path unknown to them
+        is left out."""
         with _LOCK:
-            out = {path: kind for earlier in (self.base, self.previous) if earlier
-                   for path, (kind, _) in earlier.items()}
-            out.update({path: kind for kind, items in self.current.items() for path in items})
+            if self.takes < LEGACY_TAKES:
+                out = {path: kind for earlier in (self.base, self.previous) if earlier
+                       for path, (kind, _) in earlier.items()}
+                out.update({path: kind for kind, items in self.current.items() for path in items})
+                return out if paths is None else {path: out[path] for path in paths if path in out}
+            if paths is None:
+                paths = set(self.older) | set(self.log) | {path for items in self.current.values() for path in items}
+            out = {}
+            for path in paths:
+                entry = self._entry(path) or self.log.get(path) or self.older.get(path)
+                if entry is not None:
+                    out[path] = entry[0]
             return out
 
     def sources(self, keep=None) -> list[dict]:
@@ -1445,6 +1521,47 @@ def transcript_shared(shared, generation: int, roots):
     return None
 
 
+class StemMerge:
+    """The transcripts of ``records`` (``{project path: (identity, names, observed, covered)}``) by stem, and
+    the stems each project contributed; ``by_stem`` is never changed once made, the next merge copies it."""
+
+    __slots__ = ("records", "by_stem", "stems_of")
+
+    def __init__(self, records: dict, by_stem: dict, stems_of: dict):
+        self.records, self.by_stem, self.stems_of = records, by_stem, stems_of
+
+
+def merged_stems(base: StemMerge | None, records: dict) -> StemMerge:
+    """The merge of ``records`` by stem. Made on ``base`` (the merge of the records the pass began from) it
+    touches only the projects whose record is not the one ``base`` merged and the stems those held or hold,
+    so a pass that read one project again reads the stems of that project alone."""
+    if base is None:
+        by_stem, stems_of, changed, was = {}, {}, set(records), {}
+    else:
+        by_stem, stems_of, was = dict(base.by_stem), dict(base.stems_of), base.records
+        changed = {path for path in records.keys() | was.keys() if records.get(path) is not was.get(path)}
+    touched: set[str] = set()
+    removed: set[Path] = set()
+    for path in changed:
+        touched.update(stems_of.pop(path, ()))
+        if path in was:
+            removed.update(was[path][1])
+    added: dict[str, list[Path]] = {}
+    for path in changed:
+        if path in records:
+            names = records[path][1]
+            stems_of[path] = tuple(name.stem for name in names)
+            for stem, name in zip(stems_of[path], names):
+                added.setdefault(stem, []).append(name)
+    for stem in touched | added.keys():
+        paths = [name for name in by_stem.get(stem, ()) if name not in removed] + added.get(stem, [])
+        if paths:
+            by_stem[stem] = tuple(sorted(paths, key=str)) if len(paths) > 1 else tuple(paths)
+        else:
+            by_stem.pop(stem, None)
+    return StemMerge(records, by_stem, stems_of)
+
+
 class TranscriptListing:
     """The main-session transcripts by session id, each project directory listed again only when its identity
     changed (a created or deleted transcript moves its directory's mtime). On the stat path one pass serves
@@ -1457,6 +1574,7 @@ class TranscriptListing:
         self.kept: KeptResult | None = None
         self.event_kept: KeptRead | None = None
         self.entries: EntryKept | None = None
+        self.merge: StemMerge | None = None
         self.cycle: tuple | None = None
         self._lock = threading.RLock()
 
@@ -1488,7 +1606,7 @@ class TranscriptListing:
         were not kept are listed again, the rest keep their stems, and the merge is made again."""
         trusting, covers, version, token = event_view(root_versions, roots)
         with self._lock:
-            kept, entries = self.event_kept, self.entries
+            kept, entries, merge = self.event_kept, self.entries, self.merge
         marked = marked_projects(entries, trusting, covers, roots)
         if marked is not None and not marked and view_unchanged(kept, version, covers) and kept.held == roots:
             REUSED.note("transcripts", kept)
@@ -1514,19 +1632,15 @@ class TranscriptListing:
             REUSED.note("transcripts", entries)
         if marked is None or previous.keys() - present.keys():
             self.dirs.prune(set(records))
-        found: dict[str, list[Path]] = {}
-        for projects in layout:
-            for entry in projects:
-                for transcript in records[entry.path][1] if entry.path in records else ():
-                    found.setdefault(transcript.stem, []).append(transcript)
-        result = MappingProxyType({stem: tuple(sorted(paths, key=str)) if len(paths) > 1 else tuple(paths)
-                                   for stem, paths in found.items()})
+        base = merge if marked is not None and merge is not None and merge.records is entries.records else None
+        merged = merged_stems(base, records)
+        result = MappingProxyType(merged.by_stem)
         kept_entries = [keep_entries(root, token, covers, roots, records) for root in roots] if trusting else []
         entries = kept_entries[0] if kept_entries and all(kept_entries) else None
         kept = (KeptRead(version, covers, roots, result, None)
                 if entries is not None and all(map(record_reusable, records.values())) else None)
         with self._lock:
-            self.event_kept, self.entries = kept, entries
+            self.event_kept, self.entries, self.merge = kept, entries, merged
         return result
 
     @staticmethod
@@ -1577,7 +1691,7 @@ class TranscriptListing:
     def clear(self) -> None:
         with self._lock:
             self.dirs.clear()
-            self.kept = self.cycle = self.event_kept = self.entries = None
+            self.kept = self.cycle = self.event_kept = self.entries = self.merge = None
             self.passes = 0
 
 
@@ -1629,7 +1743,7 @@ def observation(rotate: bool = True) -> tuple[list[str], dict[str, str], dict[st
     (``Observed.take``, or ``peek`` without ``rotate``), each path's kind and the binding scan's drive map."""
     check_stop()
     changed = OBSERVED.take() if rotate else OBSERVED.peek()
-    return changed, OBSERVED.kinds(), BINDINGS.driven()
+    return changed, OBSERVED.kinds(changed), BINDINGS.driven()
 
 
 def selection_key(include_all: bool, window_hours, sessions) -> str:

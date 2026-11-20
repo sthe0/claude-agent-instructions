@@ -59,7 +59,8 @@ SNAPSHOT_NAMES = (
     "binding-event-reuse-ignores-mark", "mark-log-drops-names", "mark-log-survives-trust-change",
     "binding-entry-reuse-off", "binding-entry-keeps-vanished", "binding-entry-reuse-despite-unsettled",
     "transcript-event-reuse-off", "transcript-event-reuse-ignores-subdirectory", "event-reuse-census-off",
-    "binding-read-shared-result", "event-cycle-census-unregistered")
+    "binding-read-shared-result", "event-cycle-census-unregistered", "covers-memo-clears-live-paths",
+    "transcript-merge-all-projects", "change-set-walks-whole-observation")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
                         "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
                         "startup-applied-last-read-only", "startup-applied-at-check-end",
@@ -72,7 +73,7 @@ WATCH_NAMES = (
     "light-tick-reads-sources", "light-tick-skips-tmux", "light-tick-owns-redraw", "light-tick-ignores-pending-event",
     "sweep-not-sliced", "skipped-slice-share-lost", "held-redraw-waits-for-next-tick", "owed-header-repaint-dropped",
     "owed-tmux-poll-dropped", "cycle-start-after-read", "detection-at-path-choice", "covers-memo-across-sources",
-    "covers-unmemoized", "covers-memo-unbounded", "watcher-sources-list")
+    "covers-unmemoized", "covers-memo-unbounded", "covers-memo-thrash", "watcher-sources-list")
 WATCH_PILOT_NAMES = tuple(name for name, (module, _, _) in mutations.WATCH_MUTATIONS.items()
                           if module == mutations.TUI_APP)
 WATCH_STDLIB_NAMES = tuple(name for name in WATCH_NAMES if name not in WATCH_PILOT_NAMES)

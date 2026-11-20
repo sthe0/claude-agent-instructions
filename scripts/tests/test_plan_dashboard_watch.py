@@ -303,6 +303,20 @@ def test_the_covers_memo_is_bounded(monkeypatch):
     assert 0 < len(watch.COVERS_MEMO) <= watch.COVERS_MEMO_MAX
 
 
+def test_covers_memo_keeps_live_paths_past_its_bound(tmp_path, monkeypatch):
+    monkeypatch.setattr(watch, "COVERS_MEMO_MAX", 4)
+    source = watch.Source("a", tmp_path, 0, ".json")
+    paths = [tmp_path / f"{number}.json" for number in range(3 * watch.COVERS_MEMO_MAX)]
+    for path in paths:
+        path.write_text("{}", encoding="utf-8")
+        watch.covers_of(source, path)
+    asked, real = [], watch.Source.covers
+    monkeypatch.setattr(watch.Source, "covers", lambda source, path: (asked.append(path), real(source, path))[1])
+    for path in paths:
+        watch.covers_of(source, path)
+    assert len(asked) == 0
+
+
 def test_watcher_sources_are_a_tuple(layout):
     given = layout.sources()
     count = len(given)

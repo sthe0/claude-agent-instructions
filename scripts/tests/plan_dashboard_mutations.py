@@ -1346,6 +1346,9 @@ SNAPSHOT_MUTATIONS = {
     "code-version-always-parsed": (SNAPSHOT, "accepted_code_version", _always((None, "no record"))),
     "snapshot-records-every-source": (SNAPSHOT, "snapshot_sources", _records_every_source),
     "snapshot-directory-marker-ignored": (SNAPSHOT, "_unchanged", _marker_taken_as_recorded),
+    "covers-memo-clears-live-paths": ("plan_dashboard.watch", "covers_of", lambda original: _covers_memo_cleared_wholesale_at_its_bound(original)),
+    "transcript-merge-all-projects": (SNAPSHOT, "merged_stems", lambda original: lambda base, records: original(None, records)),
+    "change-set-walks-whole-observation": (SNAPSHOT, "OBSERVED", lambda original: _change_set_walks_the_whole_observation(original)),
 }
 
 MUTATIONS.update({
@@ -1471,6 +1474,39 @@ def _covers_memo_without_a_bound(original):
     return mutated
 
 
+def _covers_memo_cleared_wholesale_at_its_bound(original):
+    def mutated(source, path):
+        memo = _watch().COVERS_MEMO
+        key = (source, os.fspath(path))
+        known = memo.get(key)
+        if known is None:
+            if len(memo) >= _watch().COVERS_MEMO_MAX:
+                memo.clear()
+            known = memo[key] = source.covers(path)
+        return known
+    return mutated
+
+
+def _covers_memo_settled_by_clearing_it(original):
+    class Thrashing(type(original)):
+        def settle(self):
+            if len(self) >= _watch().COVERS_MEMO_MAX:
+                self.clear()
+    original.__class__ = Thrashing
+    return original
+
+
+def _change_set_walks_the_whole_observation(original):
+    class Walking(type(original)):
+        def _moved_since_reference(self):
+            for items in self.current.values():
+                for _ in items:
+                    pass
+            return super()._moved_since_reference()
+    original.__class__ = Walking
+    return original
+
+
 def _watcher_keeps_the_given_sources(original):
     class Mutated(original):
         def __init__(self, sources, *args, **kwargs):
@@ -1483,6 +1519,7 @@ WATCH_MUTATIONS = {
     "covers-memo-across-sources": (WATCH, "covers_of", _covers_memo_keyed_by_path_only),
     "covers-unmemoized": (WATCH, "covers_of", lambda _original: lambda source, path: source.covers(path)),
     "covers-memo-unbounded": (WATCH, "covers_of", _covers_memo_without_a_bound),
+    "covers-memo-thrash": (WATCH, "COVERS_MEMO", _covers_memo_settled_by_clearing_it),
     "watcher-sources-list": (WATCH, "Watcher", _watcher_keeps_the_given_sources),
     "overflow-not-swept": (WATCH, "needs_sweep", _always(False)),
     "new-dir-not-watched": (WATCH, "adopt", lambda _original: lambda *args, **kwargs: None),

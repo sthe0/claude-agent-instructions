@@ -23,12 +23,12 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePath
 from types import SimpleNamespace
 
 import pytest
 
-from plan_dashboard import attention, model, snapshot as store, tui
+from plan_dashboard import attention, model, snapshot as store, tui, watch as watching
 from plan_dashboard_fixtures import set_mtime, write_transcript
 from plan_dashboard_support import (  # noqa: F401
     ALPHA, BETA, HARNESS, NOW, ONE_HOUR_NS, STALE, at, console_root, isolated_home, iso, make_state, usage_row,
@@ -1942,3 +1942,141 @@ def test_a_new_transcript_is_seen_by_the_next_event_index(transcribed):
     move_directory_key(transcribed.changed)
     store.KEPT.mark([path], [transcribed.changed])
     assert list(attention.transcript_index(transcribed.root.transcripts_root)["new-1"]) == [path]
+
+
+# --- the event path's work per cycle follows the change, not the live file count ----------------------------
+
+LIVE_TRANSCRIPTS, LIVE_PROJECTS = 20000, 300
+
+
+@pytest.fixture(scope="module")
+def vast_tree(tmp_path_factory):
+    """Twenty thousand settled transcripts in three hundred project directories under the second of two
+    projects roots, written once for the module: every file, project directory and root carries an old mtime."""
+    base = tmp_path_factory.mktemp("vast")
+    first, second = base / "projects-first", base / "projects-second"
+    first.mkdir()
+    projects = []
+    for number in range(LIVE_PROJECTS):
+        project = second / f"project-{number:03d}"
+        project.mkdir(parents=True)
+        projects.append(project)
+    sizes = [LIVE_TRANSCRIPTS // LIVE_PROJECTS + (number < LIVE_TRANSCRIPTS % LIVE_PROJECTS)
+             for number in range(LIVE_PROJECTS)]
+    files = []
+    for number, project in enumerate(projects):
+        for index in range(sizes[number]):
+            path = project / f"session-{number:03d}-{index:03d}.jsonl"
+            path.write_bytes(b"{}\n")
+            os.utime(path, ns=(PAST_NS, PAST_NS))
+            files.append(path)
+    for directory in (*projects, first, second):
+        os.utime(directory, ns=(PAST_NS, PAST_NS))
+    return SimpleNamespace(base=base, first=first, second=second, projects=projects, files=files, sizes=sizes)
+
+
+@pytest.fixture
+def vast(vast_tree, monkeypatch):
+    """A trusting kept view, covered by the watcher's own cover test over both projects roots, on a clock far
+    past every file, with the transcript index already made once."""
+    store.reset()
+    monkeypatch.setattr(store, "now_ns", lambda: time.time_ns() + FAR_FUTURE_NS)
+    sources = watching.sources_for(vast_tree.base / "state", vast_tree.base / "bindings",
+                                   [vast_tree.first, vast_tree.second], vast_tree.base / "costs" / "costs.jsonl")
+    watching.COVERS_MEMO.clear()
+    store.KEPT.trust(watching.Watcher(sources, inotify=object()).covers)
+    index = attention.transcript_index(vast_tree.second)
+    assert sum(map(len, index.values())) == LIVE_TRANSCRIPTS
+    yield vast_tree
+    store.reset()
+    watching.COVERS_MEMO.clear()
+
+
+def save_transcript(path: Path) -> None:
+    """Append to a transcript and mark it, as the watcher does for a saved one."""
+    with path.open("ab") as handle:
+        handle.write(b"{}\n")
+    store.KEPT.mark([path])
+
+
+def count_source_covers(monkeypatch) -> list[str]:
+    """The paths ``watch.Source.covers`` is asked about from now on."""
+    asked, real = [], watching.Source.covers
+    monkeypatch.setattr(watching.Source, "covers", lambda source, path: (asked.append(os.fspath(path)), real(source, path))[1])
+    return asked
+
+
+def count_stem_reads(monkeypatch) -> list[str]:
+    """The paths whose ``stem`` is read from now on: what the transcript index merges by."""
+    read, real = [], PurePath.stem
+    monkeypatch.setattr(PurePath, "stem", property(lambda path: (read.append(str(path)), real.fget(path))[1]))
+    return read
+
+
+def test_a_second_event_index_computes_no_coverage_at_twenty_thousand_transcripts(vast, monkeypatch):
+    asked = count_source_covers(monkeypatch)
+    save_transcript(vast.files[0])
+    attention.transcript_index(vast.second)
+    assert len(asked) == 0
+
+
+def test_one_saved_transcript_merges_only_its_project_stems(vast, monkeypatch):
+    merged = count_stem_reads(monkeypatch)
+    save_transcript(vast.files[0])
+    second = attention.transcript_index(vast.second)
+    assert len(merged) == vast.sizes[0]
+    assert second == store.TranscriptListing().index([vast.second])
+
+
+class WalkedEntries(dict):
+    """A dict that counts, in ``walked``, every entry an iteration over it yields."""
+
+    walked = 0
+
+    def __iter__(self):
+        for key in super().__iter__():
+            WalkedEntries.walked += 1
+            yield key
+
+    def keys(self):
+        WalkedEntries.walked += len(self)
+        return list(super().keys())
+
+    def values(self):
+        WalkedEntries.walked += len(self)
+        return list(super().values())
+
+    def items(self):
+        WalkedEntries.walked += len(self)
+        return list(super().items())
+
+
+class WalkedObservation(dict):
+    """The ``Observed.current`` of kinds, each of whose entries dicts counts its walks."""
+
+    def __setitem__(self, kind, entries):
+        super().__setitem__(kind, WalkedEntries(entries))
+
+
+def test_take_after_one_saved_transcript_walks_only_touched_paths(vast, monkeypatch):
+    when = store.now_ns()
+    store.OBSERVED.reset()
+    store.OBSERVED.scanned("state", {str(path): (os.stat(path), when) for path in vast.files})
+    for _ in range(3):
+        store.observation()
+    saved = vast.files[0]
+    save_transcript(saved)
+    store.OBSERVED.note("transcript", str(saved), os.stat(saved))
+    walked_kinds = WalkedObservation()
+    for kind, entries in store.OBSERVED.current.items():
+        walked_kinds[kind] = entries
+    store.OBSERVED.current = walked_kinds
+    compared, real = [], store._unchanged
+    monkeypatch.setattr(store, "_unchanged", lambda *args, **kwargs: (compared.append(args[1]), real(*args, **kwargs))[1])
+    WalkedEntries.walked = 0
+    peeked = store.observation(rotate=False)
+    changed, kinds, _ = store.observation()
+    assert changed == peeked[0] == [str(saved)]
+    assert kinds.get(str(saved)) == "transcript"
+    walks = WalkedEntries.walked + len(compared)
+    assert walks <= 8

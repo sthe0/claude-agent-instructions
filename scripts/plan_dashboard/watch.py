@@ -79,17 +79,37 @@ class Source:
 
 
 COVERS_MEMO_MAX = 65536
-COVERS_MEMO: dict[tuple[Source, str], bool] = {}
+
+
+class CoversMemo(dict):
+    """``(source, path string) -> covers`` answers. At its bound ``settle`` drops the answers of paths that no
+    longer exist and lifts the next bound to twice what is left, so live paths are never asked again and a
+    tree larger than the bound costs one sweep per doubling, not a recompute per cycle."""
+
+    kept = 0
+
+    def settle(self) -> None:
+        if len(self) < max(COVERS_MEMO_MAX, 2 * self.kept):
+            return
+        for key in [key for key in self if not os.path.lexists(key[1])]:
+            del self[key]
+        self.kept = len(self)
+
+    def clear(self) -> None:
+        super().clear()
+        self.kept = 0
+
+
+COVERS_MEMO = CoversMemo()
 
 
 def covers_of(source: Source, path) -> bool:
-    """``source.covers(path)``, asked once per ``(source, path string)``. Cleared at the bound: the paths are
-    bounded by the files under the watched roots, but deleted ones would pile up over a long session."""
+    """``source.covers(path)``, asked once per ``(source, path string)``. The paths are bounded by the files
+    under the watched roots, but deleted ones would pile up over a long session: ``settle`` sweeps them."""
     key = (source, os.fspath(path))
     known = COVERS_MEMO.get(key)
     if known is None:
-        if len(COVERS_MEMO) >= COVERS_MEMO_MAX:
-            COVERS_MEMO.clear()
+        COVERS_MEMO.settle()
         known = COVERS_MEMO[key] = source.covers(path)
     return known
 
