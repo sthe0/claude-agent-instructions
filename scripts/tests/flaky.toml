@@ -5,6 +5,7 @@
 
 [flaky]
 "scripts/tests/test_dep_tracer.py::test_a_tracer_failure_is_a_rerun_record_not_an_internal_error" = { count = 4, first_seen = "2026-11-15T13:08:33Z", last_seen = "2026-11-15T23:39:44Z" }
+"scripts/tests/test_gate_speedup_control.py::test_the_selftest_fails_without_the_limiter" = { count = 1, first_seen = "2026-11-20T07:16:10Z", last_seen = "2026-11-20T07:16:10Z" }
 "scripts/tests/test_hook_telemetry_coverage.py::test_a_registered_hook_leaves_one_valid_row[SessionStart-hook-reaper.py]" = { count = 3, first_seen = "2026-11-13T01:31:15Z", last_seen = "2026-11-18T09:52:07Z" }
 "scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed[file-notifier-excluded]" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed[head-pinned-before-review]" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
