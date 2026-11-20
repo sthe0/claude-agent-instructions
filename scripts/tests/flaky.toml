@@ -78,7 +78,10 @@
 "scripts/tests/test_reaper_git_worktrees.py::test_unreachable_remote_is_logged_as_an_error" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_reaper_liveness.py::test_a_process_with_a_mapped_file_inside_the_tree_is_found_under_the_maps_kind" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
 "scripts/tests/test_reaper_liveness.py::test_a_process_with_an_open_file_inside_the_tree_is_found" = { count = 1, first_seen = "2026-11-15T23:39:44Z", last_seen = "2026-11-15T23:39:44Z" }
+"scripts/tests/test_substrate_adequacy.py::test_two_tasks_of_one_session_each_count_their_difficulty" = { count = 2, first_seen = "2026-11-19T19:17:36Z", last_seen = "2026-11-19T19:19:35Z" }
+"scripts/tests/test_substrate_adequacy.py::test_unaligned_imported_rows_each_count" = { count = 1, first_seen = "2026-11-19T19:19:35Z", last_seen = "2026-11-19T19:19:35Z" }
 "scripts/tests/test_substrate_adequacy.py::test_unknown_mechanism_count_shown" = { count = 1, first_seen = "2026-11-19T10:17:03Z", last_seen = "2026-11-19T10:17:03Z" }
 "scripts/tests/test_telemetry_fixture.py::test_migration_adds_the_fixture_cause_columns" = { count = 1, first_seen = "2026-11-18T09:52:07Z", last_seen = "2026-11-18T09:52:07Z" }
-"scripts/tests/test_telemetry_live_shape.py::test_command_row_written_when_interrupted_after_state_save" = { count = 1, first_seen = "2026-11-17T01:12:25Z", last_seen = "2026-11-17T01:12:25Z" }
+"scripts/tests/test_telemetry_live_shape.py::test_command_row_written_when_interrupted_after_state_save" = { count = 2, first_seen = "2026-11-17T01:12:25Z", last_seen = "2026-11-20T02:17:11Z" }
 "scripts/tests/test_telemetry_recorder_cost.py::test_session_end_hook_process_returns_while_its_detached_sync_delivers" = { count = 1, first_seen = "2026-11-18T14:56:21Z", last_seen = "2026-11-18T14:56:21Z" }
+"scripts/tests/test_test_slots.py::test_a_nested_parallel_pytest_inside_a_holding_run_does_not_acquire" = { count = 1, first_seen = "2026-11-19T19:19:35Z", last_seen = "2026-11-19T19:19:35Z" }
