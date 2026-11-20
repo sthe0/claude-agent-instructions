@@ -531,6 +531,18 @@ def _replan_receipt(plan_path, rendering_text, presented_ts, *, plan_sha256="a" 
     )
 
 
+def _answer_binding_conditions_question(state: dict) -> None:
+    """Record, in the session state dict, the binding-conditions question of a two-sided order
+    draft that carries no binding condition, answered `none` by the user."""
+    from agentctl import gates
+
+    state.setdefault("plugins", {})["premise"] = {"questions": [{
+        "kind": gates.QUESTION_KIND_BINDING_CONDITIONS,
+        "question": gates.BINDING_CONDITIONS_QUESTION,
+        "disposition": gates.QUESTION_DISPOSITION_ESCALATED,
+        "answer": gates.BINDING_CONDITIONS_NONE}]}
+
+
 def test_case11_hook_stamps_replan_diff_only_with_marker(tmp_path):
     rendering = "## Replan diff\n...proposed change...\n"
     receipt = _replan_receipt("/plan.toml", rendering, 100.0)
@@ -589,13 +601,13 @@ def test_case11_no_marker_ask_not_stamped(tmp_path):
 def test_case11_marked_order_ask_stamps_order_receipt_despite_delivered_essence(tmp_path):
     from agentctl.plan import load_order_draft, understanding_digest
     from agentctl.state import order_agree_marker
-    from test_order_phase import _draft
+    from test_order_phase import RENDERING, _draft
     from test_plan_delivery_gate_judge import run_hook_answering
 
-    draft = _draft(tmp_path, omit=("customer_side",))
+    draft = _draft(tmp_path)
     digest = understanding_digest(load_order_draft(draft)[0])
     essence_text = "## Essence\n...plan essence...\n"
-    order_text = "## Order\n...the order as understood...\n"
+    order_text = RENDERING
     essence = PlanPresentation(
         plan_path="/plan.toml", kind="essence", plan_sha256="a" * 64,
         rendering_sha256="b" * 64, rendering_text=essence_text, presented_ts=100.0,
@@ -610,6 +622,7 @@ def test_case11_marked_order_ask_stamps_order_receipt_despite_delivered_essence(
     state = json.loads(state_file.read_text())
     state["order_draft_path"] = str(draft)
     state["order_draft_sha256"] = digest
+    _answer_binding_conditions_question(state)
     state_file.write_text(json.dumps(state))
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt_entry(90.0),
@@ -637,15 +650,15 @@ def test_case11_marked_order_ask_stamps_order_receipt_despite_delivered_essence(
 def test_case11_marked_order_ask_allowed_when_essence_receipt_is_stale(tmp_path):
     from agentctl.plan import load_order_draft, understanding_digest
     from agentctl.state import order_agree_marker
-    from test_order_phase import _draft
+    from test_order_phase import RENDERING, _draft
     from test_plan_delivery_gate_judge import run_hook_answering
 
-    draft = _draft(tmp_path, omit=("customer_side",))
+    draft = _draft(tmp_path)
     digest = understanding_digest(load_order_draft(draft)[0])
     plan = tmp_path / "plan.toml"
     plan.write_text("index = 2\n")
     essence_text = "## Essence\n...plan essence...\n"
-    order_text = "## Order\n...the order as understood...\n"
+    order_text = RENDERING
     # The essence receipt binds a different plan hash: the plan was edited
     # after its essence was shown, so the essence receipt is stale.
     essence = PlanPresentation(
@@ -663,6 +676,7 @@ def test_case11_marked_order_ask_allowed_when_essence_receipt_is_stale(tmp_path)
     state = json.loads(state_file.read_text())
     state["order_draft_path"] = str(draft)
     state["order_draft_sha256"] = digest
+    _answer_binding_conditions_question(state)
     state_file.write_text(json.dumps(state))
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt_entry(90.0),

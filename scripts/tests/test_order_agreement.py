@@ -610,6 +610,35 @@ def test_replan_refuses_an_old_form_stage_on_a_two_sided_order(ostore, home, arm
     assert ostore.load(SESSION).plan_path == plan
 
 
+def test_replan_of_an_old_form_plan_with_described_stages_is_accepted_and_carries_passed(
+        ostore, home, armed_env, tmp_path):
+    """The way out the refusal names, taken: the session holds a plan in the old form, approved
+    before the order chose the stage form; the replan describes the same stage and is accepted,
+    and the stage already PASSED keeps its outcome instead of being re-run."""
+    from agentctl.state import StageStatus
+
+    plan = _plan_ready(ostore, home, tmp_path)
+    Path(plan).write_text(Path(_plan(tmp_path, describe=False, name="scratch.toml")).read_text(
+        encoding="utf-8"), encoding="utf-8")
+    state = ostore.load(SESSION)
+    state.stage(1).outcome.status = StageStatus.PASSED.value
+    state.stage(1).outcome.actual = "done before the order chose the form"
+    ostore.save(state)
+    proposal = _plan(tmp_path, name="proposal.toml")
+    cli.cmd_order_raise(ns(session=SESSION, id="O1", element="the release is one command"),
+                        store=ostore)
+    cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="",
+                             plan=proposal), store=ostore)
+
+    d = cli.cmd_replan(ns(session=SESSION, plan=proposal), store=ostore)
+
+    assert d.ok, (d.detail, d.data.get("blockers"))
+    state = ostore.load(SESSION)
+    assert state.plan_path == proposal
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.stage(1).outcome.actual == "done before the order chose the form"
+
+
 def test_approve_refuses_a_plan_rewritten_in_the_old_form(ostore, home, armed_env, tmp_path):
     """A plan whose file holds the old form when approval re-reads it (a plan registered before
     the change) is refused by approve itself; it does not attest to an old-form stage."""

@@ -482,10 +482,7 @@ def test_an_empty_binding_condition_list_is_a_statement_not_a_missing_part():
         _new_form({"binding_conditions": [dict(c) for c in BINDING]}), _ctx()) == []
 
 
-def test_below_threshold_stage_needs_only_description():
-    """A stage below the size line needs the stage description and nothing of the executor's
-    record: no record, no means, no estimate, whatever the verb sequence."""
-    sizes = (5, 60, 400)
+def _sized_plan(*sizes):
     stages = [{"title": f"s{n}", "executor": "in_thread", "expected_result_image": "the product",
                "done_criterion": "the check passes", "place": "the engine",
                "binding_conditions": [], "declared_size": size, "expected_minutes": 2,
@@ -493,21 +490,36 @@ def test_below_threshold_stage_needs_only_description():
     raw = _raw_plan({})
     raw["stage"] = stages
     raw["meta"]["order"] = json.loads(json.dumps(TWO_SIDED_ORDER))
-    doc = parse_plan(raw)
+    return parse_plan(raw)
 
-    def above(max_lines):
-        thr = Thresholds({**TIGHT._c, "small-change-max-lines": str(max_lines)})
-        return [plan.stage_above_threshold(s, thr) for s in doc.stages]
 
-    assert above(500) == [False, False, False]
-    assert above(100) == [False, False, True]
-    assert above(10) == [False, True, True]
-    assert above(1) == [True, True, True]
+def _above(doc, max_lines):
+    thr = Thresholds({**TIGHT._c, "small-change-max-lines": str(max_lines)})
+    return [plan.stage_above_threshold(s, thr) for s in doc.stages]
+
+
+def test_below_threshold_stage_needs_only_description():
+    """Stages at or below the size line (5, 40 and 50 lines against a line of 50) are the
+    description alone: no record, no means, no estimate at submission."""
+    doc = _sized_plan(5, 40, 50)
+    assert _above(doc, 50) == [False, False, False]
     assert _problems(doc) == []
     assert _problems(doc, _ctx()) == []
 
     refused = _problems(_new_form({"declared_size": 5}, drop=("place",)), _ctx())
     assert any("states no place" in p for p in refused), refused
+
+
+def test_the_size_line_moves_with_the_threshold_and_a_larger_stage_is_asked_no_record_either():
+    """Of three stages (5, 60 and 400 lines) the ones above the line follow the small-change
+    threshold; submission asks none of them for a record — that is decided when its stage runs."""
+    doc = _sized_plan(5, 60, 400)
+    assert _above(doc, 500) == [False, False, False]
+    assert _above(doc, 100) == [False, False, True]
+    assert _above(doc, 10) == [False, True, True]
+    assert _above(doc, 1) == [True, True, True]
+    assert _problems(doc) == []
+    assert _problems(doc, _ctx()) == []
 
 
 def test_a_new_form_stage_declaring_no_size_is_above_the_line_at_submission():
@@ -581,26 +593,28 @@ def test_compared_plans_need_an_entry_with_its_departure_or_a_resolving_search()
                                 "search_id": "S1"}), resolves))
 
 
-TWO_CONDITIONS = (*BINDING, {"id": "B2", "text": "stay in the worktree", "set_by": "parent"})
-INHERITED_TWO = (*BINDING, {"id": "B2", "text": "stay in the worktree", "set_by": "user"})
+def _cond(condition_id, set_by="user"):
+    return {"id": condition_id, "text": f"condition {condition_id}", "set_by": set_by}
 
 
-def test_a_condition_the_parent_set_itself_and_released_is_not_binding():
-    ctx = StageOrderContext(expected_stage=2, binding_conditions=TWO_CONDITIONS,
-                            released=frozenset({"B2"}))
-    assert _record_problems(_record(), ctx) == []
-    unreleased = StageOrderContext(expected_stage=2, binding_conditions=TWO_CONDITIONS)
+TWO_CONDITIONS = (*BINDING, _cond("B2"))
+
+
+@pytest.mark.parametrize("label", ["user", "parent", "a middle level", ""])
+def test_the_check_excuses_exactly_the_conditions_the_context_released(label):
+    """The record check reads the context's released set and never a condition's `set_by`
+    label: B2 is excused when released, owed when not, under any label."""
+    conditions = (*BINDING, _cond("B2", label))
+    released = StageOrderContext(expected_stage=2, binding_conditions=conditions,
+                                 released=frozenset({"B2"}))
+    assert _record_problems(_record(), released) == []
+    unreleased = StageOrderContext(expected_stage=2, binding_conditions=conditions)
     assert any("does not say how it keeps binding condition 'B2'" in p
                for p in _record_problems(_record(), unreleased))
-
-
-def test_an_inherited_condition_released_by_a_middle_level_stays_binding():
-    """B2 was set by the user, above the middle level: its record's `withdrawn` leaves the
-    child owing it, whatever the context's released set says."""
-    ctx = StageOrderContext(expected_stage=2, binding_conditions=INHERITED_TWO,
-                            released=frozenset({"B2"}))
+    only_b1 = StageOrderContext(expected_stage=2, binding_conditions=conditions,
+                                released=frozenset({"B1"}))
     assert any("does not say how it keeps binding condition 'B2'" in p
-               for p in _record_problems(_record(), ctx))
+               for p in _record_problems(_record(), only_b1)), "a release is per condition"
 
 
 def test_the_carrying_record_cannot_release_the_condition_it_owes():
@@ -620,52 +634,179 @@ def _setter_record(*decisions) -> dict:
                                    for c, v in decisions]).to_dict()
 
 
-def _set_by(setter, *ids):
-    return tuple({"id": i, "text": f"condition {i}", "set_by": setter} for i in ids)
+def _cstage(index, *conditions):
+    """The slice of a stage the readers use: its index, its binding conditions and its edges."""
+    return SimpleNamespace(index=index, binding_conditions=list(conditions),
+                           binding_conditions_stated=True, depends_on=[])
 
 
-PARENT_SET = _set_by("parent", "B2", "B3", "B4", "B5", "B6", "B9")
-USER_SET = _set_by("user", "B2", "B3", "B4", "B5", "B6", "B9")
+def _norm_of(*conditions):
+    """The handoff norm of a linked child: the stage description with these conditions."""
+    return {"description_place": [["description", "the engine",
+                                   [[c["id"], c["text"], c["set_by"]] for c in conditions],
+                                   None, [], None]]}
 
 
-def test_the_release_is_read_from_the_record_one_level_above_the_carrying_plan():
+C1, C2, C3, C9 = _cond("C1"), _cond("C2", "the middle level"), _cond("C3"), _cond("C9")
+
+
+def test_the_release_is_read_from_the_record_of_the_level_that_set_the_condition():
+    """Stage b (C1 carried from above, C2 and C3 set by the middle level) is built by the plan
+    under test; the middle level's record of stage a releases C2 only, wherever that record
+    lives. C9 is on neither stage; C1 is on stage a, so it is never the middle level's to give."""
     released = cli_common._setter_level_released
-    nested = _session("s", plan_stack=[_frame(1), _frame(3)],
-                      sub_plan_records={"0:1": _setter_record(("B2", "withdrawn")),
-                                        "1:3": _setter_record(("B9", "withdrawn"))})
-    assert released(nested, None, PARENT_SET) == frozenset({"B2"}), "the frame below, not the carrying one"
+    on_b = (C1, C2, C3)
+    r_a = _setter_record(("C1", "withdrawn"), ("C2", "withdrawn"), ("C3", "kept"), ("C9", "withdrawn"))
+    root_stages = [_cstage(1, C1)]
+
+    nested = _session("s", plan_stack=[_frame(1, root_stages), _frame(2)],
+                      sub_plan_records={"0:1": r_a,
+                                        "1:2": _setter_record(("C3", "withdrawn"))})
+    assert released(nested, None, on_b) == frozenset({"C2"}), \
+        "the frame below, not the carrying one; `kept` and an id on no stage release nothing"
 
     under_contour = _session(
-        "s", plan_stack=[_frame(3)], parent_link={"parent_session": "p", "stage_index": 1},
-        sub_plan_records={"1": _setter_record(("B3", "changed"), ("B4", "kept"))})
-    assert released(under_contour, None, PARENT_SET) == frozenset({"B3"}), "kept releases nothing"
+        "s", plan_stack=[_frame(2)],
+        parent_link={"parent_session": "p", "stage_index": 1, "norm": _norm_of(C1)},
+        sub_plan_records={"1": r_a})
+    assert released(under_contour, None, on_b) == frozenset({"C2"})
 
-    parent = _session("p", parent_link={"parent_session": "g", "stage_index": 4},
-                      sub_plan_records={"4": _setter_record(("B5", "withdrawn"))})
+    parent = _session("p", parent_link={"parent_session": "g", "stage_index": 4,
+                                        "norm": _norm_of(C1)},
+                      sub_plan_records={"4": r_a})
     contour = _session("c", parent_link={"parent_session": "p", "stage_index": 2})
-    assert released(contour, parent, PARENT_SET) == frozenset({"B5"})
+    assert released(contour, parent, on_b) == frozenset({"C2"})
 
-    framed_parent = _session("p", plan_stack=[_frame(1), _frame(2)],
-                             sub_plan_records={"1:2": _setter_record(("B6", "withdrawn")),
-                                               "0:1": _setter_record(("B9", "withdrawn"))})
-    assert released(contour, framed_parent, PARENT_SET) == frozenset({"B6"}), \
+    framed_parent = _session("p", plan_stack=[_frame(1, root_stages)],
+                             sub_plan_records={"0:1": r_a})
+    assert released(contour, framed_parent, on_b) == frozenset({"C2"}), \
         "a contour under a parent running a frame reads the record that frame carries"
 
-    assert released(_session("s", plan_stack=[_frame(1)]), None, PARENT_SET) == frozenset(), "root level"
-    assert released(_session("s"), None, PARENT_SET) == frozenset()
+    unknown_above = _session("s", plan_stack=[_frame(1), _frame(2)], sub_plan_records={"0:1": r_a})
+    assert released(unknown_above, None, on_b) == frozenset(), \
+        "a setter level whose own carried conditions are unknown releases nothing"
+    assert released(nested, None, None) == frozenset(), "no condition stated on the stage"
 
 
-def test_the_release_of_an_inherited_condition_by_a_middle_level_counts_for_no_reader():
+def test_the_decision_is_by_id_never_by_the_label_a_condition_carries():
+    """Whatever `set_by` says, an id the setter level carries from above is not its own: C0
+    (inherited, labelled by a middle level) and C1 (relabelled by it) stay binding."""
     released = cli_common._setter_level_released
-    nested = _session("s", plan_stack=[_frame(1), _frame(3)],
-                      sub_plan_records={"0:1": _setter_record(("B2", "withdrawn"))})
-    assert released(nested, None, USER_SET) == frozenset(), "set by the user, above the middle level"
-    assert released(nested, None, PARENT_SET) == frozenset({"B2"})
-    assert released(nested, None, None) == frozenset(), "no condition stated on the parent's stage"
-    mixed = (*_set_by("user", "B2"), *_set_by("parent", "B3"))
-    both = _session("s", plan_stack=[_frame(1), _frame(3)],
-                    sub_plan_records={"0:1": _setter_record(("B2", "withdrawn"), ("B3", "withdrawn"))})
-    assert released(both, None, mixed) == frozenset({"B3"})
+    c0 = _cond("C0", "a middle level")
+    relabelled_c1 = _cond("C1", "the middle level")
+    nested = _session("s", plan_stack=[_frame(1, [_cstage(1, c0, C1)]), _frame(2)],
+                      sub_plan_records={"0:1": _setter_record(("C0", "withdrawn"),
+                                                              ("C1", "changed"))})
+    assert released(nested, None, (c0, relabelled_c1)) == frozenset()
+    assert released(nested, None, (c0, relabelled_c1, C2)) == frozenset(), \
+        "C2 is the middle level's but R_a made no decision on it"
+    assert released(nested, None, ()) == frozenset()
+
+
+def _two_level(above, on_b, *decisions):
+    """The session of the plan P2 that builds stage b (index 2) of the middle plan P1; P1 is
+    itself the plan built for stage a (index 1) of the root plan P0. `above` are the conditions
+    stage a carries, `on_b` those stage b carries, `decisions` what the middle level's record of
+    stage a decides."""
+    state = _session("s", plan_stack=[_frame(1, [_cstage(1, *above)]),
+                                      _frame(2, [_cstage(2, *on_b)])])
+    sub_plan.store(state, sub_plan.SubPlanRecord(
+        stage=1, setter_decisions=[sub_plan.SetterDecision(c, v, "the middle level", "user")
+                                   for c, v in decisions]), level=0)
+    return state
+
+
+def _child_record(*kept):
+    return _record(how_kept=[{"condition": c, "how": f"{c} is kept"} for c in kept],
+                   setter_decisions=[{"condition": c, "value": "kept", "setter": "user",
+                                      "decided_by": "user"} for c in kept])
+
+
+def test_a_condition_the_middle_level_set_and_released_in_its_record_is_not_owed_by_the_child():
+    """(a) P1 sets C2 on its stage b and records C2 withdrawn in its record of stage a: P1's own
+    submission accepts that decision, and P2's plan, omitting C2, passes."""
+    p1_record = _record(stage=1, how_kept=[{"condition": "C1", "how": "C1 is kept"}],
+                        setter_decisions=[
+                            {"condition": "C1", "value": "kept", "setter": "user", "decided_by": "user"},
+                            {"condition": "C2", "value": "withdrawn", "setter": "the middle level",
+                             "decided_by": "user"}])
+    p1_plan = _new_form({"binding_conditions": [C1, C2]}, record=p1_record)
+    p1_ctx = StageOrderContext(expected_stage=1, binding_conditions=(C1,))
+    assert submission._stage_order_violations(p1_plan, p1_ctx) == []
+
+    state = _two_level((C1,), (C1, C2))
+    sub_plan.store(state, p1_plan.meta.sub_plan, level=0)
+    ctx = cli_common._stage_order_context(state)
+    assert ctx.released == frozenset({"C2"})
+    assert _record_problems(_child_record("C1"), ctx) == []
+
+    kept_only = _two_level((C1,), (C1, C2), ("C2", "kept"))
+    owed = cli_common._stage_order_context(kept_only)
+    assert any("does not say how it keeps binding condition 'C2'" in p
+               for p in _record_problems(_child_record("C1"), owed)), "only a release excuses it"
+
+
+def test_a_decision_in_a_levels_record_names_a_condition_it_set_on_its_own_stages():
+    """Check 13 admits, besides the conditions of the stage the record's plan builds, the ones
+    the plan sets on its own stages; a decision on any other id is refused."""
+    p1_stages = {"binding_conditions": [C1, C2]}
+    stage_a = StageOrderContext(expected_stage=1, binding_conditions=(C1,))
+
+    def problems(condition, ctx=stage_a):
+        decision = {"condition": condition, "value": "withdrawn", "setter": "x", "decided_by": "u"}
+        record = _record(stage=1, how_kept=[{"condition": "C1", "how": "kept"}],
+                         setter_decisions=[decision])
+        return submission._stage_order_violations(_new_form(p1_stages, record=record), ctx)
+
+    assert problems("C2") == [], "set by this level on its own stage b"
+    assert any("names condition 'C0'" in p and "neither the stage nor a stage of this plan" in p
+               for p in problems("C0"))
+    assert problems("C0", StageOrderContext(expected_stage=1)) == [], \
+        "a carrier whose stage conditions are unknown skips the known-id rule"
+
+
+def test_an_inherited_condition_released_by_a_non_user_labelled_middle_level_stays_binding():
+    """(b) C0 stage a carries (labelled by a middle level, not the user) is decided `withdrawn`
+    in R_a: the child still owes it."""
+    c0 = _cond("C0", "a middle level")
+    state = _two_level((c0,), (c0, C2), ("C0", "withdrawn"), ("C2", "withdrawn"))
+    ctx = cli_common._stage_order_context(state)
+    assert ctx.released == frozenset({"C2"})
+    problems = _record_problems(_child_record(), ctx)
+    assert any("does not say how it keeps binding condition 'C0'" in p for p in problems), problems
+    assert not any("'C2'" in p and "keeps" in p for p in problems)
+    assert _record_problems(_child_record("C0"), ctx) == []
+
+
+def test_a_condition_the_middle_level_relabelled_and_released_stays_binding():
+    """(c) C1 is the user's on stage a; stage b repeats it under the middle level's own label.
+    R_a's `withdrawn` on C1 releases nothing, whatever stage b says it was set by."""
+    relabelled = _cond("C1", "the middle level")
+    state = _two_level((C1,), (relabelled, C2), ("C1", "withdrawn"), ("C2", "withdrawn"))
+    ctx = cli_common._stage_order_context(state)
+    assert ctx.released == frozenset({"C2"})
+    problems = _record_problems(_child_record(), ctx)
+    assert any("does not say how it keeps binding condition 'C1'" in p for p in problems), problems
+
+
+def test_the_root_level_releases_nothing_a_record_it_does_not_carry_would_release():
+    """(d) The root plan builds no stage and carries no record, so the plan built for its stage
+    a is owed every condition stage a states: the one the root order stated and the one the
+    root plan set on the stage itself, whatever record the carrying plan's own level holds."""
+    order_condition = _cond("O1")
+    root_set = _cond("S1", "the root plan")
+    state = _session("s", plan_stack=[_frame(1, [_cstage(1, order_condition, root_set)])])
+    sub_plan.store(state, sub_plan.SubPlanRecord(
+        stage=1, setter_decisions=[sub_plan.SetterDecision("O1", "withdrawn", "root", "user"),
+                                   sub_plan.SetterDecision("S1", "withdrawn", "root", "user")]),
+        level=0)
+    ctx = cli_common._stage_order_context(state)
+    assert ctx.released == frozenset(), "the carrying record's own decisions release nothing"
+    problems = _record_problems(_record(stage=1, how_kept=[], setter_decisions=[]), ctx)
+    assert [c for c in ("O1", "S1") if any(f"keeps binding condition '{c}'" in p for p in problems)] \
+        == ["O1", "S1"]
+    assert cli_common._setter_level_released(_session("bare"), None, (order_condition, root_set)) \
+        == frozenset()
 
 
 def test_a_record_names_only_the_conditions_the_stage_carries():
@@ -790,21 +931,22 @@ def test_the_context_reads_the_ancestors_of_the_parent_stage_from_a_frame_and_a_
 
 
 def test_the_context_names_the_released_conditions_of_the_level_above(store):
+    """Parent p is a contour linked at stage 4 of its own parent, whose norm carries A1; p's
+    stage 1 (the one the child builds) carries A1 and B1. p's record decides both `withdrawn`:
+    only B1 is p's own to release, whatever label either carries."""
+    a1, b1 = _cond("A1", "the middle level"), _cond("B1", "user")
     parent = _described_parent(store, "p")
-    parent.parent_link = {"parent_session": "g", "stage_index": 4}
-    parent.sub_plan_records["4"] = _setter_record(("B1", "withdrawn"))
-    parent.stages[0].binding_conditions = [dict(c) for c in _set_by("parent", "B1")]
+    parent.parent_link = {"parent_session": "g", "stage_index": 4, "norm": _norm_of(a1)}
+    parent.sub_plan_records["4"] = _setter_record(("A1", "withdrawn"), ("B1", "withdrawn"))
+    parent.stages[0].binding_conditions = [dict(a1), dict(b1)]
     store.save(parent)
-    parent_set_norm = {"description_place": [["description", "the engine",
-                                              [["B1", "no push", "parent"]], None, [], None]]}
     child = _session("child", parent_link={"parent_session": "p", "stage_index": 1,
-                                           "norm": parent_set_norm})
+                                           "norm": _norm_of(a1, b1)})
     assert cli_common._stage_order_context(child, store=store).released == frozenset({"B1"})
     assert cli_common._stage_order_context(child).released == frozenset(), "no store, nothing read"
-    inherited = _session("child2", parent_link={"parent_session": "p", "stage_index": 1,
-                                                "norm": _NORM})
-    assert cli_common._stage_order_context(inherited, store=store).released == frozenset(), \
-        "B1 was set by the user: the middle level's withdrawal releases nothing"
+    states_nothing = _session("child2", parent_link={"parent_session": "p", "stage_index": 1,
+                                                     "norm": {}})
+    assert cli_common._stage_order_context(states_nothing, store=store).released == frozenset()
 
     cli.cmd_push_subplan(Namespace(session="p", plan="/tmp/child.toml", task=None,
                                    originating_stage=1), store=store)
@@ -812,6 +954,21 @@ def test_the_context_names_the_released_conditions_of_the_level_above(store):
     assert cli_common._stage_order_context(framed, store=store).released == frozenset({"B1"})
     framed.parent_link = None
     assert cli_common._stage_order_context(framed, store=store).released == frozenset(), "root level"
+
+
+def test_a_parent_session_without_a_state_file_is_a_named_refusal(store):
+    """With no parent state the ancestors of the stage cannot be read; a plan carrying a record
+    is refused by name, not accepted with every `[means: stage N]` mark unchecked."""
+    contour = _session("child", parent_link={"parent_session": "ghost", "stage_index": 1,
+                                             "norm": _norm_of(*BINDING)})
+    ctx = cli_common._stage_order_context(contour, store=store)
+    assert ctx.parent_ancestors is None and "ghost" in ctx.parent_unreadable
+    marked = _record(conditions="- the engine exists [means: stage 3]", stage=1)
+    problems = _record_problems(marked, ctx)
+    assert any("'ghost'" in p and "has no state file" in p for p in problems), problems
+    assert _record_problems(_record(stage=1), StageOrderContext(expected_stage=1,
+                                                                binding_conditions=BINDING)) == []
+    assert submission._stage_order_violations(_new_form(), ctx) == [], "no record, nothing owed"
 
 
 _RECORD_HEAD = """
@@ -862,11 +1019,13 @@ def _walk_to_submit(store, tmp_path, record_toml):
     return cli.cmd_submit_plan(Namespace(session="w", plan=str(plan)), store=store)
 
 
-def _walk_to_submit_in_contour(store, tmp_path, record_toml):
-    """The child session of a parent stage (a linked contour, no pushed frame) submits its plan."""
+def _walk_to_submit_in_contour(store, tmp_path, record_toml, *, parent_saved=True):
+    """The child session of a parent stage (a linked contour, no pushed frame) submits its plan;
+    `parent_saved=False` leaves the parent session without a state file."""
     from test_submit_plan_surfaces import _session as _classified, _write_plan
 
-    _described_parent(store, "p")
+    if parent_saved:
+        _described_parent(store, "p")
     _classified(store, "c")
     child = store.load("c")
     child.parent_link = {"parent_session": "p", "stage_index": 1, "norm": _NORM}
@@ -1160,6 +1319,16 @@ def test_the_submit_flow_in_a_child_contour_makes_no_judge_call(store, tmp_path,
     assert refused.ok is False
     assert any("does not say how it keeps binding condition 'B1'" in p
                for p in _stage_order_problems(refused)), refused.data
+
+
+def test_a_contour_whose_parent_session_has_no_state_file_is_refused_at_submit(store, tmp_path):
+    marked = _RECORD_HEAD.replace("[probe: python3 -m pytest -q => passes]",
+                                  "[means: stage 3]") + _HOW_KEPT
+    refused = _walk_to_submit_in_contour(store, tmp_path, marked, parent_saved=False)
+    assert refused.ok is False
+    assert any("'p'" in p and "has no state file" in p
+               for p in _stage_order_problems(refused)), refused.data
+    assert store.load("c").sub_plan_records == {}
 
 
 def test_a_good_record_goes_through_the_child_contour(store, tmp_path):

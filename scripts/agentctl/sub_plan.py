@@ -332,22 +332,23 @@ def read(state, stage_index: int, store_=None, children=None) -> SubPlanRecord |
     return SubPlanRecord.from_dict(found[0][1]) if found else None
 
 
-ORDER_SETTER = "user"
 RELEASING_VALUES = ("changed", "withdrawn")
 
 
-def parent_set_ids(conditions) -> frozenset[str]:
-    """The ids, among the binding conditions stated on the parent plan's stage, that the parent
-    level set itself: every one but those the order's own setter, the user, set. A condition the
-    user set is inherited from above and is released only by the order's own binding decisions,
-    never by a level between."""
-    return frozenset(c["id"] for c in conditions or ()
-                     if str(c.get("set_by", "")).strip().lower() != ORDER_SETTER)
+def parent_set_ids(conditions, carried_above) -> frozenset[str]:
+    """The ids, among the binding conditions `conditions` stated on the stage a child builds,
+    that the parent level set itself: the ones that level does not itself carry from above
+    (`carried_above`, the conditions of the stage the parent level builds, or for the root level
+    the order's). Decided by id, never by the label a condition carries: a level that restates
+    an inherited condition under its own name has not set it."""
+    above = {c["id"] for c in carried_above or ()}
+    return frozenset(c["id"] for c in conditions or () if c["id"] not in above)
 
 
-def released_ids(record: SubPlanRecord, conditions) -> frozenset[str]:
-    """The conditions `record`'s decisions changed or withdrew that the parent level set itself
-    (`parent_set_ids`): a decision on an inherited condition releases nothing."""
-    own = parent_set_ids(conditions)
+def released_ids(record: SubPlanRecord, conditions, carried_above) -> frozenset[str]:
+    """The conditions `record`, the record of the parent level, changed or withdrew among those
+    that level set itself (`parent_set_ids`): a decision on a condition it carries from above
+    releases nothing."""
+    own = parent_set_ids(conditions, carried_above)
     return frozenset(d.condition for d in record.setter_decisions
                      if d.value in RELEASING_VALUES and d.condition in own)

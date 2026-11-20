@@ -1338,16 +1338,20 @@ class StageOrderContext:
     `expected_stage` is the parent stage this plan carries the sub-plan of (the frame's
     originating stage, the child contour's handoff stage); `binding_conditions` are that
     stage's, read from the carrier; `released` are the ids of those conditions the setter
-    level's own record released (never the carrying record: a plan cannot release a condition
-    set above it); `parent_ancestors` are the transitive `depends_on` ancestors of the parent
-    stage in the parent plan, which a `[means: stage N]` mark on the record's conditions must
-    name; `search_resolver` tells whether a search id resolves in the session that carries the
-    record. Each field left None skips the check that needs it."""
+    level set itself (not carried from above) and released in its own record, already decided
+    by the carrier reader (`cli_common._setter_level_released`; never the carrying record: a
+    plan cannot release a condition set above it); `parent_ancestors` are the transitive
+    `depends_on` ancestors of the parent stage in the parent plan, which a `[means: stage N]`
+    mark on the record's conditions must name; `search_resolver` tells whether a search id
+    resolves in the session that carries the record; `parent_unreadable` says why the parent
+    session that was asked for could not be read at all. Each other field left None skips the
+    check that needs it."""
     expected_stage: int | None = None
     binding_conditions: tuple[dict, ...] | None = None
     released: frozenset[str] = frozenset()
     parent_ancestors: frozenset[int] | None = None
     search_resolver: Callable[[str], bool] | None = None
+    parent_unreadable: str | None = None
 
 
 @dataclass
@@ -1446,15 +1450,19 @@ def _sub_plan_compared_violations(record, prefix: str, ctx: StageOrderContext) -
     return out
 
 
-def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) -> list[str]:
+def _sub_plan_binding_violations(doc, record, prefix: str, ctx: StageOrderContext) -> list[str]:
     """Check 13: every binding condition of the stage is kept, or the record of the level that
     set it (`ctx.released`) says it was changed or withdrawn. The carrying record's own
     decisions are checked for form and never release a condition: a plan does not release what
-    was set above it. Nor does the setter level release a condition it only inherited: one the
-    user set is owed whatever `ctx.released` says (`sub_plan.parent_set_ids`)."""
+    was set above it. The record carries the decisions of the level that wrote this plan, so it
+    may decide the conditions that level set on its own stages (those of `doc` that the stage it
+    builds does not carry) besides the ones the stage carries; a decision on any other id is
+    refused."""
     out: list[str] = []
     known = None if ctx.binding_conditions is None else {c["id"] for c in ctx.binding_conditions}
-    released = set(ctx.released) & sub_plan.parent_set_ids(ctx.binding_conditions)
+    decidable = None if known is None else known | {
+        c["id"] for s in doc.stages for c in s.binding_conditions}
+    released = set(ctx.released)
     for decision in record.setter_decisions:
         if decision.value not in sub_plan.SETTER_VALUES:
             out.append(f"{prefix}'s decision on {decision.condition!r} has value "
@@ -1462,9 +1470,9 @@ def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) ->
         for role, who in (("setter", decision.setter), ("who decided", decision.decided_by)):
             if not who.strip():
                 out.append(f"{prefix}'s decision on {decision.condition!r} names no {role}")
-        if known is not None and decision.condition not in known:
-            out.append(f"{prefix}'s decision names condition {decision.condition!r}, which the "
-                       f"stage does not carry")
+        if decidable is not None and decision.condition not in decidable:
+            out.append(f"{prefix}'s decision names condition {decision.condition!r}, which "
+                       f"neither the stage nor a stage of this plan carries")
     if known is None:
         return out
     kept = {h.condition for h in record.how_kept if h.how.strip()}
@@ -1478,18 +1486,22 @@ def _sub_plan_binding_violations(record, prefix: str, ctx: StageOrderContext) ->
     return out
 
 
-def _sub_plan_record_violations(record, ctx: StageOrderContext) -> list[str]:
+def _sub_plan_record_violations(doc, record, ctx: StageOrderContext) -> list[str]:
     prefix = f"sub-plan record of stage {record.stage}"
     if record.stage <= 0:
         return ["the sub-plan record names no parent stage (`stage = <n>`)"] + _sub_plan_text_violations(
             record, "the sub-plan record", ctx)
     out: list[str] = []
+    if ctx.parent_unreadable:
+        out.append(f"{prefix}: {ctx.parent_unreadable}; a `[means: stage N]` mark cannot be "
+                   f"checked against it (restore the parent session's state, or submit from "
+                   f"the session that holds it)")
     if ctx.expected_stage is not None and record.stage != ctx.expected_stage:
         out.append(f"{prefix}: this plan builds stage {ctx.expected_stage}, not stage {record.stage}")
     out.extend(_sub_plan_text_violations(record, prefix, ctx))
     out.extend(_sub_plan_estimate_violations(record, prefix))
     out.extend(_sub_plan_compared_violations(record, prefix, ctx))
-    out.extend(_sub_plan_binding_violations(record, prefix, ctx))
+    out.extend(_sub_plan_binding_violations(doc, record, prefix, ctx))
     return out
 
 
@@ -1502,7 +1514,7 @@ def _stage_order_violations(doc, ctx: StageOrderContext | None = None) -> list[s
     out = _stage_description_violations(doc, ctx)
     record = doc.meta.sub_plan
     if record is not None:
-        out.extend(_sub_plan_record_violations(record, ctx))
+        out.extend(_sub_plan_record_violations(doc, record, ctx))
     return out
 
 
