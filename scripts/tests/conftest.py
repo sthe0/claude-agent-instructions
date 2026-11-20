@@ -249,7 +249,14 @@ def _isolate_telemetry(tmp_path_factory, monkeypatch):
     """The telemetry record and its spool (lib/telemetry) live under the config root; no
     test may open the live record or append to a live spool. The env vars reach the hook
     and CLI subprocesses a test spawns. The directory sits outside the test's own tmp_path,
-    which some tests snapshot to prove a command wrote nothing there."""
+    which some tests snapshot to prove a command wrote nothing there.
+
+    An in-process store call gets a 30 s deadline instead of the production 0.25 s, so a
+    test on a loaded machine does not lose its write to the fail-open timeout. Subprocesses
+    a test spawns keep the production deadline."""
+    from lib.telemetry import store
+
+    monkeypatch.setattr(store, "DEADLINE_S", 30.0)
     record_dir = tmp_path_factory.mktemp("telemetry-record")
     monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(record_dir / "telemetry.sqlite"))
     monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(record_dir / "spool"))
