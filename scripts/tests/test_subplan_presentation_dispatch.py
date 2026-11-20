@@ -119,7 +119,7 @@ def _refused(directive, *needles):
         assert needle in text, (needle, text)
 
 
-def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor"):
+def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True):
     state = store.load(sid)
     record = sub_plan.read(state, stage, store)
     anchor = f"[subplan:{stage}:{sub_plan.approval_digest(record)[:12]}]"
@@ -128,10 +128,10 @@ def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor"):
     shown = cli.cmd_present_plan(ns(session=sid, kind="subplan", stage=stage, plan=None,
                                     rendering_file=str(rendering)), store=store)
     assert shown.ok, shown
-    confirmed = cli.cmd_confirm_delivery(ns(
+    confirmed = confirm and cli.cmd_confirm_delivery(ns(
         session=sid, kind="subplan", by=by, note="delivered in the thread",
         escape_reason="delivered_out_of_band"), store=store)
-    assert confirmed.ok, confirmed
+    assert confirmed.ok if confirm else True, confirmed
     return cli_approval.cmd_approve_subplan(ns(session=sid, stage=stage, by=by), store=store)
 
 
@@ -225,12 +225,39 @@ def test_approve_subplan_by_agent_refused(store, venued_fixtures_dir):
     assert not sub_plan.approval_entry(store.load(SESSION), 1).get("user_subplan_approval")
 
 
+def test_approve_subplan_by_agent_refused_even_when_presented_and_delivered(
+        home_store, venued_fixtures_dir, tmp_path):
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True)
+    _put(store, _rec(1))
+    _present_and_approve(store, tmp_path, by="fedor", confirm=True)
+    state = store.load(SESSION)
+    entry = state.stage_approvals.get("0:1", {})
+    entry.pop("user_subplan_approval", None)
+    state.stage_approvals["0:1"] = entry
+    store.save(state)
+    d = cli_approval.cmd_approve_subplan(ns(session=SESSION, stage=1, by="agent"), store=store)
+    _refused(d, "--by agent is refused")
+    assert not sub_plan.approval_entry(store.load(SESSION), 1).get("user_subplan_approval")
+
+
 def test_approve_subplan_unpresented_refused(store, venued_fixtures_dir):
     _executing(store, venued_fixtures_dir)
     _described(store, lazy=True)
     _put(store, _rec(1))
     d = cli_approval.cmd_approve_subplan(ns(session=SESSION, stage=1, by="fedor"), store=store)
     _refused(d, "was not presented", "present-plan --kind subplan --stage 1")
+    assert not sub_plan.approval_entry(store.load(SESSION), 1).get("user_subplan_approval")
+
+
+def test_approve_subplan_without_a_delivery_stamp_refused(home_store, venued_fixtures_dir, tmp_path):
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True)
+    _put(store, _rec(1))
+    d = _present_and_approve(store, tmp_path, confirm=False)
+    _refused(d, "has no delivery stamp")
     assert not sub_plan.approval_entry(store.load(SESSION), 1).get("user_subplan_approval")
 
 
@@ -453,6 +480,39 @@ def test_a_decided_later_parent_stage_needs_the_users_approval_before_the_child_
     child.sub_plan_records[sub_plan.record_key(1)] = _rec(1, method="other").to_dict()
     assert any("changed since the user approved it" in b
                for b in gates.child_approval_blockers(child, parent))
+
+
+def test_a_linked_child_is_refused_its_own_approval_while_its_stage_is_only_being_planned(
+        tmp_path, monkeypatch):
+    """`approve --by agent` in a linked child goes through the gate: the parent's per-stage copy
+    says the stage was dispatched only to be planned, so the plan is not self-approved; once the
+    mark is cleared the same plan is."""
+    import test_child_approval as tca
+
+    child = tca.Child(tmp_path, monkeypatch)
+    parent = state_mod.SessionState(session_id="parent-s", task_id="t",
+                                    stages=[so._stage(1, place=ENGINE)])
+    parent.stage_approvals["0:1"] = {"planning": True}
+    child.store.save(parent)
+    tca._linked_submit(child)
+    assert child.state().parent_link is not None
+    refused = child.run("approve", session="child-1", by="agent")
+    assert refused["ok"] is False
+    assert any("only to plan it" in b for b in refused["data"]["blockers"]), refused["data"]
+
+    parent.stage_approvals["0:1"] = {"planning": False}
+    child.store.save(parent)
+    assert child.run("approve", session="child-1", by="agent")["ok"] is True
+
+
+def test_a_linked_child_of_an_ordinary_stage_still_self_approves(tmp_path, monkeypatch):
+    import test_child_approval as tca
+
+    child = tca.Child(tmp_path, monkeypatch)
+    child.store.save(state_mod.SessionState(session_id="parent-s", task_id="t",
+                                            stages=[so._stage(1, place=ENGINE)]))
+    tca._linked_submit(child)
+    assert child.run("approve", session="child-1", by="agent")["ok"] is True
 
 
 # --- the parent's approval of resources -------------------------------------------------------
