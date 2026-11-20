@@ -31,7 +31,8 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_approval, cli_common, gates, norm_handoff, own_contour, state as state_mod, sub_plan
+from agentctl import cli, cli_approval, cli_common, effort, gates, norm_handoff, own_contour, state as state_mod, sub_plan
+from agentctl.config import Thresholds
 from agentctl import render as render_mod
 from agentctl import submission
 from agentctl.dispatch import RunResult
@@ -143,6 +144,11 @@ def _next_stage(store, sid=SESSION):
     return cli.cmd_next_stage(ns(session=sid), store=store)
 
 
+def _start_blockers(store, stage=1, sid=SESSION) -> list[str]:
+    state = store.load(sid)
+    return gates.stage_start_blockers(state, state.stage(stage), store=store)
+
+
 def _refused(directive, *needles):
     assert directive.ok is False, directive
     text = directive.detail + " ".join(directive.data.get("blockers", []))
@@ -200,8 +206,9 @@ def _new_form_plan(base_dir: Path, tmp_path, *, lazy=(), minutes=None, in_thread
         extra = 'place = "the engine"\nbinding_conditions = []\n'
         if index in lazy:
             extra += "lazy = true\n"
-        if minutes is not None:
-            extra += f"expected_minutes = {minutes}\n"
+        declared = minutes.get(index) if isinstance(minutes, dict) else minutes
+        if declared is not None:
+            extra += f"expected_minutes = {declared}\n"
         marker = "depends_on = []\n" if index == 1 else "depends_on = [1]\n"
         text = text.replace(marker, marker + extra, 1)
     for index, title in ((1, "Scaffold module"), (2, "Add tests")):
@@ -273,6 +280,24 @@ def test_a_stage_below_the_line_is_presented_without_a_subplan_or_mark(
         store, venued_fixtures_dir, tmp_path, monkeypatch):
     plan = _essence_session(store, venued_fixtures_dir, tmp_path, monkeypatch, minutes=5)
     assert _present_essence(store, tmp_path, plan, with_subplans=True).ok is True
+
+
+def test_a_plan_of_one_stage_above_and_one_below_the_line_is_presented_with_the_price(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    """Only the stage above the line is refused for want of a sub-plan; the stage below it is
+    presented as it is, with the price of its cost tier read from the configured constants."""
+    plan = _essence_session(store, venued_fixtures_dir, tmp_path, monkeypatch, minutes={2: 5})
+    refused = _present_essence(store, tmp_path, plan, with_subplans=True)
+    _refused(refused, "stage 1 is above the size line")
+    assert "stage 2 is above" not in refused.detail
+    _put(store, _rec(1))
+    assert _present_essence(store, tmp_path, plan, with_subplans=True).ok is True
+    stage_two = store.load(SESSION).stage(2)
+    thr = Thresholds()
+    tier = effort.stage_tier(stage_two)
+    price = f"tier {tier}: ${thr.budget_usd_float(tier):.2f}, {thr.effort_stage_minutes(tier)} min"
+    text = _essence_text(store, plan, with_subplans=True)
+    assert f"stage 2 “Add tests”: below the size line, priced at {price}" in text
 
 
 def test_presentation_shows_subplans_estimates_and_decided_later_stages(
@@ -1150,27 +1175,32 @@ def test_the_context_reads_the_engine_copy_from_either_carrier(store):
 # --- below the line, old form, dry run ----------------------------------------------------
 
 def test_below_threshold_stage_needs_no_subplan_or_separate_approval(
-        store, venued_fixtures_dir, config_row):
-    """A stage below the line starts on the user's approval of the plan with no sub-plan and no
-    parent approval; a stage above it does not. The line is the configured one: moving the
-    threshold moves the stage across it."""
-    _executing(store, venued_fixtures_dir)
-    state = _described(store, minutes=5)
-    assert gates.stage_start_blockers(state, state.stage(1), store=store) == []
+        store, venued_fixtures_dir, tmp_path, config_row):
+    """In one plan, stage 1 above the line and stage 2 below it (five minutes): before the user's
+    approval of the plan stage 1 cannot start (in-thread or spawned) and stage 2 has nothing to
+    wait for; the user's `approve` writes the parent approval of stage 1 alone; stage 2 starts on
+    the plan's approval with no sub-plan and no parent approval, and the verb refuses it as
+    below the line. Moving the configured line to three minutes moves stage 2 above it."""
+    _planning(store)
+    plan = _new_form_plan(venued_fixtures_dir, tmp_path, in_thread=(2,), minutes={2: 5})
+    cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store)
+    needs = "the parent has not approved its resources"
+    assert needs in " ".join(_start_blockers(store, 1))
+    assert _start_blockers(store, 2) == []
+
+    _put(store, _rec(1))
+    assert cli.cmd_approve(ns(session=SESSION, by="user"), store=store).ok is True
+    cli.cmd_partition(ns(session=SESSION, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    assert list(store.load(SESSION).stage_approvals) == ["0:1"]
+    assert _start_blockers(store, 1) == [] and _start_blockers(store, 2) == []
+    _refused(_approve_resources(store, stage=2), "below the size line")
+    assert _next_stage(store).ok is not False
     spawns = Spawns()
-    assert _dispatch(store, spawns=spawns).action == "execute_in_thread"
-    cli_approval._write_stage_approvals(state, store, by_agent=False)
-    assert state.stage_approvals == {}
-    _refused(_approve_resources(store), "below the size line")
+    _started(_dispatch(store, spawns=spawns), spawns, in_thread=False)
 
     config_row("substantive-wall-clock-min", 3)
-    assert gates.stage_start_blockers(state, state.stage(1), store=store) \
-        and "the parent has not approved" in gates.stage_start_blockers(
-            state, state.stage(1), store=store)[0]
-    _refused(_dispatch(store), "the parent has not approved its resources")
-    _put(store, _rec(1))
-    _user_approves_resources(store)
-    assert _dispatch(store).action == "execute_in_thread"
+    assert needs in " ".join(_start_blockers(store, 2))
 
 
 def test_a_below_threshold_stage_carrying_the_mark_is_refused_at_submission():
@@ -1650,19 +1680,38 @@ def test_stage_resource_approval_is_refused_for_a_stage_of_another_session(
     assert _approve_resources(store).ok
 
 
-def test_resource_request_edit_voids_parent_approval(store, venued_fixtures_dir):
-    _executing(store, venued_fixtures_dir)
-    state = _described(store)
-    sub_plan.store(state, _rec(1), level=0)
-    cli_approval._write_stage_approvals(state, store, by_agent=False)
-    store.save(state)
-    assert _dispatch(store).action == "execute_in_thread"
+def test_resource_request_edit_voids_parent_approval(store, venued_fixtures_dir, tmp_path):
+    """A stage of the root plan approved with the whole plan (`approve --by user`) starts. An
+    edit of the record's request inside the approved set voids the parent's approval (the start
+    is refused with the digest reason) until the user's `approve-resources` re-approves it; an
+    edit widening it past the set leaves the verb refused and the start refused; an edit of the
+    estimate alone leaves the approval in force."""
+    _planning(store)
+    plan = _new_form_plan(venued_fixtures_dir, tmp_path, in_thread=(1, 2))
+    cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store)
     _put(store, _rec(1, allow=("Edit", "Read")))
-    _refused(_dispatch(store), "its resource request changed since the parent approved it")
-    wide = _approve_resources(store)
-    _refused(wide, "outside the approved set")
-    _user_approves_resources(store)
-    assert _dispatch(store).action == "execute_in_thread"
+    assert cli.cmd_approve(ns(session=SESSION, by="user"), store=store).ok is True
+    cli.cmd_partition(ns(session=SESSION, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    digest = _entry(store)["parent_resource_approval"]
+    assert digest == sub_plan.resource_request_digest(_rec(1, allow=("Edit", "Read")).resource_request)
+    assert _start_blockers(store) == []
+
+    same_request = _rec(1, allow=("Edit", "Read"))
+    same_request.estimate = sub_plan.Estimate(minutes=99, usd=9.0, author="a", confirmer="b")
+    _put(store, same_request)
+    assert _start_blockers(store) == []
+
+    voided = "its resource request changed since the parent approved it"
+    _put(store, _rec(1, allow=("Edit",)))
+    assert voided in " ".join(_start_blockers(store))
+    assert _approve_resources(store).ok is True
+    assert _start_blockers(store) == []
+
+    _put(store, _rec(1, allow=("Edit", "Read", "Bash(rm:*)")))
+    assert voided in " ".join(_start_blockers(store))
+    _refused(_approve_resources(store), "outside the approved set")
+    assert voided in " ".join(_start_blockers(store))
 
 
 def test_an_edit_inside_the_approved_set_is_reapproved_by_the_verb(store, venued_fixtures_dir):
