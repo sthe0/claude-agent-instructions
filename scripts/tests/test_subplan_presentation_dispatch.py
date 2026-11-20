@@ -610,7 +610,9 @@ class Contour:
         self.tmp, self.handoff, self.plans = tmp_path, None, 0
         _executing(store, venued_fixtures_dir, PARENT)
         _described(store, PARENT, lazy=True, in_thread=in_thread)
-        self.child = tca.Child(tmp_path, monkeypatch)
+        work = tmp_path / "work"
+        work.mkdir()
+        self.child = tca.Child(work, monkeypatch)
         self.child.root, self.child.store, self.child.start_parent = store.root, store, False
 
     def text(self, method="split the module", **approvals) -> str:
@@ -635,7 +637,7 @@ class Contour:
     def submit(self, text: str | None = None) -> dict:
         """Link the child and run its start, classify, plan and `submit-plan`."""
         plan = self.write(text or self.text())
-        self.child.link(grants=self.tca._covering_grants(plan))
+        self.child.link(grants=self.tca._covering_grants(plan) + [{"rule": "Edit"}])
         self.handoff = os.environ[norm_handoff.NORM_HANDOFF_ENV]
         self.mp.delenv(norm_handoff.NORM_HANDOFF_ENV)
         with self.as_child():
@@ -1312,7 +1314,69 @@ def test_a_linked_child_whose_parent_state_cannot_be_read_is_refused_its_own_app
 
 # --- the parent's approval of resources -------------------------------------------------------
 
-def test_agent_approval_writes_resource_approval(store, venued_fixtures_dir):
+def _later_plan_of_an_approved_order(tmp_path):
+    """The user approves a new-form plan of an order; a later plan of the same order is opened
+    and the engine's verdict on it is `self_approve`. Returns the harness and the later session."""
+    import test_replan_autonomy_boundary as tr
+
+    eng = tr.Eng(tmp_path / "root-order")
+    eng.tmp.mkdir()
+    text = tr.plan_text()
+    for marker in ("depends_on = []\n", "depends_on = [1]\n"):
+        text = text.replace(marker, marker + 'place = "the engine"\nbinding_conditions = []\n', 1)
+    plan = eng.write(text, "approved.toml")
+    eng.approve_as_user("u1", plan)
+    opened = eng.open("c1", plan)
+    assert tr.action(opened) == "self_approve", opened
+    return eng, plan
+
+
+def test_agent_approval_writes_resource_approval(contour, tmp_path):
+    """`approve --by agent` on the engine's `self_approve` verdict -- a later plan of a
+    user-approved order at the root, and a linked child's own plan through `agentctl-own.py` --
+    writes the parent's approval of a stage's resources, so the stage starts after it and not
+    before; a child's request outside the set its parent approved is left unapproved, with the
+    stage refused, and a plan that leaves the user's approved resources goes to the user."""
+    eng, plan = _later_plan_of_an_approved_order(tmp_path)
+    later = eng.state("c1")
+    sub_plan.store(later, _rec(1, allow=("Edit",)), level=0)
+    eng.store.save(later)
+    before = gates.stage_start_blockers(later, later.stage(1), store=eng.store)
+    assert before and "the parent has not approved" in before[0], before
+    assert eng.run("approve", session="c1", by="agent")["ok"] is True
+    approved = eng.state("c1")
+    assert approved.stage_approvals["0:1"]["parent_resource_approval"] \
+        == sub_plan.resource_request_digest(_rec(1).resource_request)
+    assert gates.stage_start_blockers(approved, approved.stage(1), store=eng.store) == []
+
+    import test_replan_autonomy_boundary as tr
+
+    wider = tr.plan_text(extra_outputs=("another.py",)).replace(
+        "depends_on = []\n", 'depends_on = []\nplace = "the engine"\nbinding_conditions = []\n', 1)
+    assert tr.action(eng.open("c2", eng.write(wider))) == "await_user_approval"
+    assert eng.run("approve", session="c2", by="agent")["ok"] is False
+
+    submitted = contour.submit()
+    assert submitted["ok"] is True, submitted
+    assert _present_and_approve(contour.store, tmp_path, sid=PARENT).ok is True
+    assert _approve_resources(contour.store, sid=PARENT).ok is True
+    for allow, written in ((("Edit",), True), (("Edit", "Read"), False)):
+        child = contour.child_state()
+        child.stage_approvals.pop("0:1", None)
+        sub_plan.store(child, _rec(1, allow=allow), level=0)
+        contour.store.save(child)
+        code, body, err = contour.own("approve", "--by", "agent")
+        assert code == 0 and body.get("ok") is True, (code, body["data"]["blockers"], err)
+        child = contour.child_state()
+        assert bool(child.stage_approvals.get("0:1", {}).get("parent_resource_approval")) is written
+        blockers = gates.stage_start_blockers(child, child.stage(1), store=contour.store)
+        assert (blockers == []) is written, blockers
+        if not written:
+            assert "the parent has not approved" in blockers[0]
+
+
+def test_agent_approval_writes_resource_approval_for_the_set_the_user_approved(
+        store, venued_fixtures_dir):
     """`approve --by agent` writes the parent's approval for a stage whose request lies inside
     the set the user approved, and never widens that set; one outside it is left unapproved."""
     _executing(store, venued_fixtures_dir)
@@ -1427,22 +1491,58 @@ def test_user_approval_writes_resource_approval_and_the_set(store, venued_fixtur
     assert gates.parent_resource_dispatch_blockers(state, state.stage(1), sub_plan.read(state, 1)) == []
 
 
-def test_stage_resource_approval_verb(store, venued_fixtures_dir):
+def test_stage_resource_approval_verb(contour, venued_fixtures_dir, tmp_path, config_row):
+    """The verb is the agent's (in the own contour, out of the user-authority set). For a
+    decided-later stage planned by the planning dispatch it is refused before the user approves
+    the sub-plan, writes nothing, and passes after it, on the request recorded in the user's
+    approval; a child runs it through `agentctl-own.py` for a stage of its own plan -- inside
+    the resources its parent approved for the stage it was handed it passes, outside them it is
+    refused -- and not for a stage outside its plan; below the line it is refused, and the line is
+    the configured one. The verb asks no method question."""
+    assert "approve-stage-resources" in own_contour.OWN_CONTOUR_VERBS
+    assert "approve-stage-resources" not in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
+    store = contour.store
+    planned = Spawns()
+    assert _dispatch(store, PARENT, planned, subplan_only=True).ok is not False
+    assert len(planned.argvs) == 1
+    assert contour.submit()["ok"] is True
+    spawns = Spawns()
+    _not_started(_dispatch(store, PARENT, spawns), spawns, "stage 1 is decided later")
+    _refused(_approve_resources(store, sid=PARENT), "has not approved a sub-plan")
+    assert "parent_resource_approval" not in contour.entry()
+
+    assert _present_and_approve(store, tmp_path, sid=PARENT).ok is True
+    approved = _approve_resources(store, sid=PARENT)
+    assert approved.ok is True and "method" not in approved.detail.lower(), approved
+    recorded = sub_plan.read(store.load(PARENT), 1, store)
+    assert contour.entry()["parent_resource_approval"] \
+        == sub_plan.resource_request_digest(recorded.resource_request)
+    started = Spawns()
+    assert _dispatch(store, PARENT, started).ok is not False and started.argvs
+
+    for allow, passes in ((("Edit", "Read"), False), (("Edit",), True)):
+        child = contour.child_state()
+        child.stage_approvals.pop("0:1", None)
+        sub_plan.store(child, _rec(1, allow=allow), level=0)
+        contour.store.save(child)
+        code, body, err = contour.own("approve-stage-resources", "--stage", "1")
+        text = json.dumps(body) + err
+        assert (body.get("ok") is True) is passes, (code, text)
+        assert "method" not in text.lower()
+        written = contour.child_state().stage_approvals.get("0:1", {})
+        assert bool(written.get("parent_resource_approval")) is passes
+        if not passes:
+            assert "outside the approved set" in text, text
+    code, body, err = contour.own("approve-stage-resources", "--stage", "9")
+    assert body.get("ok") is False and "not a stage of this session's own plan" in json.dumps(body), body
+
     _executing(store, venued_fixtures_dir)
-    state = _described(store)
-    sub_plan.store(state, _rec(1), level=0)
-    sub_plan.write_parent_approval(state, 1, _rec(1).resource_request)
-    state.stage_approvals["0:1"].pop("parent_resource_approval")
-    store.save(state)
-    assert _approve_resources(store).ok
-    assert store.load(SESSION).stage_approvals["0:1"]["parent_resource_approval"]
-    assert _dispatch(store).action == "execute_in_thread"
-
-    _put(store, _rec(1, allow=("Edit", "Bash(rm:*)")))
-    _refused(_approve_resources(store), "outside the approved set")
-
-    other = _approve_resources(store, stage=9)
-    _refused(other, "not a stage of this session's own plan")
+    _described(store, minutes=5)
+    _put(store, _rec(1))
+    _refused(_approve_resources(store), "below the size line")
+    assert "parent_resource_approval" not in _entry(store)
+    config_row("substantive-wall-clock-min", 3)
+    _refused(_approve_resources(store), "approve-resources --stage 1")
 
 
 def test_stage_resource_approval_for_a_decided_later_stage_follows_the_users_approval(
