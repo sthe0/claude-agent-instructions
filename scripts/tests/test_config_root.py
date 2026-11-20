@@ -213,6 +213,9 @@ _LEGACY_REF_ALLOWLIST = {
                                              "real home — protective, like the denylist",
     "scripts/claude-recover.py":             "scans BOTH roots for live CLI session files to "
                                              "snapshot; overridable via CLAUDE_RECOVER_CONFIG_DIRS",
+    "scripts/hook-guard-permission-surface.py": "a settings write into the CLI's default "
+                                             "~/.claude is governed like the resolved roots — "
+                                             "protective, like the denylist",
 }
 
 
