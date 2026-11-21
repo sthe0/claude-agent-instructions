@@ -1445,7 +1445,7 @@ def test_each_r3_and_k1_measurement_logs_one_line(tmp_path):
     while camp.measure():
         pass
     owed = len(h.R3_CELLS) * h.R3_MIN_RUNS + 2 * h.K1_MIN_RUNS
-    assert len(lines) == owed and lines[0] == "measured r3 new-event counted -" and lines[-1] == "measured k1 new counted -"
+    assert len(lines) == owed and lines[0] == "measured r3 new-event counted -" and lines[-1] == "measured r3 old-stat counted -"
     voided = []
     void_camp = h.Campaign(tmp_path, tmp_path / "old", tmp_path / "new", save_every=3600, until=1e12, watch=[],
                            runner=lambda what, arg: r3_rec(arg["arm"], arg["path"], counted=False, void_reason="short"),
@@ -1674,24 +1674,55 @@ def smoke_runner(monkeypatch):
     stub_k1_pty(monkeypatch)
 
 
-SMOKE_JOBS = [("r3", "new", "event"), ("r3", "new", "stat"), ("r3", "old", "stat"), ("k1", "old", None), ("k1", "new", None)]
+SMOKE_JOBS = [("r3", "new", "event"), ("r3", "new", "stat"), ("k1", "old", None), ("k1", "new", None), ("r3", "old", "stat")]
 
 
-def test_smoke_exits_0_only_when_every_cell_and_k1_code_is_counted(tmp_path, smoke_runner, capsys):
-    for void in (None, *SMOKE_JOBS):
-        SmokeRunner.void, SmokeRunner.calls, SmokeRunner.raises = void, [], None
-        state = tmp_path / "state"
-        assert h.main(smoke_args(tmp_path)) == (0 if void is None else 1), void
-        assert SmokeRunner.calls == SMOKE_JOBS, "one run per cell and per K1 code, no retry of a void"
-        lines = (state / "smoke.log").read_text().splitlines()
-        assert len(lines) == 5 and sum(" void " in line for line in lines) == (void is not None)
-        assert capsys.readouterr().out.count("measured ") == 5
-        (state / "smoke.log").unlink()
-        assert not (state / "acceptance.json").exists() and not (state / "campaign.log").exists()
-    SmokeRunner.calls = []
+def run_smoke(tmp_path, void=None):
+    SmokeRunner.void, SmokeRunner.calls, SmokeRunner.raises = void, [], None
+    return h.main(smoke_args(tmp_path))
+
+
+def smoke_log_lines(tmp_path):
+    return (tmp_path / "state" / "smoke.log").read_text().splitlines()
+
+
+def test_the_smoke_exits_0_when_every_run_is_counted(tmp_path, smoke_runner, capsys):
+    assert run_smoke(tmp_path) == 0
+    assert SmokeRunner.calls == SMOKE_JOBS, "one run per cell and per K1 code, no retry of a void"
+    assert len(smoke_log_lines(tmp_path)) == 5 and capsys.readouterr().out.count("measured ") == 5
+    assert not (tmp_path / "state" / "acceptance.json").exists() and not (tmp_path / "state" / "campaign.log").exists()
+
+
+def test_the_smoke_exits_0_when_only_the_old_stat_run_is_void(tmp_path, smoke_runner):
+    assert run_smoke(tmp_path, ("r3", "old", "stat")) == 0
+    lines = smoke_log_lines(tmp_path)
+    assert len(lines) == 5 and lines[-1] == "measured r3 old-stat void short"
+    assert sum(" void " in line for line in lines) == 1
+
+
+def test_the_smoke_exits_1_when_a_new_code_r3_run_is_void(tmp_path, smoke_runner):
+    assert run_smoke(tmp_path, ("r3", "new", "event")) == 1
+    assert SmokeRunner.calls == SMOKE_JOBS and "measured r3 new-event void short" in smoke_log_lines(tmp_path)
+
+
+def test_the_smoke_exits_1_when_the_new_stat_run_is_void(tmp_path, smoke_runner):
+    assert run_smoke(tmp_path, ("r3", "new", "stat")) == 1
+    assert SmokeRunner.calls == SMOKE_JOBS and "measured r3 new-stat void short" in smoke_log_lines(tmp_path)
+
+
+def test_the_smoke_runs_the_old_stat_cell_after_the_k1_codes(tmp_path, smoke_runner):
+    assert run_smoke(tmp_path) == 0
+    assert SmokeRunner.calls == [("r3", "new", "event"), ("r3", "new", "stat"), ("k1", "old", None),
+                                 ("k1", "new", None), ("r3", "old", "stat")]
+
+
+def test_the_smoke_exits_2_on_stale_floors(tmp_path, smoke_runner):
     stale = good_floors()
     stale["instrument_sha256"] = "0" * 64
     assert h.main(smoke_args(tmp_path, stale)) == 2 and SmokeRunner.calls == []
+
+
+def test_the_smoke_exits_2_on_missing_floors(tmp_path, smoke_runner):
     missing = smoke_args(tmp_path)
     missing[missing.index("--floors") + 1] = str(tmp_path / "no-such-floors.json")
     assert h.main(missing) == 2 and SmokeRunner.calls == []
@@ -1850,6 +1881,44 @@ def test_the_measured_r1_lines_carry_the_cpu_lag_median():
     cell = cell_with([run_record("new", first_rows_cpu_lag_s=lag) for lag in (0.1, 0.3, 0.2)])
     lines = h.measured_lines({"cells": {h.R1_CELLS[0]: cell}}, frozenset())
     assert f"measured R1 {h.R1_CELLS[0]} first_rows_cpu_lag_s 0.2" in lines
+
+
+def full_judged_cells():
+    return [r3_rec(arm, path) for arm, path in h.R3_CELLS[:2] for _ in range(h.R3_MIN_RUNS)]
+
+
+def old_stat_records(counted, void):
+    return [*(r3_rec("old", "stat") for _ in range(counted)),
+            *(r3_rec("old", "stat", counted=False, void_reason="short") for _ in range(void))]
+
+
+FULL_K1 = [{"arm": arm, "counted": True} for arm in ("old", "new") for _ in range(h.K1_MIN_RUNS)]
+
+
+def test_k1_is_served_before_the_report_only_old_stat_cell():
+    assert h.next_measurement(full_judged_cells(), []) == {"what": "k1", "arm": "old", "path": None, "index": 0}
+
+
+def test_a_short_new_stat_cell_is_served_before_k1():
+    r3 = [r3_rec("new", "event") for _ in range(h.R3_MIN_RUNS)] + [r3_rec("new", "stat") for _ in range(h.R3_MIN_RUNS - 1)]
+    assert h.next_measurement(r3, []) == {"what": "r3", "arm": "new", "path": "stat"}
+
+
+def test_the_report_only_cell_is_served_while_short_of_its_counted_runs():
+    r3 = full_judged_cells() + old_stat_records(4, 5)
+    assert h.next_measurement(r3, FULL_K1) == {"what": "r3", "arm": "old", "path": "stat"}
+
+
+def test_the_report_only_cell_is_not_served_after_its_attempt_bound_voids_included():
+    r3 = full_judged_cells() + old_stat_records(4, 6)
+    assert h.next_measurement(r3, FULL_K1) is None
+
+
+def test_the_campaign_finishes_with_the_report_only_cell_short_after_its_bound(tmp_path, monkeypatch):
+    monkeypatch.setattr(h.Campaign, "cell_done", lambda self, cell: True)
+    camp = campaign(tmp_path, Script())
+    camp.r3, camp.k1 = full_judged_cells() + old_stat_records(4, 6), list(FULL_K1)
+    assert camp.finished() is True
 
 
 def test_a_void_k1_run_leaves_its_code_owing_a_run():

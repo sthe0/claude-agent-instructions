@@ -1767,6 +1767,19 @@ def _void_k1_runs_counted(original):
     return lambda r3, k1: original(r3, [dict(r, counted=True) for r in k1])
 
 
+def _report_only_served_before_k1(original):
+    full_k1 = [{"arm": arm, "counted": True} for arm in ("old", "new") for _ in range(99)]
+    return lambda r3, k1: original(r3, full_k1) or original(r3, k1)
+
+
+def _report_only_attempts_count_counted_only(original):
+    return lambda records: len([r for r in records if r.get("counted")]) >= 10
+
+
+def _smoke_without_the_report_only_cell(original):
+    return lambda: [j for j in original() if (j["arm"], j["path"]) != ("old", "stat")]
+
+
 def _children_are_the_max_over_the_window(original):
     return lambda samples: max((n for _, n in samples), default=0)
 
@@ -1840,6 +1853,12 @@ SCRIPT_MODULE_MUTATIONS = {
     "stat-closing-sweep-beside-running": (HARNESS, "SweepTaker", _closing_sweep_beside_a_running_one),
     "event-sweep-every-cycle-end": (HARNESS, "SPARSE_SWEEP_PATHS", _sparse_on_the_stat_path_only),
     "smoke-void-counted": (HARNESS, "record_counted", lambda _original: (lambda record: True)),
+    "report-only-before-k1": (HARNESS, "next_measurement", _report_only_served_before_k1),
+    "report-only-unbounded": (HARNESS, "REPORT_ONLY_MAX_ATTEMPTS", lambda _original: 10 ** 9),
+    "report-only-attempts-counted-only": (HARNESS, "report_only_attempts_spent", _report_only_attempts_count_counted_only),
+    "smoke-gates-on-report-only": (HARNESS, "smoke_gates", lambda _original: (lambda job: True)),
+    "smoke-skips-report-only": (HARNESS, "smoke_jobs", _smoke_without_the_report_only_cell),
+    "report-only-by-path": (HARNESS, "is_report_only", lambda _original: (lambda arm, path: path == "stat")),
     "report-only-ignored": (HARNESS, "parse_report_only", _report_only_unapplied),
     "r1-from-wall": (HARNESS, "judge_cell_r1", _r1_from_wall),
     "cpu-walk-no-ppid-fallback": (HARNESS, "proc_children_by_ppid", lambda _original: (lambda proc_root="/proc": ({}, {}))),

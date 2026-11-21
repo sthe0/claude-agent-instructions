@@ -1992,14 +1992,33 @@ def interleave_due(band_runs_since: int) -> bool:
     return band_runs_since >= INTERLEAVE_EVERY
 
 
+REPORT_ONLY_R3_CELLS = (("old", "stat"),)
+REPORT_ONLY_MAX_ATTEMPTS = 10
+
+
+def is_report_only(arm: str, path: str) -> bool:
+    """A cell verify-acceptance judges against nothing: it is measured and reported, never waited for."""
+    return (arm, path) in REPORT_ONLY_R3_CELLS
+
+
+def report_only_attempts_spent(records: list[dict]) -> bool:
+    return len(records) >= REPORT_ONLY_MAX_ATTEMPTS
+
+
 def next_measurement(r3: list[dict], k1: list[dict]) -> dict | None:
-    """The R3 cell or K1 code still short of its minimum, as a job; ``None`` when every minimum is reached."""
+    """The judged R3 cell or K1 code still short of its minimum, then a report-only cell still short and within its
+    attempts, as a job; ``None`` when nothing is owed."""
     for arm, path in R3_CELLS:
-        if len(counted_runs([r for r in r3 if r["arm"] == arm], path)) < R3_MIN_RUNS:
+        if not is_report_only(arm, path) and len(counted_runs([r for r in r3 if r["arm"] == arm], path)) < R3_MIN_RUNS:
             return {"what": "r3", "arm": arm, "path": path}
     for arm in ("old", "new"):
         if len([r for r in k1 if r["arm"] == arm and record_counted(r)]) < K1_MIN_RUNS:
             return {"what": "k1", "arm": arm, "path": None, "index": len(k1)}
+    for arm, path in R3_CELLS:
+        cell = [r for r in r3 if r["arm"] == arm and r.get("path") == path]
+        if is_report_only(arm, path) and len(counted_runs(cell, path)) < R3_MIN_RUNS \
+                and not report_only_attempts_spent(cell):
+            return {"what": "r3", "arm": arm, "path": path}
     return None
 
 
@@ -2278,8 +2297,14 @@ def measured_line(job: dict, record: dict) -> str:
 
 
 def smoke_jobs() -> list[dict]:
-    return [{"what": "r3", "arm": arm, "path": path} for arm, path in R3_CELLS] \
-        + [{"what": "k1", "arm": arm, "path": None, "index": 0} for arm in ("old", "new")]
+    r3 = [{"what": "r3", "arm": arm, "path": path} for arm, path in R3_CELLS]
+    return [j for j in r3 if not is_report_only(j["arm"], j["path"])] \
+        + [{"what": "k1", "arm": arm, "path": None, "index": 0} for arm in ("old", "new")] \
+        + [j for j in r3 if is_report_only(j["arm"], j["path"])]
+
+
+def smoke_gates(job: dict) -> bool:
+    return job["what"] != "r3" or not is_report_only(job["arm"], job["path"])
 
 
 def enumerated_watch_paths(state_dir: Path) -> list[str]:
@@ -2313,7 +2338,7 @@ def cmd_smoke(args) -> int:
                 line = measured_line(job, record)
                 log.write(line + "\n")
                 print(line, flush=True)
-                counted = counted and record_counted(record)
+                counted = counted and (record_counted(record) or not smoke_gates(job))
     except Exception as err:  # noqa: BLE001 - a run that failed to happen is a usage error, not a void (exit 1)
         print(f"smoke: the rehearsal could not run: {type(err).__name__}: {err}", file=sys.stderr)
         return EXIT_BAD
