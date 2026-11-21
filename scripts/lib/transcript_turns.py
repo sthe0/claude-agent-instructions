@@ -25,20 +25,22 @@ def _content_items(message: dict) -> list:
 
 
 def _is_real_user_prompt(entry: dict) -> bool:
-    """A turn boundary: an entry that opens a new turn. Two shapes exist in real
+    """A turn boundary: an entry that opens a new turn. Three shapes exist in real
     transcripts: (a) a user entry carrying actual text (a typed prompt, an
     interjection) — not a bare tool_result batch; (b) an injected queued prompt —
     an `attachment` entry with attachment.type == "queued_command" (how a
     background task-notification opens the next turn; verified live 2026-07-03:
     the notification is NOT a user-typed entry, and the mid-turn `queue-operation`
-    enqueue record is not the boundary — the queued_command injection is)."""
+    enqueue record is not the boundary — the queued_command injection is);
+    (c) a ScheduleWakeup-fired loop-iteration prompt — a user entry with
+    `isMeta: true` and text content (the harness re-enters /loop by injecting a
+    user-role prompt; it is machine-generated, not human-typed, but it still opens
+    a new turn for delivery-gate segmentation purposes)."""
     etype = entry.get("type")
     if etype == "attachment":
         att = entry.get("attachment")
         return isinstance(att, dict) and att.get("type") == "queued_command"
     if etype != "user":
-        return False
-    if entry.get("isMeta"):
         return False
     message = entry.get("message")
     if not isinstance(message, dict):

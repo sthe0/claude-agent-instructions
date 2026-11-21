@@ -365,6 +365,7 @@ def _is_real_prompt(entry: dict) -> bool:
     return (
         entry.get("type") == "user"
         and not entry.get("isCompactSummary")
+        and not entry.get("isMeta")
         and transcript_turns._is_real_user_prompt(entry)
     )
 
