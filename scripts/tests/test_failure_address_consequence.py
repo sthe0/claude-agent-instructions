@@ -748,6 +748,12 @@ def _populated_stage():
         optional=True,
         backlog_issue="backlog-issue",
         branch="own-branch",
+        place="the place",
+        binding_conditions=[{"id": "bc-1", "text": "a condition", "set_by": "user"}],
+        binding_conditions_stated=True,
+        declared_size=40,
+        size_flags=["flag"],
+        expected_minutes=15,
     )
 
 
@@ -786,6 +792,10 @@ def _set_leaf(root, path, value):
 def _edited(value, path):
     if isinstance(value, str):
         return value + "-edited"
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, dict):
+        return {**value, "text": value["text"] + "-edited"}
     if isinstance(value, int):
         return value + 1
     if value == []:
@@ -825,7 +835,7 @@ def test_apply_refined_stage_fields_covers_every_norm_field():
             left_stale.append(path)
 
     for path in (("title",), ("actor", "capability_required"), ("principle", "statement"),
-                 ("output_artifacts", 0)):
+                 ("output_artifacts", 0), ("place",), ("expected_minutes",)):
         assert path in norm_read, f"the walk no longer finds {path} norm-bearing"
     assert not left_stale, (
         f"BEHAVIOUR: _apply_refined_stage_fields leaves norm-read leaves stale: {left_stale}")

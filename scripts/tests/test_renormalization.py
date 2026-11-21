@@ -685,6 +685,20 @@ _STAGE_RESIDUAL_COVERAGE = {
                 "Question.target names it, inside here because flipping a required stage "
                 "to declinable changes what the stage IS to the customer",
     "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
+    "place": "the residual's own splice, via plan.description_place — no Question.target "
+             "names it, inside here because where a stage is carried out decides whether "
+             "it is dispatched to be planned or built",
+    "binding_conditions": "the residual's own splice, via plan.description_place — same "
+                          "reason as `place`",
+    "binding_conditions_stated": "the residual's own splice, spliced directly: "
+                                 "plan.description_place does not carry the presence flag, "
+                                 "which separates `binding_conditions = []` from none stated",
+    "declared_size": "the residual's own splice, via plan.description_place — same reason "
+                     "as `place`",
+    "size_flags": "the residual's own splice, via plan.description_place — same reason as "
+                  "`place`",
+    "expected_minutes": "the residual's own splice, via plan.description_place — same "
+                        "reason as `place`",
     "lazy": "outside: a lazy stage is the unfolded parent whose fallback budget applies "
             "until it unfolds; the mark is compared by plan.order_place's `lazy_stages` "
             "(gates, order_place comparison above the stage loop), so a change to it is "

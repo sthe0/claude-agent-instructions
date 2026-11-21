@@ -73,6 +73,15 @@ _UNCLAIMED_STAGE_LEAVES = {
                                 "a place an answer can rest on. Same footing as "
                                 "actor.cost_tier above — covered instead by "
                                 "gates._renorm_stage_residual and diff_plans' prose",
+    "place": "the stage description a sub-plan is built against (`plan.description_place`), "
+             "not an element of the activity — covered instead by "
+             "gates._renorm_stage_residual and diff_plans' prose",
+    "binding_conditions": "stage description, same footing as `place`",
+    "binding_conditions_stated": "stage description, same footing as `place` — whether "
+                                 "the plan stated its binding conditions at all",
+    "declared_size": "stage description, same footing as `place`",
+    "size_flags": "stage description, same footing as `place`",
+    "expected_minutes": "stage description, same footing as `place`",
     "amendments.date": "retrospective bookkeeping, read by no change decision "
                        "(plan.STAGE_LEAF_CLASS class B) — an answer cannot rest on it",
     "amendments.text": "retrospective bookkeeping, read by no change decision "

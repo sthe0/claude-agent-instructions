@@ -69,6 +69,7 @@ from .plan import (
     acceptance_requirement_bindings,
     changed_parts,
     consumers,
+    description_place,
     effects_place,
     entries_grants_sha256,
     grants_place,
@@ -4615,6 +4616,13 @@ def _renorm_stage_residual(stage) -> tuple:
       footing as `actor.cost_tier`: no Question.target names it, but re-declaring it
       under the light path would move which `output_artifacts` entries the ephemeral-
       artifacts check is trusted to skip.
+    * `place`, `binding_conditions`, `declared_size`, `size_flags`, `expected_minutes` (via
+      `plan.description_place`) and `binding_conditions_stated` — the stage description a
+      sub-plan is built against: where the stage is carried out, what binds it, how large it
+      is, how long it is expected to take, and whether the plan stated its binding
+      conditions at all. No Question.target names them, but each decides whether the
+      stage is dispatched to be planned or built, so an edit under the light path would
+      move that decision past an approval that saw the other description.
     * `optional` / `backlog_issue` — whether the customer may decline the stage at
       approval, and the backlog issue it traces to in place of an order requirement.
       Either one changes what the stage IS to the customer; flipping a required stage
@@ -4650,6 +4658,8 @@ def _renorm_stage_residual(stage) -> tuple:
         stage.branch,
         tuple(stage.renorms),
         stage.principle.grounding_override if stage.principle else "",
+        *description_place(stage),
+        stage.binding_conditions_stated,
     )
 
 
@@ -4663,13 +4673,15 @@ def _meta_place(meta) -> tuple:
     approval spine keys on — passed as "a re-sequencing". So the totality claim is made
     here and the named rows keep only the job they are good at, naming the norm.
 
-    Hand-written, but for a narrower reason than `plan.order_place`'s: ten of these fourteen
+    Hand-written, but for a narrower reason than `plan.order_place`'s: ten of these fifteen
     fields (`task_id` through `branch`) are plain scalars or optional strings,
     already hashable and comparable as `meta.X` with no transformation at all — a
-    `dataclasses.fields` derivation could emit those as-is. Only four actually need custom
+    `dataclasses.fields` derivation could emit those as-is. Only five actually need custom
     handling: `final_check` and `order` are themselves compound structures, routed through
-    `_final_check_surface`/`order_place` for the same reason those helpers exist, and
-    `assumptions` and `resource_requests` are lists, flattened inline to tuples of their fields. The list
+    `_final_check_surface`/`order_place` for the same reason those helpers exist,
+    `assumptions` and `resource_requests` are lists, flattened inline to tuples of their fields,
+    and `sub_plan` is the executor's record, compared by the digest the parent's and the
+    user's approvals already bind to (`sub_plan.approval_digest`). The list
     stays hand-written regardless, because a derived walk would still have to dispatch
     `final_check`/`order` away from the plain fields, and because the totality claim needs
     its own pin either way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes
@@ -4696,6 +4708,7 @@ def _meta_place(meta) -> tuple:
             (r.kind, r.stage, r.consult_ref, tuple(r.allow), tuple(r.add_dirs))
             for r in meta.resource_requests
         ),
+        sub_plan.approval_digest(meta.sub_plan) if meta.sub_plan is not None else "",
     )
 
 
