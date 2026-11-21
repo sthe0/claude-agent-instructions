@@ -212,3 +212,57 @@ delivered_stage = 1
     assert d.marker == "PLAN-READY"
     advisories = d.data.get("advisories", [])
     assert any("stage 1" in a and "verify_venue_at_final" in a for a in advisories)
+
+
+# --- survivability warning for final_check entries ---
+
+def _shell_final_check(label="all tests", venue="delivery"):
+    return FinalCheck(command="pytest -q", expected_exit=0, label=label, venue=venue)
+
+
+def test_bare_delivery_final_check_warns_when_plan_asserts_landing(tmp_path):
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    fc = _shell_final_check()
+    warnings = check_venue_warnings(
+        [], [fc, _landed_final_check()], str(repo_root), str(worktree)
+    )
+    assert len(warnings) == 1
+    assert "final_check 1" in warnings[0]
+    assert "venue" in warnings[0]
+
+
+def test_repo_root_venue_final_check_no_warning(tmp_path):
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    fc = _shell_final_check(venue="repo_root")
+    warnings = check_venue_warnings(
+        [], [fc, _landed_final_check()], str(repo_root), str(worktree)
+    )
+    assert warnings == []
+
+
+def test_landed_kind_final_check_itself_never_warns(tmp_path):
+    """The landed final_check that asserts landing must not warn about itself."""
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    warnings = check_venue_warnings(
+        [], [_landed_final_check()], str(repo_root), str(worktree)
+    )
+    assert warnings == []
+
+
+def test_no_landing_assertion_silences_final_check_warning(tmp_path):
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    fc = _shell_final_check()
+    assert check_venue_warnings([], [fc], str(repo_root), str(worktree)) == []
+
+
+def test_no_delivery_worktree_silences_final_check_warning(tmp_path):
+    repo_root = tmp_path / "repo"
+    fc = _shell_final_check()
+    warnings = check_venue_warnings(
+        [], [fc, _landed_final_check()], str(repo_root), None
+    )
+    assert warnings == []
