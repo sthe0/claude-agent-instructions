@@ -2899,6 +2899,12 @@ class SessionState:
     renegotiations: list[dict] = field(default_factory=list)
     # coordination host (schema 31): claude|cursor, None until bound.
     runtime_host: str | None = None
+    # Harness version seen when the host was bound (AGENTCTL_RUNTIME_HOST_VERSION), or None.
+    harness_version: str | None = None
+    # One entry per distinct root session that bound this task, in order:
+    # {root_session_id, host, harness_version, bound_at}. A state bound before this field
+    # existed holds a leading all-null entry, so the host of that stretch reads as unknown.
+    host_binds: list[dict] = field(default_factory=list)
     # Stage-6 re-attest carry-forward records (schema 32): rebuilt FROM SCRATCH by
     # every substantive replan (never accumulated across replans — the only cost
     # of a gap is an unnecessary full re-dispatch, never an incorrect PASS), one
@@ -3530,7 +3536,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
     "review_release_difficulty_id", "review_cycle_sha", "review_cycle_open", "review_cycle_acts",
     "review_cycle_minutes_anchor", "review_stage_streaks", "review_trigger_fire",
-    "review_trigger_spent", "renegotiations", "runtime_host", "reattest_stash",
+    "review_trigger_spent", "renegotiations", "runtime_host", "harness_version", "host_binds", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",

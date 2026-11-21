@@ -1,0 +1,6 @@
+{"ts": "2026-11-02T10:00:00+00:00", "task_id": "a", "weight_class": "SUBSTANTIVE", "quality": 5, "n_replans": 1, "total_cost_usd": 2.0, "host": "claude", "hosts": ["claude"], "models": ["m-a"]}
+{"ts": "2026-11-03T10:00:00+00:00", "task_id": "b", "weight_class": "SUBSTANTIVE", "quality": 3, "n_replans": 0, "total_cost_usd": 4.0, "host": "claude", "hosts": ["claude"], "models": ["m-a"]}
+{"ts": "2026-11-04T10:00:00+00:00", "task_id": "c", "weight_class": "SMALL_CHANGE", "quality": 4, "n_replans": 0, "total_cost_usd": null, "host": "claude", "hosts": ["claude"], "models": ["m-a"]}
+{"ts": "2026-11-05T10:00:00+00:00", "task_id": "d", "weight_class": "SUBSTANTIVE", "quality": 4, "n_replans": 2, "total_cost_usd": 1.0, "host": "opencode", "hosts": ["opencode"], "models": ["m-b"]}
+{"ts": "2026-10-01T10:00:00+00:00", "task_id": "e", "weight_class": "SUBSTANTIVE", "quality": 2, "n_replans": 0, "total_cost_usd": 9.0}
+{"ts": "2026-11-06T10:00:00+00:00", "task_id": "f", "weight_class": "SUBSTANTIVE", "quality": 5, "n_replans": 0, "total_cost_usd": 7.0, "host": "claude", "hosts": [null, "claude"], "models": ["m-a"]}

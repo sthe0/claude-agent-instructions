@@ -3860,6 +3860,8 @@ class _BindingStore(FileStateStore):
         self._session = _safe_session_id(session)
 
     def save(self, state) -> None:
+        if _safe_session_id(state.session_id) == self._session:
+            runtime_host.record_root_bind(state, self._harness)
         super().save(state)
         if _safe_session_id(state.session_id) != self._session:
             return

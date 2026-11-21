@@ -75,6 +75,7 @@ from agentctl.render import (  # build_site_prompt is the one place a spawn's pl
 from lib import hook_wiring  # the managed-settings path, one definition
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
+from lib import engine_session_binding, host_stamp  # host stamp of a cost row
 from lib import fix_firings  # firing log of flagged fixes (child-noanswer-recovery writes fix A rows)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
@@ -137,9 +138,24 @@ def _spawn_tags() -> dict:
 
 
 def _spawner_session_field(session: str | None) -> dict:
-    """The engine session this spawn was made on behalf of: --session, else the spawner's own contour."""
-    spawner = session or os.environ.get(OWN_SESSION_ENV)
+    """The engine session this spawn was made on behalf of: --session, else the spawner's own
+    contour, else the engine session the harness conversation last drove."""
+    spawner = session or os.environ.get(OWN_SESSION_ENV) or host_stamp.task_key()
     return {"spawner_session": spawner} if spawner else {}
+
+
+def _spawn_host_stamp(model: str, environ: "Mapping[str, str]") -> dict:
+    """The host stamp of a spawn-cost row: the host the spawner is bound to, its harness
+    version, and the model the child ran on. An unknown host stays null."""
+    host = environ.get("AGENTCTL_RUNTIME_HOST") or (
+        "claude" if environ.get("CLAUDE_CODE_SESSION_ID") else None
+    )
+    return host_stamp.stamp(
+        host,
+        host_stamp.bind_time_version(environ),
+        [model] if model else [],
+        engine_session_binding.harness_session_id(environ),
+    )
 
 
 CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")
@@ -3904,6 +3920,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         }} if resume is not None else {}),
         **_spawner_session_field(args.session),
         **_spawn_tags(),
+        **_spawn_host_stamp(model, os.environ),
         **({"child_outside_project_override": child_project_override} if child_project_override else {}),
     })
     try:

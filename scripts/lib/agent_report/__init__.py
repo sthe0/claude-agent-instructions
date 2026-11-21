@@ -11,6 +11,7 @@ VIEWS = {
     "skill-usage": "skill_usage",
     "hooks": "hooks",
     "time-profile": "time_profile",
+    "host-comparison": "host_comparison",
 }
 
 

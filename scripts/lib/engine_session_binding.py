@@ -29,6 +29,20 @@ from lib import config_root
 
 BINDINGS_DIRNAME = "engine-session-bindings"
 
+# The environment variables that carry the harness conversation id, in precedence order:
+# Claude Code sets the first; a host without it passes the second.
+HARNESS_SESSION_ENVS = ("CLAUDE_CODE_SESSION_ID", "AGENTCTL_HARNESS_SESSION_ID")
+
+
+def harness_session_id(environ=None) -> str | None:
+    """The harness conversation id of this process, or None when no host supplied one."""
+    env = os.environ if environ is None else environ
+    for name in HARNESS_SESSION_ENVS:
+        value = env.get(name)
+        if value:
+            return value
+    return None
+
 
 def _bindings_dir() -> Path:
     return config_root.agentctl_dir() / BINDINGS_DIRNAME

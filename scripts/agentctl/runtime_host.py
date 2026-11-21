@@ -11,9 +11,10 @@ flip which CLI a later stage shells out to.
 """
 from __future__ import annotations
 
+import datetime as dt
 import os
 
-from lib import host_llm
+from lib import host_llm, host_stamp
 from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
 
 __all__ = [
@@ -70,8 +71,35 @@ def resolve_host(explicit: "str | None" = None) -> str:
     return host
 
 
-def bind_runtime_host(state, explicit: "str | None" = None, *, require: bool = False) -> "str | None":
-    """Bind state.runtime_host, sticky once set.
+def record_root_bind(state, root_session_id: "str | None", *, bound_before: bool = True) -> None:
+    """Append this root session to state.host_binds once, with the host the session is bound
+    to. A state bound before host_binds existed (`bound_before`, with no entries yet) gets a
+    leading all-null entry first, so the host of the earlier stretch stays unknown. Without a
+    root session id nothing is recorded."""
+    if not root_session_id or state.runtime_host is None:
+        return
+    if any(bind.get("root_session_id") == root_session_id for bind in state.host_binds):
+        return
+    if bound_before and not state.host_binds:
+        state.host_binds.append(
+            {"root_session_id": None, "host": None, "harness_version": None, "bound_at": None}
+        )
+    version = host_stamp.bind_time_version()
+    if state.harness_version is None:
+        state.harness_version = version
+    state.host_binds.append({
+        "root_session_id": root_session_id,
+        "host": state.runtime_host,
+        "harness_version": version,
+        "bound_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    })
+
+
+def bind_runtime_host(
+    state, explicit: "str | None" = None, *, require: bool = False,
+    root_session_id: "str | None" = None,
+) -> "str | None":
+    """Bind state.runtime_host, sticky once set, and record the root session in host_binds.
 
     Already bound: a contradicting explicit host raises HostConflictError (the
     host never changes mid-session); a matching or absent explicit host is a
@@ -91,6 +119,7 @@ def bind_runtime_host(state, explicit: "str | None" = None, *, require: bool = F
                 f"refusing to rebind to {explicit!r} (the host is sticky for the "
                 "life of a session)"
             )
+        record_root_bind(state, root_session_id)
         return state.runtime_host
     if require:
         host = resolve_host(explicit)
@@ -100,6 +129,7 @@ def bind_runtime_host(state, explicit: "str | None" = None, *, require: bool = F
         except HostAmbiguousError:
             return None
     state.runtime_host = host
+    record_root_bind(state, root_session_id, bound_before=False)
     return host
 
 
