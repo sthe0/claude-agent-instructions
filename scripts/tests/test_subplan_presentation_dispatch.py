@@ -170,14 +170,14 @@ def _not_started(directive, spawns, *needles):
     assert not spawns.argvs
 
 
-def _user_approves_resources(store, sid=SESSION):
+def _plan_approval_sets_resources(store, sid=SESSION):
     state = store.load(sid)
     cli_approval._write_stage_approvals(state, store, by_agent=False)
     store.save(state)
 
 
-def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True,
-                         record=None):
+def _present(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True, record=None):
+    """Present the sub-plan of `stage` as it stands and, with `confirm`, stamp its delivery."""
     state = store.load(sid)
     record = record or sub_plan.read(state, stage, store)
     anchor = f"[subplan:{stage}:{sub_plan.approval_digest(record)[:12]}]"
@@ -191,10 +191,15 @@ def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor", conf
             session=sid, kind="subplan", by=by, note="delivered in the thread",
             escape_reason="delivered_out_of_band"), store=store)
         assert confirmed.ok, confirmed
+
+
+def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True,
+                         record=None):
+    _present(store, tmp_path, stage, sid, by, confirm, record)
     return cli_approval.cmd_approve_subplan(ns(session=sid, stage=stage, by=by), store=store)
 
 
-def _approve_resources(store, stage=1, sid=SESSION):
+def _agent_approves_stage_resources(store, stage=1, sid=SESSION):
     return cli_approval.cmd_approve_stage_resources(ns(session=sid, stage=stage), store=store)
 
 
@@ -411,7 +416,7 @@ def test_a_stage_above_the_line_without_the_parents_approval_refused(
     spawns = Spawns()
     _not_started(_dispatch(store, spawns=spawns), spawns,
                  "the parent has not approved its resources and permissions")
-    _user_approves_resources(store)
+    _plan_approval_sets_resources(store)
     _started(_dispatch(store, spawns=spawns), spawns, in_thread)
 
 
@@ -424,7 +429,7 @@ def test_next_stage_refuses_an_in_thread_stage_without_the_approvals(store, venu
     refused = _next_stage(store)
     _refused(refused, "the parent has not approved its resources and permissions")
     assert store.load(SESSION).stage(1).outcome.status == "PENDING"
-    _user_approves_resources(store)
+    _plan_approval_sets_resources(store)
     started = _next_stage(store)
     assert started.ok is True and started.action == "execute_in_thread", started
     assert store.load(SESSION).stage(1).outcome.status == "ACTIVE"
@@ -440,7 +445,7 @@ def test_next_stage_refuses_a_decided_later_in_thread_stage_until_the_users_appr
     assert store.load(SESSION).stage(1).outcome.status == "PENDING"
     assert _present_and_approve(store, tmp_path).ok
     _refused(_next_stage(store), "the parent has not approved its resources")
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     assert _next_stage(store).action == "execute_in_thread"
 
 
@@ -454,7 +459,7 @@ def test_a_dry_run_of_an_in_thread_stage_is_no_start_without_the_approvals(
     before = store.path(SESSION).read_bytes()
     _refused(_dispatch(store, dry_run=True), "the parent has not approved its resources")
     assert store.path(SESSION).read_bytes() == before
-    _user_approves_resources(store)
+    _plan_approval_sets_resources(store)
     assert _dispatch(store, dry_run=True).ok is True
 
 
@@ -521,7 +526,7 @@ def test_subplan_edit_after_approval_refused(home_store, venued_fixtures_dir, tm
     _described(store, lazy=True, in_thread=in_thread)
     _put(store, _rec(1))
     assert _present_and_approve(store, tmp_path).ok
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     spawns = Spawns()
     state = store.load(SESSION)
     assert gates.decided_later_dispatch_blockers(state, state.stage(1), _rec(1)) == []
@@ -543,7 +548,7 @@ def test_restamp_follows_an_edit_that_leaves_the_resource_request_alone(
     _described(store, lazy=True, in_thread=True)
     _put(store, _rec(1))
     assert _present_and_approve(store, tmp_path).ok
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     edited = _rec(1, method="split it differently")
     _put(store, edited)
     assert _dispatch(store).ok is False
@@ -590,12 +595,12 @@ def test_restamp_never_moves_the_approval_over_a_changed_request(
     store.save(state)
     assert _entry(store) == approved
     _refused(_dispatch(store), "changed since the user approved it")
-    out = _approve_resources(store)
+    out = _agent_approves_stage_resources(store)
     _refused(out, "the user's approval does not cover the live resource request")
     assert "parent_resource_approval" not in _entry(store)
 
     assert _present_and_approve(store, tmp_path).ok
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     assert _dispatch(store).action == "execute_in_thread"
 
 
@@ -737,7 +742,7 @@ def test_subplan_digest_same_for_both_carriers(contour, tmp_path):
     _put(store, in_a_frame, PARENT)
     assert sub_plan.read(store.load(PARENT), 1, store).building_place.session == "root"
     assert sub_plan.approval_digest(in_a_frame) == approved
-    assert _approve_resources(store, sid=PARENT).ok is True
+    assert _agent_approves_stage_resources(store, sid=PARENT).ok is True
     spawns = Spawns()
     assert _dispatch(store, PARENT, spawns).ok is not False and spawns.argvs
 
@@ -788,7 +793,7 @@ def test_spawned_decided_later_planning_dispatch(home_store, venued_fixtures_dir
     third = Spawns()
     assert _dispatch(store, spawns=third, subplan_only=True).action == "await_subplan_approval"
     _put(store, _rec(1))
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     started = Spawns()
     assert _dispatch(store, spawns=started).ok is not False and started.argvs
     assert planning_only.FLAG not in started.argvs[0]
@@ -834,7 +839,7 @@ def test_a_stage_planned_by_two_children_is_read_from_the_one_handed_the_stage_l
     assert _present_and_approve(store, tmp_path).ok
     _linked_kid(store, tmp_path, "mm-work", "2026-01-01T00:00:00.000003+00:00")
     assert sub_plan.read(store.load(SESSION), 1, store).method == "second idea"
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     started = Spawns()
     assert _dispatch(store, spawns=started).ok is not False and started.argvs
 
@@ -872,7 +877,7 @@ def test_a_stage_dispatched_only_to_be_planned_cannot_be_recorded_as_passed(
     _refused(_record_passed(store), "only to plan it")
     assert _present_and_approve(store, tmp_path).ok
     _refused(_record_passed(store), "only to plan it")
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     started = Spawns()
     assert _dispatch(store, spawns=started).ok is not False and started.argvs
     after = _record_passed(store)
@@ -1150,7 +1155,7 @@ def test_rewritten_approval_after_edit_refused(contour, tmp_path):
     assert contour.entry()["user_subplan_approval"] == approved
     assert sub_plan.read(contour.store.load(PARENT), 1, contour.store).method == \
         "split it differently"
-    _refused(_approve_resources(contour.store, sid=PARENT), "changed since the user approved it")
+    _refused(_agent_approves_stage_resources(contour.store, sid=PARENT), "changed since the user approved it")
     spawns = Spawns()
     _not_started(_dispatch(contour.store, PARENT, spawns), spawns, "changed since the user approved it")
     code, body, err = contour.own("approve", "--by", "agent")
@@ -1194,7 +1199,7 @@ def test_below_threshold_stage_needs_no_subplan_or_separate_approval(
                          m3_severe=False, m4_severe=False), store=store)
     assert list(store.load(SESSION).stage_approvals) == ["0:1"]
     assert _start_blockers(store, 1) == [] and _start_blockers(store, 2) == []
-    _refused(_approve_resources(store, stage=2), "below the size line")
+    _refused(_agent_approves_stage_resources(store, stage=2), "below the size line")
     assert _next_stage(store).ok is not False
     spawns = Spawns()
     _started(_dispatch(store, spawns=spawns), spawns, in_thread=False)
@@ -1389,7 +1394,7 @@ def test_agent_approval_writes_resource_approval(contour, tmp_path):
     submitted = contour.submit()
     assert submitted["ok"] is True, submitted
     assert _present_and_approve(contour.store, tmp_path, sid=PARENT).ok is True
-    assert _approve_resources(contour.store, sid=PARENT).ok is True
+    assert _agent_approves_stage_resources(contour.store, sid=PARENT).ok is True
     for allow, written in ((("Edit",), True), (("Edit", "Read"), False)):
         child = contour.child_state()
         child.stage_approvals.pop("0:1", None)
@@ -1441,7 +1446,7 @@ def test_the_agents_own_approval_does_not_seed_the_approved_set(store, venued_fi
     assert entry["parent_resource_approval"] and "approved" not in entry
     assert _dispatch(store).action == "execute_in_thread"
     _put(store, _rec(1, allow=("Edit", "Bash(rm:*)")))
-    _refused(_approve_resources(store), "approve-resources --stage 1")
+    _refused(_agent_approves_stage_resources(store), "approve-resources --stage 1")
 
 
 @pytest.mark.parametrize("allow, written", [(("Edit",), True), (("Edit", "Read"), False)])
@@ -1538,11 +1543,11 @@ def test_stage_resource_approval_verb(contour, venued_fixtures_dir, tmp_path, co
     assert contour.submit()["ok"] is True
     spawns = Spawns()
     _not_started(_dispatch(store, PARENT, spawns), spawns, "stage 1 is decided later")
-    _refused(_approve_resources(store, sid=PARENT), "has not approved a sub-plan")
+    _refused(_agent_approves_stage_resources(store, sid=PARENT), "has not approved a sub-plan")
     assert "parent_resource_approval" not in contour.entry()
 
     assert _present_and_approve(store, tmp_path, sid=PARENT).ok is True
-    approved = _approve_resources(store, sid=PARENT)
+    approved = _agent_approves_stage_resources(store, sid=PARENT)
     assert approved.ok is True and "method" not in approved.detail.lower(), approved
     recorded = sub_plan.read(store.load(PARENT), 1, store)
     assert contour.entry()["parent_resource_approval"] \
@@ -1569,10 +1574,10 @@ def test_stage_resource_approval_verb(contour, venued_fixtures_dir, tmp_path, co
     _executing(store, venued_fixtures_dir)
     _described(store, minutes=5)
     _put(store, _rec(1))
-    _refused(_approve_resources(store), "below the size line")
+    _refused(_agent_approves_stage_resources(store), "below the size line")
     assert "parent_resource_approval" not in _entry(store)
     config_row("substantive-wall-clock-min", 3)
-    _refused(_approve_resources(store), "approve-resources --stage 1")
+    _refused(_agent_approves_stage_resources(store), "approve-resources --stage 1")
 
 
 def test_stage_resource_approval_for_a_decided_later_stage_follows_the_users_approval(
@@ -1581,10 +1586,10 @@ def test_stage_resource_approval_for_a_decided_later_stage_follows_the_users_app
     _executing(store, venued_fixtures_dir)
     _described(store, lazy=True, in_thread=True)
     _put(store, _rec(1))
-    _refused(_approve_resources(store), "has not approved a sub-plan")
+    _refused(_agent_approves_stage_resources(store), "has not approved a sub-plan")
     assert "parent_resource_approval" not in _entry(store)
     assert _present_and_approve(store, tmp_path).ok
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     assert _entry(store)["parent_resource_approval"]
 
 
@@ -1592,39 +1597,52 @@ def test_stage_resource_approval_needs_an_approved_set(store, venued_fixtures_di
     _executing(store, venued_fixtures_dir)
     _described(store)
     _put(store, _rec(1))
-    out = _approve_resources(store)
+    out = _agent_approves_stage_resources(store)
     _refused(out, "approve-resources --stage 1")
     assert "parent_resource_approval" not in _entry(store)
 
 
-def _user_verb(store, by="fedor", stage=1, sid=SESSION):
+def _user_approves_resources(store, by="fedor", stage=1, sid=SESSION):
     return cli_approval.cmd_approve_resources(ns(session=sid, stage=stage, by=by), store=store)
 
 
 def test_a_session_approved_before_approvals_were_recorded_goes_on_by_the_verb_the_refusal_names(
-        store, venued_fixtures_dir):
+        home_store, venued_fixtures_dir, tmp_path):
     """A plan approved before per-stage approvals were written (or with no order at all, as
     here: an old-form plan driven to EXECUTING) has no approval entry for a stage above the line.
-    Every way of going on is refused naming `approve-resources`, the agent cannot take it, and the
-    user's verb works and also leaves the set the agent's later requests are checked against."""
+    Every way of going on is refused naming `approve-resources`; the verb itself is refused until
+    the stage's sub-plan was presented for its live digest and the delivery stamped (the bar of
+    `approve-subplan`), by an agent at any point, and then works and leaves the set the agent's
+    later requests are checked against."""
+    store = home_store
     _executing(store, venued_fixtures_dir)
     _described(store)
     _put(store, _rec(1))
     assert not store.load(SESSION).stage_approvals
     spawns = Spawns()
     for refused in (_dispatch(store, spawns=spawns), _dispatch(store, dry_run=True),
-                    _approve_resources(store), _record_passed(store)):
+                    _agent_approves_stage_resources(store), _record_passed(store)):
         _refused(refused, "approve-resources --stage 1")
     assert not spawns.argvs
-    _refused(_user_verb(store, by="agent"), "approve-stage-resources")
-    _refused(_user_verb(store, by=""), "approve-stage-resources")
+    _refused(_user_approves_resources(store, by="agent"), "approve-stage-resources")
+    _refused(_user_approves_resources(store, by=""), "approve-stage-resources")
+    _refused(_user_approves_resources(store), "was not presented to the user",
+             "present-plan --kind subplan --stage 1")
+    _present(store, tmp_path, confirm=False)
+    _refused(_user_approves_resources(store), "has no delivery stamp")
+    _put(store, _rec(1, allow=("Edit", "Read")))
+    _refused(_user_approves_resources(store), "changed since it was presented")
     assert not store.load(SESSION).stage_approvals
 
-    assert _user_verb(store).ok
+    _put(store, _rec(1))
+    _present(store, tmp_path)
+    _refused(_user_approves_resources(store, by="agent"), "approve-stage-resources")
+    assert not store.load(SESSION).stage_approvals
+    assert _user_approves_resources(store).ok
     assert _entry(store)["parent_resource_approval"] and _entry(store)["approved"]
     assert _dispatch(store).action == "execute_in_thread"
     _put(store, _rec(1, allow=("Edit", "Read")))
-    assert _approve_resources(store).ok is False
+    assert _agent_approves_stage_resources(store).ok is False
     _refused(_dispatch(store), "approve-resources --stage 1")
 
 
@@ -1633,24 +1651,24 @@ def test_approve_resources_refuses_what_it_cannot_approve_and_says_what_to_do(
     _executing(store, venued_fixtures_dir)
     _described(store, minutes=5)
     _put(store, _rec(1))
-    _refused(_user_verb(store), "below the size line")
-    _refused(_user_verb(store, stage=9), "no stage 9")
+    _refused(_user_approves_resources(store), "below the size line")
+    _refused(_user_approves_resources(store, stage=9), "no stage 9")
 
     _described(store)
     state = store.load(SESSION)
     state.sub_plan_records.clear()
     store.save(state)
-    _refused(_user_verb(store), "no sub-plan on record")
+    _refused(_user_approves_resources(store), "no sub-plan on record")
 
     _described(store, lazy=True)
     _put(store, _rec(1))
-    _refused(_user_verb(store), "approve-subplan")
+    _refused(_user_approves_resources(store), "approve-subplan")
 
     _described(store)
     state = store.load(SESSION)
     state.parent_link = {"session_id": "the-parent"}
     store.save(state)
-    _refused(_user_verb(store), "root session")
+    _refused(_user_approves_resources(store), "root session")
     assert not store.load(SESSION).stage_approvals
 
 
@@ -1674,18 +1692,20 @@ def test_stage_resource_approval_is_refused_for_a_stage_of_another_session(
     state.stage_approvals["0:1"].pop("parent_resource_approval")
     store.save(state)
     monkeypatch.setenv(own_contour.OWN_SESSION_ENV, "the-childs-own-session")
-    _refused(_approve_resources(store), "calling session's own plan")
+    _refused(_agent_approves_stage_resources(store), "calling session's own plan")
     assert "parent_resource_approval" not in _entry(store)
     monkeypatch.setenv(own_contour.OWN_SESSION_ENV, SESSION)
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
 
 
 def test_resource_request_edit_voids_parent_approval(store, venued_fixtures_dir, tmp_path):
     """A stage of the root plan approved with the whole plan (`approve --by user`) starts. An
     edit of the record's request inside the approved set voids the parent's approval (the start
-    is refused with the digest reason) until the user's `approve-resources` re-approves it; an
-    edit widening it past the set leaves the verb refused and the start refused; an edit of the
-    estimate alone leaves the approval in force."""
+    is refused with the digest reason) until the agent's `approve-stage-resources` re-approves it;
+    an edit widening it past the set leaves that verb refused and the start refused, and the user's
+    way on is the plan's own approval: `replan`, then `approve --by user` (which records the wider
+    set), after which the stage starts; an edit of the estimate alone leaves the approval in
+    force."""
     _planning(store)
     plan = _new_form_plan(venued_fixtures_dir, tmp_path, in_thread=(1, 2))
     cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store)
@@ -1705,13 +1725,74 @@ def test_resource_request_edit_voids_parent_approval(store, venued_fixtures_dir,
     voided = "its resource request changed since the parent approved it"
     _put(store, _rec(1, allow=("Edit",)))
     assert voided in " ".join(_start_blockers(store))
-    assert _approve_resources(store).ok is True
+    assert _agent_approves_stage_resources(store).ok is True
     assert _start_blockers(store) == []
 
     _put(store, _rec(1, allow=("Edit", "Read", "Bash(rm:*)")))
     assert voided in " ".join(_start_blockers(store))
-    _refused(_approve_resources(store), "outside the approved set")
+    _refused(_agent_approves_stage_resources(store), "outside the approved set")
     assert voided in " ".join(_start_blockers(store))
+
+    changed = Path(plan).read_text(encoding="utf-8").replace(
+        'done_criterion = "both stages PASSED and resolution confirmed"',
+        'done_criterion = "both stages PASSED, resolution confirmed, and the delivery announced"', 1)
+    replanned = tmp_path / "replanned.toml"
+    replanned.write_text(changed, encoding="utf-8")
+    assert replanned.read_text(encoding="utf-8") != Path(plan).read_text(encoding="utf-8")
+    assert cli.cmd_replan(ns(session=SESSION, plan=str(replanned)), store=store).marker == "PLAN-READY"
+    assert voided in " ".join(_start_blockers(store))
+    assert cli.cmd_approve(ns(session=SESSION, by="user"), store=store).ok is True
+    cli.cmd_partition(ns(session=SESSION, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    assert _start_blockers(store) == []
+    assert _entry(store)["approved"]["allow"] == sorted(["Edit", "Read", "Bash(rm:*)"])
+    assert _next_stage(store).action == "execute_in_thread"
+
+
+def test_no_verb_an_agent_can_call_widens_the_approved_set_without_the_users_act(
+        home_store, venued_fixtures_dir, tmp_path):
+    """Every verb a session can run after the record is widened past the set the user approved,
+    short of the user's own act, leaves the stage refused and the set as it was: the agent's
+    `approve-stage-resources`, an agent approval of the plan, `approve-resources` with no
+    presentation, an unstamped one and a stale one, `approve-subplan` by an agent. Only the
+    presented, stamped sub-plan and the user's `approve-resources` widen it, and the stage then
+    starts."""
+    store = home_store
+    _executing(store, venued_fixtures_dir)
+    state = _described(store)
+    sub_plan.store(state, _rec(1, allow=("Edit",)), level=0)
+    cli_approval._write_stage_approvals(state, store, by_agent=False)
+    store.save(state)
+    approved_set = dict(_entry(store)["approved"])
+    assert _start_blockers(store) == []
+
+    _put(store, _rec(1, allow=("Edit", "Bash(rm:*)")))
+    state = store.load(SESSION)
+    cli_approval._write_stage_approvals(state, store, by_agent=True)
+    store.save(state)
+    attempts = (
+        _agent_approves_stage_resources(store),
+        _user_approves_resources(store, by="agent"),
+        _user_approves_resources(store),
+        cli_approval.cmd_approve_subplan(ns(session=SESSION, stage=1, by="agent"), store=store),
+    )
+    assert all(a.ok is False for a in attempts), attempts
+    _present(store, tmp_path, confirm=False)
+    assert _user_approves_resources(store).ok is False
+    _put(store, _rec(1, allow=("Edit", "Bash(rm:*)", "Read")))
+    assert _user_approves_resources(store).ok is False
+    assert _entry(store)["approved"] == approved_set
+    assert "the parent has not approved" in " ".join(_start_blockers(store)) \
+        or "changed since the parent approved" in " ".join(_start_blockers(store))
+    spawns = Spawns()
+    _not_started(_dispatch(store, spawns=spawns), spawns)
+
+    _put(store, _rec(1, allow=("Edit", "Bash(rm:*)")))
+    _present(store, tmp_path)
+    assert _user_approves_resources(store).ok is True
+    assert sorted(_entry(store)["approved"]["allow"]) == ["Bash(rm:*)", "Edit"]
+    assert _start_blockers(store) == []
+    assert _dispatch(store).action == "execute_in_thread"
 
 
 def test_an_edit_inside_the_approved_set_is_reapproved_by_the_verb(store, venued_fixtures_dir):
@@ -1722,7 +1803,7 @@ def test_an_edit_inside_the_approved_set_is_reapproved_by_the_verb(store, venued
     sub_plan.store(state, _rec(1, allow=("Edit",)), level=0)
     store.save(state)
     _refused(_dispatch(store), "its resource request changed since the parent approved it")
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     assert _dispatch(store).action == "execute_in_thread"
 
 
@@ -1757,7 +1838,7 @@ def test_the_whole_verb_sequence_for_a_decided_later_stage(home_store, venued_fi
     agent = cli_approval.cmd_approve_subplan(ns(session=SESSION, stage=1, by="agent"), store=store)
     assert agent.ok is False
     assert _present_and_approve(store, tmp_path).ok
-    assert _approve_resources(store).ok
+    assert _agent_approves_stage_resources(store).ok
     started = Spawns()
     assert _dispatch(store, spawns=started).ok is not False and len(started.argvs) == 1
     assert _entry(store)["planning"] is False

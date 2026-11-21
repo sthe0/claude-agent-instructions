@@ -325,6 +325,11 @@ def _try_reattest(
         state.log("reattest_declined", stage=stage.index,
                    reason="no prior PASSED outcome recorded for this stage")
         return None
+    pass_blockers = gates.recorded_pass_blockers(state, stage, store=store)
+    if pass_blockers:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="a re-attest records a pass, which the guards refuse: " + "; ".join(pass_blockers))
+        return None
     if gates.pending_renorm_stage_blockers(state, stage.index):
         state.log("reattest_declined", stage=stage.index,
                    reason="stage is bound to a norm-edit obligation whose file is unchanged")

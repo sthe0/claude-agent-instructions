@@ -3510,15 +3510,18 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
     approved = sub_plan.approval_entry(state, stage.index).get("parent_resource_approval")
     if not approved:
         return [f"stage {stage.index} cannot start: the parent has not approved its resources and "
-                f"permissions: the user approves them with `approve-resources --stage {stage.index} "
-                f"--by <their name>` (or approves the plan), then the agent's approve-stage-resources "
-                f"works inside that set"]
+                f"permissions: the user approves the plan (`approve --by user`), or has the stage's "
+                f"sub-plan presented (present-plan --kind subplan --stage {stage.index}) and runs "
+                f"`approve-resources --stage {stage.index} --by <their name>`; the agent's "
+                f"approve-stage-resources then works inside that set"]
     live = sub_plan.resource_request_digest(record.resource_request if record else [])
     if live != approved:
         return [f"stage {stage.index} cannot start: its resource request changed since the parent "
                 f"approved it: `approve-stage-resources --stage {stage.index}` re-approves it inside "
-                f"the set the user approved, `approve-resources --stage {stage.index} --by <the "
-                f"user's name>` approves a request outside it"]
+                f"the set the user approved; a request outside it needs the user: `replan`, then "
+                f"`approve --by user`, or the stage's sub-plan presented "
+                f"(present-plan --kind subplan --stage {stage.index}) and "
+                f"`approve-resources --stage {stage.index} --by <their name>`"]
     return []
 
 

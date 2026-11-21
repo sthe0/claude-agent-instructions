@@ -857,7 +857,7 @@ def priced_snapshot(state: SessionState) -> dict:
     for stage in state.stages:
         uid = state.stage_uid(stage.index)
         if uid is not None and not is_skipped(stage):
-            stages[uid] = [stage_tier(stage),bool(stage.is_spawn())]
+            stages[uid] = [stage_tier(stage), bool(stage.is_spawn())]
     return {"estimate": dict(state.effort_estimate or {}), "stages": stages}
 
 

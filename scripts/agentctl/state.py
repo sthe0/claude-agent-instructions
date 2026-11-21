@@ -30,9 +30,7 @@ from .script_effects import StageEffectDeclaration
 
 SCHEMA_VERSION = 64  # 64: Stage gains place/binding_conditions(_stated)/declared_size/
                      # size_flags/expected_minutes (the stage as an order); SessionState gains
-                     # sub_plan_records (the executor's sub-plan record per parent stage)
-                     # and stage_approvals (the engine's copy of the approvals per stage).
-                     # No-op migration.
+                     # sub_plan_records and stage_approvals. No-op migration.
                      # 63: SessionState gains order_searches/order_beside/
                      # executor_side_revisions (the two-sided order: recorded searches,
                      # the records beside the order, executor-side revisions);
@@ -1370,9 +1368,8 @@ PLAN_PRESENTATION_KIND_REPLAN_DIFF = "replan_diff"
 # understanding_sha256) as well as the rendering; recorded by cmd_present_plan and
 # stamped by the delivery hook like the other kinds.
 PLAN_PRESENTATION_KIND_ORDER = "order"
-# Fifth instance: the recorded sub-plan of one stage shown to the user before they approve it
-# (approve-subplan). Its receipt names the stage in plan_path ("subplan:<n>") and binds the
-# sub-plan's approval digest in plan_sha256 and understanding_sha256.
+# No plan file stands behind this kind, so its receipt names the stage in plan_path
+# ("subplan:<n>") and binds the sub-plan's approval digest in both digest fields.
 PLAN_PRESENTATION_KIND_SUBPLAN = "subplan"
 PLAN_PRESENTATION_KINDS = (
     PLAN_PRESENTATION_KIND_ESSENCE,

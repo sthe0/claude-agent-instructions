@@ -1114,9 +1114,10 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
     if approved is None:
         return Directive(False, state.node, "await_user_approval",
                          f"no resources and permissions were approved for stage {stage.index}: the "
-                         f"user approves them with `approve-resources --stage {stage.index} --by "
-                         f"<their name>`, and the agent's approve-stage-resources then works inside "
-                         f"that set")
+                         f"user approves the plan (`approve --by user`), or presents the stage's "
+                         f"sub-plan (present-plan --kind subplan --stage {stage.index}) and runs "
+                         f"`approve-resources --stage {stage.index} --by <their name>`; the agent's "
+                         f"approve-stage-resources then works inside that set")
     outside = sub_plan.request_within(record.resource_request, approved)
     if outside:
         return Directive(False, state.node, "await_user_approval",
@@ -1133,8 +1134,10 @@ def cmd_approve_resources(args, *, store: StateStore, runner: Runner | None = No
     """The user's approval of one stage's resources and permissions, for the request as it stands
     now, and the set the agent's `approve-stage-resources` approves later requests inside. It is
     the way on for a stage above the size line whose approval `approve` did not write (a plan
-    approved before approvals were recorded, an agent approval that left the stage out, a request
-    the user widens)."""
+    approved before approvals were recorded, an agent approval that left the stage out), and it
+    holds the bar `approve-subplan` holds: the stage's sub-plan, which carries the request, was
+    presented to the user for its live digest and the delivery is stamped. A request the user
+    widens past the approved set otherwise goes through `replan` and `approve --by user`."""
     state = _require(store, args.session)
     by = (args.by or "").strip()
     if not by or by.casefold() == AGENT_ACTOR:
@@ -1160,6 +1163,12 @@ def cmd_approve_resources(args, *, store: StateStore, runner: Runner | None = No
         return Directive(False, state.node, "noop",
                          f"stage {stage.index} has no sub-plan on record: record it (push-subplan, "
                          f"or the child's contour) before its resources are approved")
+    shown = gates.subplan_presentation_blockers(state, stage.index, sub_plan.approval_digest(record))
+    if shown:
+        return Directive(False, state.node, "await_user_approval",
+                         "; ".join(shown) + f". approve-resources approves the request the user was "
+                         f"shown: the plan's own approval (`replan`, then `approve --by user`) is the "
+                         f"other way on")
     sub_plan.write_parent_approval(state, stage.index, record.resource_request)
     state.log("approve_resources", stage=stage.index, by=by)
     store.save(state)

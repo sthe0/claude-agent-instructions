@@ -212,3 +212,45 @@ def test_reattest_does_not_bypass_the_code_review_gate(monkeypatch):
     # the control re-run DID pass — only the review gate blocked it, proving
     # the same review requirement cmd_record_result enforces binds here too
     assert [c[0] for c in runner.calls] == ["bash", "python3"]
+
+
+# --- a planning mark standing: a pass cannot be carried forward past it ---------------------
+
+def _planned_only_session():
+    """A below-the-line, described stage whose last dispatch was a planning dispatch."""
+    from agentctl import sub_plan
+    stage = _dev_stage()
+    stage.place, stage.expected_minutes, stage.binding_conditions_stated = "the engine", 5, True
+    state = _state(stage, reattest_stash=[_reattest_stash(stage)])
+    sub_plan.set_planning_mark(state, stage.index, True)
+    return _Mem(state)
+
+
+def test_reattest_declines_while_the_stage_carries_the_planning_mark():
+    """`dispatch --re-attest` records a pass, which `record-result` refuses for a stage dispatched
+    only to be planned: it declines, names the reason, marks nothing passed, and the dispatch that
+    goes on is the ordinary one, which clears the mark."""
+    from agentctl import sub_plan
+    store = _planned_only_session()
+    runner = _runner(control_returncode=0)
+
+    _dispatch(store, runner)
+
+    assert store.s.stages[0].outcome.status != StageStatus.PASSED.value
+    assert "dispatched only to plan it" in _declined_reason(store)
+    assert not any(e["event"] == "reattest" for e in store.s.history)
+    assert [c[0] for c in runner.calls] == ["python3"], runner.calls
+    assert sub_plan.approval_entry(store.s, 1)["planning"] is False
+
+
+def test_reattest_still_succeeds_for_a_described_stage_with_no_planning_mark():
+    from agentctl import sub_plan
+    store = _planned_only_session()
+    sub_plan.set_planning_mark(store.s, 1, False)
+    runner = _runner(control_returncode=0)
+
+    d = _dispatch(store, runner)
+
+    assert d.ok is True
+    assert store.s.stages[0].outcome.status == StageStatus.PASSED.value
+    assert [c[0] for c in runner.calls] == ["bash"]
