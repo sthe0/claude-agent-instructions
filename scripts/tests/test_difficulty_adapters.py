@@ -51,11 +51,11 @@ def test_github_submit_uses_injected_http_no_network():
     def fake_http(method, url, headers, body):
         calls.append((method, url, headers, body))
         assert headers["Authorization"].startswith("token ")
-        return {"html_url": "https://github.com/sthe0/claude-agent-instructions/issues/7"}
+        return {"number": 7, "html_url": "https://github.com/sthe0/claude-agent-instructions/issues/7"}
 
     ch = github.GitHubChannel(http=fake_http, token="fake-ghp-token")
     url = ch.submit(_rec())
-    assert url == "https://github.com/sthe0/claude-agent-instructions/issues/7"
+    assert url == "sthe0/claude-agent-instructions#7"
     assert len(calls) == 1
     method, call_url, _, _ = calls[0]
     assert method == "POST"

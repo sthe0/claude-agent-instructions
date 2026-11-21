@@ -256,7 +256,8 @@ class GitHubChannel(DifficultyChannel):
         body = json.dumps(fields).encode("utf-8")
         url = f"{API_BASE}/repos/{REPO}/issues"
         resp = self._http("POST", url, self._headers(), body)
-        return resp.get("html_url", "")
+        number = resp.get("number")
+        return f"{REPO}#{number}" if number is not None else resp.get("html_url", "")
 
     def _pull_by_label(self, label: str, since: str | None) -> list[DifficultyRecord]:
         url = (
