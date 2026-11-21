@@ -1025,7 +1025,8 @@ def _approved_set(state: SessionState, store: StateStore, stage: Stage) -> dict 
 def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: bool) -> None:
     """The parent's approval of the resources and permissions of each stage above the size line,
     written by `approve`: the user's approval writes it for every such stage and sets the
-    approved set; the agent's writes it only for a stage whose request lies inside that set. A
+    approved set; the agent's writes it only for a stage whose request lies inside that set, so
+    where no set is on record at the root it writes it only for a request that names nothing. A
     decided-later stage is approved through its sub-plan (approve-subplan), not here."""
     thr = Thresholds()
     for stage in state.stages:
@@ -1038,11 +1039,9 @@ def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: 
             sub_plan.write_parent_approval(state, stage.index, rows)
             continue
         approved = _approved_set(state, store, stage)
-        if approved is None:
-            if not state.parent_link:
-                sub_plan.write_parent_approval(state, stage.index, rows, widens_set=False)
-            continue
-        if not sub_plan.request_within(rows, approved):
+        if approved is None and not state.parent_link:
+            approved = {}
+        if approved is not None and not sub_plan.request_within(rows, approved):
             sub_plan.write_parent_approval(state, stage.index, rows, widens_set=False)
 
 
@@ -1114,7 +1113,8 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
     if approved is None:
         return Directive(False, state.node, "await_user_approval",
                          f"no resources and permissions were approved for stage {stage.index}: the "
-                         f"user approves the plan (`approve --by user`), or presents the stage's "
+                         f"user approves the plan ({gates.user_plan_approval_way(state)}), or "
+                         f"presents the stage's "
                          f"sub-plan (present-plan --kind subplan --stage {stage.index}) and runs "
                          f"`approve-resources --stage {stage.index} --by <their name>`; the agent's "
                          f"approve-stage-resources then works inside that set")

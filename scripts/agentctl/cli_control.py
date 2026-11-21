@@ -517,19 +517,34 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # Mark the originating stage as satisfied, THEN derive the active-stage
     # pointer from stage status — order is load-bearing: deriving first would
     # re-point at a stage this same call is about to mark PASSED.
+    # The pop is the only way out of a resolved child, so it is never refused; what it may not do
+    # is satisfy a stage whose start the parent's approvals would still refuse.
+    unsatisfied: list[str] = []
     try:
         orig = state.stage(frame.originating_stage)
         if not is_skipped(orig):
-            orig.outcome.status = StageStatus.PASSED.value
-            orig.control = f"satisfied by sub-plan {child_task_id}"
-            _settle_stage_arming(state, orig, effort_segments.ACT_SUBPLAN_POP, _utcnow())
+            unsatisfied = gates.recorded_pass_blockers(state, orig, store=store)
+            if not unsatisfied:
+                orig.outcome.status = StageStatus.PASSED.value
+                orig.control = f"satisfied by sub-plan {child_task_id}"
+                _settle_stage_arming(state, orig, effort_segments.ACT_SUBPLAN_POP, _utcnow())
     except KeyError:
         pass
     _restore_current_stage(state)
     sub_plan.close_frame_interval(state, frame.originating_stage, len(state.history))
     state.log("pop_subplan", child_task_id=child_task_id, originating_stage=frame.originating_stage,
-              depth=len(state.plan_stack), venue_source=venue_source)
+              depth=len(state.plan_stack), venue_source=venue_source, unsatisfied=unsatisfied)
     store.save(state)
+    if unsatisfied:
+        return Directive(
+            True, state.node, "await_user_approval",
+            f"sub-plan {child_task_id!r} resolved; parent restored at EXECUTING; stage "
+            f"{frame.originating_stage} is not marked satisfied: " + "; ".join(unsatisfied)
+            + f"; once that is done, record the stage's result (venue: {venue_source})",
+            data={"originating_stage": frame.originating_stage, "child_task_id": child_task_id,
+                  "stack_depth": len(state.plan_stack), "venue_source": venue_source,
+                  "blockers": unsatisfied},
+        )
     return Directive(
         True, state.node, "next_stage",
         f"sub-plan {child_task_id!r} resolved; parent restored at EXECUTING; "

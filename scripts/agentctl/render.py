@@ -2057,6 +2057,14 @@ def _request_text(parts: dict) -> str:
     return f"allow: {allow}; directories: {dirs}"
 
 
+def subplan_request_text(record) -> str:
+    """The resource and permission request of a recorded sub-plan as `render_subplans` shows it;
+    a presentation of that sub-plan must carry these bytes."""
+    from . import sub_plan
+
+    return "resources: " + _request_text(sub_plan.request_parts(record.resource_request))
+
+
 def render_subplans(doc: PlanDoc, state, store=None) -> str:
     """The block of a plan's presentation that shows what the user approves besides the plan's own
     text: the sub-plan of every stage that has one, at every level it was recorded (each with its
@@ -2166,8 +2174,8 @@ def _subplan_stage_lines(stages, record_of, plan_rows: dict, label: str) -> list
         if record is None:
             lines.append(head + "above the size line and has no sub-plan yet")
             continue
-        lines.append(head + f"sub-plan recorded — {_estimate_text(record.estimate)}; resources: "
-                     + _request_text(sub_plan.request_parts(record.resource_request)))
+        lines.append(head + f"sub-plan recorded — {_estimate_text(record.estimate)}; "
+                     + subplan_request_text(record))
     return lines
 
 

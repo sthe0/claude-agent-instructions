@@ -54,7 +54,10 @@ from .plan import (
     whole_suite_warnings,
     dropped_grants_report,
 )
-from .render import plan_render_stage_arg_type, plan_summary_text, render_plan_grants, render_subplans
+from .render import (
+    plan_render_stage_arg_type, plan_summary_text, render_plan_grants, render_subplans,
+    subplan_request_text,
+)
 from .state import (
     Actor,
     AUTHORIZE_REPLAN_MARKER,
@@ -372,6 +375,14 @@ def _present_subplan(args, state: SessionState, *, store: StateStore) -> Directi
             f"the rendering does not carry the anchor {anchor} of the sub-plan as it stands; "
             "stamping nothing — add the anchor to it and re-run",
             data={"anchor": anchor})
+    request_line = subplan_request_text(record)
+    if request_line not in text:
+        return Directive(
+            False, state.node, "noop",
+            f"the rendering does not show the resource and permission request of stage {stage} "
+            "as it stands; stamping nothing — paste this line into it verbatim and re-run: "
+            + request_line,
+            data={"request_line": request_line})
     writer_gate, refusal = _present_writer_gate(state, text, PLAN_PRESENTATION_KIND_SUBPLAN)
     if refusal is not None:
         return refusal

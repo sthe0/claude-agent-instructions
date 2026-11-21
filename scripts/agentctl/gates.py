@@ -3498,6 +3498,14 @@ def decided_later_dispatch_blockers(state: SessionState, stage, record, *,
     return [f"stage {stage.index} is decided later and cannot start: {problem}"]
 
 
+def user_plan_approval_way(state: SessionState) -> str:
+    """The verbs by which the user approves the plan from the node `state` is in: `approve` is
+    legal only from PLAN_READY, so every later node goes through `replan` first."""
+    if state.node == Node.PLAN_READY.value:
+        return "`approve --by user`"
+    return "`replan`, then `approve --by user`"
+
+
 def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
                                       subplan_only: bool = False) -> list[str]:
     """A stage above the line starts only while the parent's approval of its resources and
@@ -3510,7 +3518,7 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
     approved = sub_plan.approval_entry(state, stage.index).get("parent_resource_approval")
     if not approved:
         return [f"stage {stage.index} cannot start: the parent has not approved its resources and "
-                f"permissions: the user approves the plan (`approve --by user`), or has the stage's "
+                f"permissions: the user approves the plan ({user_plan_approval_way(state)}), or has the stage's "
                 f"sub-plan presented (present-plan --kind subplan --stage {stage.index}) and runs "
                 f"`approve-resources --stage {stage.index} --by <their name>`; the agent's "
                 f"approve-stage-resources then works inside that set"]
@@ -3518,8 +3526,8 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
     if live != approved:
         return [f"stage {stage.index} cannot start: its resource request changed since the parent "
                 f"approved it: `approve-stage-resources --stage {stage.index}` re-approves it inside "
-                f"the set the user approved; a request outside it needs the user: `replan`, then "
-                f"`approve --by user`, or the stage's sub-plan presented "
+                f"the set the user approved; a request outside it needs the user: "
+                f"{user_plan_approval_way(state)}, or the stage's sub-plan presented "
                 f"(present-plan --kind subplan --stage {stage.index}) and "
                 f"`approve-resources --stage {stage.index} --by <their name>`"]
     return []
