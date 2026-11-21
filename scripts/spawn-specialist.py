@@ -144,17 +144,39 @@ def _spawner_session_field(session: str | None) -> dict:
     return {"spawner_session": spawner} if spawner else {}
 
 
-def _spawn_host_stamp(model: str, environ: "Mapping[str, str]") -> dict:
-    """The host stamp of a spawn-cost row: the host the spawner is bound to, its harness
-    version, and the model the child ran on. An unknown host stays null."""
-    host = environ.get("AGENTCTL_RUNTIME_HOST") or (
-        "claude" if environ.get("CLAUDE_CODE_SESSION_ID") else None
-    )
+ROOT_SESSION_ENV = "AGENTCTL_ROOT_SESSION_ID"
+
+
+def _root_context(environ: "Mapping[str, str]") -> dict:
+    """The host, harness version and root session of the task a spawner works for: inherited
+    from the environment a parent spawn set, else read from the spawner being the root itself
+    (Claude Code when it carries CLAUDE_CODE_SESSION_ID; an OpenCode root sets the variables)."""
+    context = {
+        "AGENTCTL_RUNTIME_HOST": environ.get("AGENTCTL_RUNTIME_HOST")
+        or ("claude" if environ.get("CLAUDE_CODE_SESSION_ID") else None),
+        host_stamp.HARNESS_VERSION_ENV: host_stamp.bind_time_version(environ),
+        ROOT_SESSION_ENV: environ.get(ROOT_SESSION_ENV) or engine_session_binding.harness_session_id(environ),
+    }
+    return {name: value for name, value in context.items() if value}
+
+
+def _performing_models(payload) -> "list[str]":
+    """The full model ids the child ran on, in the order the result reports them (the same
+    vocabulary as the quality rows, not the CLI alias the spawn asked for)."""
+    usage = payload.get("modelUsage") if isinstance(payload, dict) else None
+    return [m for m in usage if isinstance(m, str)] if isinstance(usage, dict) else []
+
+
+def _spawn_host_stamp(payload, environ: "Mapping[str, str]") -> dict:
+    """The host stamp of a spawn-cost row: the host, harness version and root session of the
+    task the spawn belongs to (a nested spawn carries its task's root, not its parent's own
+    session) and the model ids the child performed on. An unknown host stays null."""
+    context = _root_context(environ)
     return host_stamp.stamp(
-        host,
-        host_stamp.bind_time_version(environ),
-        [model] if model else [],
-        engine_session_binding.harness_session_id(environ),
+        context.get("AGENTCTL_RUNTIME_HOST"),
+        context.get(host_stamp.HARNESS_VERSION_ENV),
+        _performing_models(payload),
+        context.get(ROOT_SESSION_ENV),
     )
 
 
@@ -231,6 +253,7 @@ def build_child_env(environ: "Mapping[str, str]", depth_next: int, session_id: "
     inherited = {name: value for name, value in environ.items() if name != "TMUX_PANE"}
     return {
         **inherited,
+        **_root_context(environ),
         "AGENT_RECURSION_DEPTH": str(depth_next),
         "CLAUDE_CODE_DISABLE_CRON": "1",
         "AGENT_LINEAGE_IDS": build_child_lineage(environ.get("AGENT_LINEAGE_IDS", ""), session_id),
@@ -3920,7 +3943,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         }} if resume is not None else {}),
         **_spawner_session_field(args.session),
         **_spawn_tags(),
-        **_spawn_host_stamp(model, os.environ),
+        **_spawn_host_stamp(payload, os.environ),
         **({"child_outside_project_override": child_project_override} if child_project_override else {}),
     })
     try:

@@ -51,14 +51,18 @@ def _iter_transcript(session_id: str):
         return
 
 
-def models_from_transcript(session_id: str | None) -> list[str]:
-    """Models of the root transcript's assistant turns, in order of first appearance."""
+def models_from_transcript(*session_ids: str | None) -> list[str]:
+    """Models of the root transcripts' assistant turns, in order of first appearance across the
+    given sessions in the order given. A task taken over by a later root session is read from
+    the transcript of each root, since one engine session's newest transcript holds only the
+    last root's turns."""
     seen: list[str] = []
-    for entry in _iter_transcript(session_id) if session_id else ():
-        message = entry.get("message")
-        model = message.get("model") if isinstance(message, dict) else None
-        if isinstance(model, str) and model and not model.startswith("<") and model not in seen:
-            seen.append(model)
+    for session_id in dict.fromkeys(s for s in session_ids if s):
+        for entry in _iter_transcript(session_id):
+            message = entry.get("message")
+            model = message.get("model") if isinstance(message, dict) else None
+            if isinstance(model, str) and model and not model.startswith("<") and model not in seen:
+                seen.append(model)
     return seen
 
 

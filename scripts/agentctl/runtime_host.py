@@ -71,19 +71,15 @@ def resolve_host(explicit: "str | None" = None) -> str:
     return host
 
 
-def record_root_bind(state, root_session_id: "str | None", *, bound_before: bool = True) -> None:
+def record_root_bind(state, root_session_id: "str | None") -> None:
     """Append this root session to state.host_binds once, with the host the session is bound
-    to. A state bound before host_binds existed (`bound_before`, with no entries yet) gets a
-    leading all-null entry first, so the host of the earlier stretch stays unknown. Without a
-    root session id nothing is recorded."""
+    to. A state bound before host_binds existed already carries its leading all-null entry
+    (SessionState.from_dict, keyed on schema_version). Without a root session id nothing is
+    recorded."""
     if not root_session_id or state.runtime_host is None:
         return
     if any(bind.get("root_session_id") == root_session_id for bind in state.host_binds):
         return
-    if bound_before and not state.host_binds:
-        state.host_binds.append(
-            {"root_session_id": None, "host": None, "harness_version": None, "bound_at": None}
-        )
     version = host_stamp.bind_time_version()
     if state.harness_version is None:
         state.harness_version = version
@@ -129,7 +125,7 @@ def bind_runtime_host(
         except HostAmbiguousError:
             return None
     state.runtime_host = host
-    record_root_bind(state, root_session_id, bound_before=False)
+    record_root_bind(state, root_session_id)
     return host
 
 

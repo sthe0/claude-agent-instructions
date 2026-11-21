@@ -351,16 +351,21 @@ def _harness_version(session: str) -> "str | None":
 
 
 def _session_host(session: str) -> "str | None":
-    """The runtime host the engine bound the session to; None when the session has no engine
-    state or never bound one."""
+    """The one runtime host the engine bound the session's root sessions to; None when the
+    session has no engine state, never bound one, predates the stamps (a null `host_binds`
+    entry) or ran on more than one host. A pre-stamp session stays NULL, as it reads unknown on
+    the quality-row side."""
     path = config_root.resolve_agentctl_state_file(session)
     if path is None:
         return None
     try:
-        host = json.loads(path.read_text(encoding="utf-8")).get("runtime_host")
+        binds = json.loads(path.read_text(encoding="utf-8")).get("host_binds")
     except (OSError, ValueError, AttributeError):
         return None
-    return host if isinstance(host, str) and host else None
+    if not isinstance(binds, list) or not binds:
+        return None
+    hosts = {b.get("host") if isinstance(b, dict) else None for b in binds}
+    return next(iter(hosts)) if len(hosts) == 1 and None not in hosts else None
 
 
 def subagent_contours(session: str) -> "list[str]":

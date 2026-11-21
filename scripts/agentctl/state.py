@@ -28,7 +28,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 62  # 62: stage_uids, effort_segments, effort_migrated (per-segment effort)
+SCHEMA_VERSION = 63  # 63: host_binds, harness_version (root-session host stamps); 62: stage_uids, effort_segments, effort_migrated (per-segment effort)
                      # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
@@ -3427,6 +3427,10 @@ class SessionState:
         ]
         pre_segments = (int(data.get("schema_version") or 0) < EFFORT_SEGMENTS_SCHEMA
                         and not data.get("effort_migrated"))
+        if int(data.get("schema_version") or 0) < HOST_BINDS_SCHEMA:
+            if data.get("runtime_host") and not data.get("host_binds"):
+                data["host_binds"] = [dict(UNSTAMPED_HOST_BIND)]
+            data["schema_version"] = HOST_BINDS_SCHEMA
         state = cls(**data)
         if pre_segments:
             _migrate_to_effort_segments(state)
@@ -3447,6 +3451,10 @@ class SessionState:
 
 
 EFFORT_SEGMENTS_SCHEMA = 62
+# A state loaded below this version was bound before root-session host stamps existed: its
+# earlier stretch is an unstamped root session, kept as a leading all-null host_binds entry.
+HOST_BINDS_SCHEMA = 63
+UNSTAMPED_HOST_BIND = {"root_session_id": None, "host": None, "harness_version": None, "bound_at": None}
 
 
 def frame_path(stack) -> str:

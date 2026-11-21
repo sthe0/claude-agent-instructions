@@ -177,7 +177,7 @@ def _host_stamp_fields(state) -> dict:
     fields = host_stamp.stamp(
         state.runtime_host,
         state.harness_version or host_stamp.version_from_transcript(state.session_id),
-        host_stamp.models_from_transcript(state.session_id),
+        host_stamp.models_from_transcript(*(b.get("root_session_id") for b in binds), state.session_id),
         root,
     )
     fields["hosts"] = [b.get("host") for b in binds]
@@ -1003,6 +1003,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         ),
         "n_renormalize_replans": sum(1 for h in state.history if h.get("event") == "renormalize"),
         "spawn_count": cost_surface.get("spawn_count", 0),
+        "attributed_stages": cost_surface.get("attributed_stages"),
         "total_cost_usd": cost_surface.get("total_cost_usd"),
         "weight_class": state.weight_class,
         "deliverable_kind": state.deliverable_kind or None,
