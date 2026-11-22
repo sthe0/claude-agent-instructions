@@ -856,6 +856,30 @@ def _effective_stage_grants_for_self_grant(state: SessionState, stage_index: int
         allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))
 
 
+def request_outside_stage_grants(state: SessionState, stage_index: int, rows) -> list[str]:
+    """The entries of the resource request `rows` that the permissions already in force for
+    stage `stage_index` of `state` do not cover, as readable strings; [] when all are covered.
+
+    "In force" is the self-grant reading (`_effective_stage_grants_for_self_grant`): declared,
+    derived and kind-baseline grants, and the user's standing runtime grants -- never a
+    one-launch grant and never one the agent made itself, so nothing the agent alone does can
+    widen it. A spawned kind that runs under `acceptEdits` also holds its workdir for writing,
+    as the plan-time computation counts it. Coverage is `plan_resources.uncovered_request_entries`,
+    the test a request meets at submission."""
+    grants = _effective_stage_grants_for_self_grant(state, stage_index)
+    entries = [{"rule": g.rule} for g in grants.allow]
+    entries += [{"path": d.path, "mode": d.mode} for d in grants.add_dirs]
+    stage = state.stage(stage_index)
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    held = plan_resources.resource_set_from_entries(entries, stage, venue, grants.resources)
+    if venue and stage.is_spawn() and stage.spawn_kind() in plan_resources.RESOURCE_REQUEST_KINDS:
+        plan_resources.add_workdir_write(held, venue)
+    parts = sub_plan.request_parts(rows)
+    return plan_resources.uncovered_request_entries(
+        tuple(parts["allow"]), tuple(tuple(d) for d in parts["add_dirs"]), held,
+        {e["rule"] for e in entries if "rule" in e}, venue)
+
+
 def _consume_once_grants(state: SessionState, stage_index: int) -> None:
     """Mark every `scope: "once"` runtime grant on this stage as consumed after
     a dispatch that used it. A once-scoped grant exists to get a single denied

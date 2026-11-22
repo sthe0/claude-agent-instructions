@@ -3506,6 +3506,12 @@ def user_plan_approval_way(state: SessionState) -> str:
     return "`replan`, then `approve --by user`"
 
 
+#: The one way a linked child can take for a request its own approval does not cover: its
+#: channel (`agentctl-own.py`) runs neither `approve --by user` nor `approve-resources`.
+CHILD_REPORTS_THE_REQUEST = ("report the request to your parent (a `COMPLETED:` / `INCOMPLETE:` / "
+                             "`PERMISSION-REQUEST:` marker naming it), who obtains the user's approval")
+
+
 def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
                                       subplan_only: bool = False) -> list[str]:
     """A stage above the line starts only while the parent's approval of its resources and
@@ -3516,6 +3522,11 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
     if stage.place is None or not stage_above_threshold(stage, Thresholds()):
         return []
     approved = sub_plan.approval_entry(state, stage.index).get("parent_resource_approval")
+    if not approved and state.parent_link:
+        return [f"stage {stage.index} cannot start: its resources and permissions are not approved: "
+                f"`approve --by agent` approves a request inside what the permissions in force for "
+                f"the parent stage cover (or the set the parent approved); a request outside them "
+                f"is not yours to approve: {CHILD_REPORTS_THE_REQUEST}"]
     if not approved:
         return [f"stage {stage.index} cannot start: the parent has not approved its resources and "
                 f"permissions: the user approves the plan ({user_plan_approval_way(state)}), or has the stage's "
@@ -3523,6 +3534,11 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
                 f"`approve-resources --stage {stage.index} --by <their name>`; the agent's "
                 f"approve-stage-resources then works inside that set"]
     live = sub_plan.resource_request_digest(record.resource_request if record else [])
+    if live != approved and state.parent_link:
+        return [f"stage {stage.index} cannot start: its resource request changed since it was "
+                f"approved: `approve-stage-resources --stage {stage.index}` re-approves it inside "
+                f"the bound; a request outside it is not yours to approve: "
+                f"{CHILD_REPORTS_THE_REQUEST}"]
     if live != approved:
         return [f"stage {stage.index} cannot start: its resource request changed since the parent "
                 f"approved it: `approve-stage-resources --stage {stage.index}` re-approves it inside "

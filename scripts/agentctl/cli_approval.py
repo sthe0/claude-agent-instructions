@@ -7,6 +7,7 @@ import datetime as dt
 import os
 from . import (
     advisor,
+    cli_dispatch,
     effort,
     gates,
     mandate as mandate_rules,
@@ -1022,12 +1023,42 @@ def _approved_set(state: SessionState, store: StateStore, stage: Stage) -> dict 
     return entry.get("approved")
 
 
+def _outside_parent_permissions(state: SessionState, store: StateStore, rows) -> list[str]:
+    """Why a linked child's request is not inside the permissions already in force for the parent
+    stage it runs under -- the bound of a child whose parent stage recorded no approved set
+    (a stage written before approvals were recorded, or one below the size line)."""
+    parent = _load_parent(store, state.parent_link)
+    if parent is None:
+        return ["the parent session cannot be read"]
+    index = state.parent_link.get("stage_index")
+    try:
+        parent.stage(index)
+    except KeyError:
+        return [f"the parent session has no stage {index}"]
+    return cli_dispatch.request_outside_stage_grants(parent, index, rows)
+
+
+def _agent_approval_outside(state: SessionState, store: StateStore, stage: Stage,
+                            rows) -> list[str] | None:
+    """What of the request `rows` lies outside the bound the agent's approval of this stage works
+    inside: the approved set when there is one, else -- for a linked child -- the permissions in
+    force for its parent stage. None where nothing bounds it (a decided-later stage the user has
+    not approved a set for, or a root stage with no approved set): the user must approve."""
+    approved = _approved_set(state, store, stage)
+    if approved is not None:
+        return sub_plan.request_within(rows, approved)
+    if state.parent_link and not sub_plan.is_decided_later(stage):
+        return _outside_parent_permissions(state, store, rows)
+    return None
+
+
 def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: bool) -> None:
     """The parent's approval of the resources and permissions of each stage above the size line,
     written by `approve`: the user's approval writes it for every such stage and sets the
-    approved set; the agent's writes it only for a stage whose request lies inside that set, so
-    where no set is on record at the root it writes it only for a request that names nothing. A
-    decided-later stage is approved through its sub-plan (approve-subplan), not here."""
+    approved set; the agent's writes it only for a stage whose request lies inside the bound
+    (`_agent_approval_outside`), so where no set is on record at the root it writes it only for a
+    request that names nothing. A decided-later stage is approved through its sub-plan
+    (approve-subplan), not here."""
     thr = Thresholds()
     for stage in state.stages:
         if stage.place is None or sub_plan.is_decided_later(stage) \
@@ -1038,10 +1069,10 @@ def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: 
         if not by_agent:
             sub_plan.write_parent_approval(state, stage.index, rows)
             continue
-        approved = _approved_set(state, store, stage)
-        if approved is None and not state.parent_link:
-            approved = {}
-        if approved is not None and not sub_plan.request_within(rows, approved):
+        outside = _agent_approval_outside(state, store, stage, rows)
+        if outside is None:
+            outside = sub_plan.request_within(rows, {})
+        if not outside:
             sub_plan.write_parent_approval(state, stage.index, rows, widens_set=False)
 
 
@@ -1109,8 +1140,8 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
         if problem:
             return Directive(False, state.node, "await_user_approval",
                              f"stage {stage.index} is decided later and {problem}")
-    approved = _approved_set(state, store, stage)
-    if approved is None:
+    outside = _agent_approval_outside(state, store, stage, record.resource_request)
+    if outside is None:
         return Directive(False, state.node, "await_user_approval",
                          f"no resources and permissions were approved for stage {stage.index}: the "
                          f"user approves the plan ({gates.user_plan_approval_way(state)}), or "
@@ -1118,11 +1149,14 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
                          f"sub-plan (present-plan --kind subplan --stage {stage.index}) and runs "
                          f"`approve-resources --stage {stage.index} --by <their name>`; the agent's "
                          f"approve-stage-resources then works inside that set")
-    outside = sub_plan.request_within(record.resource_request, approved)
     if outside:
+        way = (gates.CHILD_REPORTS_THE_REQUEST if state.parent_link
+               else f"the user approves it ({gates.user_plan_approval_way(state)})")
+        bound = ("the approved set" if _approved_set(state, store, stage) is not None
+                 else "the permissions in force for the parent stage")
         return Directive(False, state.node, "await_user_approval",
-                         f"stage {stage.index}'s request is outside the approved set: "
-                         + "; ".join(outside), data={"outside": outside})
+                         f"stage {stage.index}'s request is outside {bound}: "
+                         + "; ".join(outside) + f" -- {way}", data={"outside": outside})
     sub_plan.write_parent_approval(state, stage.index, record.resource_request, widens_set=False)
     state.log("approve_stage_resources", stage=stage.index)
     store.save(state)
@@ -1167,7 +1201,7 @@ def cmd_approve_resources(args, *, store: StateStore, runner: Runner | None = No
     if shown:
         return Directive(False, state.node, "await_user_approval",
                          "; ".join(shown) + f". approve-resources approves the request the user was "
-                         f"shown: the plan's own approval (`replan`, then `approve --by user`) is the "
+                         f"shown: the plan's own approval ({gates.user_plan_approval_way(state)}) is the "
                          f"other way on")
     sub_plan.write_parent_approval(state, stage.index, record.resource_request)
     state.log("approve_resources", stage=stage.index, by=by)
