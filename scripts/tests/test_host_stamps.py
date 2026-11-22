@@ -191,6 +191,45 @@ def test_nested_rows_carry_root_host(tmp_path, monkeypatch):
     assert (row["host"], row["root_session_id"], row["models"]) == ("opencode", "ses_root", ["m-z"])
 
 
+def test_a_reopened_task_is_one_task_in_the_comparison(store, venued_fixtures_dir, monkeypatch):
+    from lib.agent_report import host_comparison
+    from test_resolved_reentry_gate import _reset_ns, _to_resolved
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "root-r")
+    monkeypatch.setattr(engine_session_binding, "transcript_for_session", lambda session: None)
+    _to_resolved(store, venued_fixtures_dir, "reopen-1")
+    assert cli_reset(store, _reset_ns("reopen-1", reopen_reason="missed a path")).ok
+    _to_resolved(store, venued_fixtures_dir, "reopen-1")
+
+    rows = [r for r in _read_quality_rows(cli_final.TASK_QUALITY_LOG) if r["session"] == "reopen-1"]
+    assert len(rows) == 2 and rows[0]["task_id"] == rows[1]["task_id"] == "demo"
+    report = host_comparison.summarize(rows, [], states=host_comparison.load_states(store.root))
+    assert report["groups"]["claude"]["tasks"] == 1
+    assert report["groups"]["claude"]["by_weight"]["SUBSTANTIVE"]["resolved_tasks"] == 1
+
+
+def cli_reset(store, args):
+    from agentctl import cli
+    return cli.cmd_reset(args, store=store)
+
+
+def test_spawn_rows_carry_the_spawners_task_id(tmp_path, monkeypatch):
+    spawner = _spawner()
+    monkeypatch.setattr(spawner.host_stamp, "current_task_id", lambda session: "task-9")
+    assert spawner._spawner_session_field("eng-9") == {"spawner_session": "eng-9", "task_id": "task-9"}
+    monkeypatch.setattr(spawner.host_stamp, "current_task_id", lambda session: None)
+    assert spawner._spawner_session_field("eng-9") == {"spawner_session": "eng-9"}
+
+
+def test_the_root_host_variable_is_a_stamp_not_a_host_selector(monkeypatch):
+    spawner = _spawner()
+    child_env = spawner.build_child_env(
+        {"AGENTCTL_RUNTIME_HOST": "opencode", "AGENTCTL_HARNESS_SESSION_ID": "ses_root"}, 1, "ses_root")
+    assert child_env["AGENTCTL_ROOT_HOST"] == "opencode"
+    claude_root = spawner.build_child_env({"CLAUDE_CODE_SESSION_ID": "cc-1"}, 1, "cc-1")
+    assert claude_root["AGENTCTL_ROOT_HOST"] == "claude"
+    assert "AGENTCTL_RUNTIME_HOST" not in claude_root
+
+
 def test_harness_version_from_env_not_launch(store, venued_fixtures_dir, monkeypatch):
     import subprocess
 
@@ -234,6 +273,7 @@ def test_the_spawn_row_stamp_and_spawner_fallback(monkeypatch):
     assert spawner._spawn_host_stamp(None, {})["host"] is None
     monkeypatch.delenv("AGENTCTL_OWN_SESSION", raising=False)
     monkeypatch.setattr(spawner.host_stamp, "task_key", lambda environ=None: "eng-1")
+    monkeypatch.setattr(spawner.host_stamp, "current_task_id", lambda session: None)
     assert spawner._spawner_session_field(None) == {"spawner_session": "eng-1"}
     assert spawner._spawner_session_field("given") == {"spawner_session": "given"}
 
@@ -252,6 +292,7 @@ def test_models_of_every_root_session_are_kept_in_order(tmp_path, monkeypatch):
 def test_telemetry_fills_host_only_for_stamped_single_host_sessions(tmp_path, monkeypatch):
     from lib.telemetry import store as telemetry_store, sync
     from test_telemetry_sync_scale import _replayed
+    monkeypatch.setattr(telemetry_store, "DEADLINE_S", 30.0)
     state_dir = tmp_path / "home" / "agentctl" / "state"
     state_dir.mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "home"))
@@ -277,8 +318,9 @@ def test_telemetry_fills_host_only_for_stamped_single_host_sessions(tmp_path, mo
                      "no-state": None}
 
 
-def test_the_telemetry_sessions_table_gains_a_nullable_host_column():
+def test_the_telemetry_sessions_table_gains_a_nullable_host_column(monkeypatch):
     from lib.telemetry import store as telemetry_store
+    monkeypatch.setattr(telemetry_store, "DEADLINE_S", 30.0)
     conn = telemetry_store.open_record()
     try:
         columns = {row[1]: row[3] for row in conn.execute("PRAGMA table_info(sessions)")}

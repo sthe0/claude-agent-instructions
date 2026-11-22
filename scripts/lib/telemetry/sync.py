@@ -354,7 +354,9 @@ def _session_host(session: str) -> "str | None":
     """The one runtime host the engine bound the session's root sessions to; None when the
     session has no engine state, never bound one, predates the stamps (a null `host_binds`
     entry) or ran on more than one host. A pre-stamp session stays NULL, as it reads unknown on
-    the quality-row side."""
+    the quality-row side. A current-schema session bound without a root session id has no binds
+    either: the host-comparison report then groups its task by the stamps of its rows, which a
+    sessions row does not have, so telemetry keeps NULL (unknown) rather than guess a host."""
     path = config_root.resolve_agentctl_state_file(session)
     if path is None:
         return None

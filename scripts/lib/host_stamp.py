@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 
-from lib import engine_session_binding
+from lib import config_root, engine_session_binding
 
 HARNESS_VERSION_ENV = "AGENTCTL_RUNTIME_HOST_VERSION"
 STAMP_KEYS = ("host", "harness_version", "models", "root_session_id")
@@ -32,6 +32,20 @@ def task_key(environ=None) -> str | None:
         return own
     harness = engine_session_binding.harness_session_id(env)
     return engine_session_binding.resolve(harness) if harness else None
+
+
+def current_task_id(session: str | None) -> str | None:
+    """The task the engine session holds now. One session id holds several tasks over time
+    (reset opens a fresh state under the same id), so a record keyed on the session alone
+    cannot be told apart from another task's."""
+    path = config_root.resolve_agentctl_state_file(session) if session else None
+    if path is None:
+        return None
+    try:
+        task_id = json.loads(path.read_text(encoding="utf-8")).get("task_id")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return task_id if isinstance(task_id, str) and task_id else None
 
 
 def _iter_transcript(session_id: str):
@@ -80,6 +94,6 @@ def bind_time_version(environ=None) -> str | None:
 
 
 __all__ = [
-    "STAMP_KEYS", "HARNESS_VERSION_ENV", "stamp", "task_key", "models_from_transcript",
+    "STAMP_KEYS", "HARNESS_VERSION_ENV", "stamp", "task_key", "current_task_id", "models_from_transcript",
     "version_from_transcript", "bind_time_version",
 ]

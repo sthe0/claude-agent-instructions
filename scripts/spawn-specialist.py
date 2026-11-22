@@ -141,10 +141,16 @@ def _spawner_session_field(session: str | None) -> dict:
     """The engine session this spawn was made on behalf of: --session, else the spawner's own
     contour, else the engine session the harness conversation last drove."""
     spawner = session or os.environ.get(OWN_SESSION_ENV) or host_stamp.task_key()
-    return {"spawner_session": spawner} if spawner else {}
+    if not spawner:
+        return {}
+    task_id = host_stamp.current_task_id(spawner)
+    return {"spawner_session": spawner, **({"task_id": task_id} if task_id else {})}
 
 
 ROOT_SESSION_ENV = "AGENTCTL_ROOT_SESSION_ID"
+# Stamp-only: AGENTCTL_RUNTIME_HOST also arms the cross-host refusal in spawn-cursor-escape.py
+# and in this wrapper, so it must not be set in a Claude child that never had it.
+ROOT_HOST_ENV = "AGENTCTL_ROOT_HOST"
 
 
 def _root_context(environ: "Mapping[str, str]") -> dict:
@@ -152,7 +158,7 @@ def _root_context(environ: "Mapping[str, str]") -> dict:
     from the environment a parent spawn set, else read from the spawner being the root itself
     (Claude Code when it carries CLAUDE_CODE_SESSION_ID; an OpenCode root sets the variables)."""
     context = {
-        "AGENTCTL_RUNTIME_HOST": environ.get("AGENTCTL_RUNTIME_HOST")
+        ROOT_HOST_ENV: environ.get(ROOT_HOST_ENV) or environ.get("AGENTCTL_RUNTIME_HOST")
         or ("claude" if environ.get("CLAUDE_CODE_SESSION_ID") else None),
         host_stamp.HARNESS_VERSION_ENV: host_stamp.bind_time_version(environ),
         ROOT_SESSION_ENV: environ.get(ROOT_SESSION_ENV) or engine_session_binding.harness_session_id(environ),
@@ -173,7 +179,7 @@ def _spawn_host_stamp(payload, environ: "Mapping[str, str]") -> dict:
     session) and the model ids the child performed on. An unknown host stays null."""
     context = _root_context(environ)
     return host_stamp.stamp(
-        context.get("AGENTCTL_RUNTIME_HOST"),
+        context.get(ROOT_HOST_ENV),
         context.get(host_stamp.HARNESS_VERSION_ENV),
         _performing_models(payload),
         context.get(ROOT_SESSION_ENV),
