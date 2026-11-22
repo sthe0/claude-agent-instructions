@@ -14,6 +14,14 @@ from test_quality_row_task_type import _drive_to_resolved, _read_quality_rows
 SCRIPTS = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _no_real_cost_log(tmp_path, monkeypatch):
+    """Every test here that drives a task to its end reads the spawn-cost log: give it an
+    empty temporary one, never the developer's."""
+    from agentctl import cost
+    monkeypatch.setattr(cost, "COST_LOG", tmp_path / "no-spawn-costs.jsonl")
+
+
 def _transcript(tmp_path, models, version="2.1.0"):
     path = tmp_path / "root-1.jsonl"
     entries = [{"type": "user", "version": version}]
@@ -228,6 +236,7 @@ def test_a_reopened_task_is_one_task_in_the_comparison(store, venued_fixtures_di
 
     clock[0] = CLOCK_ZERO + 100
     assert cli_reset(store, _reset_ns("reopen-1", reopen_reason="missed a path")).ok
+    assert store.load("reopen-1").cycle_started_at == CLOCK_ZERO + 100
     _append_cost_rows(cost_log, [
         _spawn_row(plan, first_stage, 110, 2.0),
         _spawn_row(plan, first_stage, 120, 8.0, task_id="another-task"),
@@ -246,10 +255,12 @@ def test_a_reopened_task_is_one_task_in_the_comparison(store, venued_fixtures_di
 
 
 def test_a_cycle_with_an_unpriced_spawn_has_no_task_cost(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    from agentctl import cli_session
     from lib.agent_report import host_comparison
     monkeypatch.setattr(engine_session_binding, "transcript_for_session", lambda session: None)
+    monkeypatch.setattr(cli_session, "time", types.SimpleNamespace(time=lambda: CLOCK_ZERO))
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
-    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    now = dt.datetime.fromtimestamp(CLOCK_ZERO + 10, dt.timezone.utc).isoformat(timespec="seconds")
     cost_log = tmp_path / "spawn-costs.jsonl"
     _append_cost_rows(cost_log, [
         {"ts": now, "event": "spawn", "plan_path": plan, "stage_index": 1, "cost_usd": 1.0, "duration_ms": 1,
@@ -265,6 +276,14 @@ def test_a_cycle_with_an_unpriced_spawn_has_no_task_cost(store, venued_fixtures_
     report = host_comparison.summarize([row], [], states=host_comparison.load_states(store.root))
     claude = report["groups"]["claude"]["by_weight"]["SUBSTANTIVE"]
     assert (claude["total_cost_usd"], claude["cost_unknown_tasks"]) == (None, 1)
+
+
+def test_a_reattested_stage_keeps_its_count_of_unpriced_spawns():
+    from agentctl.cli_replan import _reattest_prior_outcome
+    from agentctl.state import Outcome, StageStatus
+    passed = Outcome(status=StageStatus.PASSED.value, cost_usd=1.0, spawn_count=2, unpriced_spawns=1)
+    carried = _reattest_prior_outcome(passed)
+    assert (carried.cost_usd, carried.spawn_count, carried.unpriced_spawns) == (1.0, 2, 1)
 
 
 def cli_reset(store, args):
