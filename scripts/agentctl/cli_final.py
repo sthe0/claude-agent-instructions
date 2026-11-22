@@ -865,6 +865,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             "total_duration_ms": rollup.total_duration_ms,
             "spawn_count": rollup.spawn_count,
             "attributed_stages": rollup.attributed_stages,
+            "unpriced_spawns": rollup.unpriced_spawns,
             "note": rollup.note,
         },
         "resolution_ask_marker": RESOLUTION_ASK_MARKER,
@@ -939,6 +940,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             "total_duration_ms": state.cost.total_duration_ms,
             "spawn_count": state.cost.spawn_count,
             "attributed_stages": state.cost.attributed_stages,
+            "unpriced_spawns": state.cost.unpriced_spawns,
             "note": state.cost.note,
         }
         state.log("cost", **{k: v for k, v in cost_surface.items() if k != "note"})
@@ -1004,6 +1006,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "n_renormalize_replans": sum(1 for h in state.history if h.get("event") == "renormalize"),
         "spawn_count": cost_surface.get("spawn_count", 0),
         "attributed_stages": cost_surface.get("attributed_stages"),
+        "unpriced_spawns": cost_surface.get("unpriced_spawns", 0),
         "total_cost_usd": cost_surface.get("total_cost_usd"),
         "weight_class": state.weight_class,
         "deliverable_kind": state.deliverable_kind or None,

@@ -216,6 +216,14 @@ def test_a_reopened_task_with_one_unpriced_cycle_has_unknown_cost(tmp_path):
     assert f["total_cost_usd"] is None and f["cost_unknown_tasks"] == 1
 
 
+def test_a_cycle_that_left_out_unpriced_spawns_makes_the_task_cost_unknown(tmp_path):
+    rows = [_row("t-12", "claude", task_id="k-12", total_cost_usd=1.0, unpriced_spawns=1),
+            _row("t-13", "claude", task_id="k-13", total_cost_usd=2.0, unpriced_spawns=0)]
+    f = _figures(_report(tmp_path, quality=_ledger(tmp_path, rows), spawns=_empty(tmp_path)),
+                 "claude", "SUBSTANTIVE")
+    assert (f["total_cost_usd"], f["cost_tasks"], f["cost_unknown_tasks"]) == (2.0, 1, 1)
+
+
 def test_a_state_of_another_task_is_not_used(tmp_path):
     quality = _ledger(tmp_path, [_row("t-10", "opencode", task_id="k-old")])
     states = {"t-10": {"schema_version": 62, "task_id": "k-new", "runtime_host": "claude", "weight_class": "CHAT"}}
@@ -260,7 +268,7 @@ def test_spawns_without_a_task_group_are_kept_apart(tmp_path):
     assert report["spawns"]["no task"]["spawns"] == 1 and report["spawns"]["claude"]["spawns"] == 1
 
 
-def test_the_report_reads_the_engine_host_binds_schema_constant():
+def test_the_reports_copy_of_the_host_binds_schema_equals_the_engines():
     from agentctl.state import HOST_BINDS_SCHEMA
     from lib.agent_report import host_comparison
     assert host_comparison.HOST_BINDS_SCHEMA == HOST_BINDS_SCHEMA

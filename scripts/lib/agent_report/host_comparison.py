@@ -21,6 +21,14 @@ the last row's. A cost that is not wholly recorded in any cycle stays out of eve
 it is never a zero. A spawn follows its task's group; one that cannot be tied to a counted task
 goes under `no task`. Rows written before the stamps existed are never back-filled: they read as
 unknown.
+
+What a reader may assume about old rows. A spawn row without `task_id` is attributed to the only
+task its spawner session is known to have run (from a quality row or the session's state), even
+when the session held other tasks that left neither a row nor a state. A quality row of a
+reopened task written before the engine counted only a cycle's own spawns carries a cumulative
+`total_cost_usd` (the first cycle's spawns again in the second): those rows cannot be
+repaired from the ledger, so the summed cost of such a task may overstate it, and only rows
+written after that change are exact.
 """
 from __future__ import annotations
 
@@ -131,9 +139,14 @@ def _row_hosts(quality: list[dict]) -> list:
 def _task_cost(rows: list[dict], spawns: list[dict]) -> "float | None":
     """The task's cost summed over its cycles when every part of it is priced, else None: never
     a partial sum. A cycle's total is the sum of its priced stages; a stage dispatched twice has
-    two priced spawn rows, so only an unpriced spawn row or an unpriced cycle makes it unknown."""
+    two priced spawn rows, so only an unpriced spawn row or an unpriced cycle makes it unknown.
+    A quality row's `unpriced_spawns` counts the spawn rows its total left out; any above zero
+    makes the cycle's total a partial sum and so unknown. A row without the field (written
+    before it existed) reads as none unpriced."""
     totals = [_number(r.get("total_cost_usd")) for r in rows]
     if not totals or any(t is None for t in totals):
+        return None
+    if any((_number(r.get("unpriced_spawns")) or 0) > 0 for r in rows):
         return None
     if any(_number(s.get("cost_usd")) is None for s in spawns):
         return None

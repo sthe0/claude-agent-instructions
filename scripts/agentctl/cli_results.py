@@ -633,8 +633,11 @@ def _record_result(args, *, store: StateStore, runner: Runner | None = None) -> 
     # Attribute cost for spawn stages from the cost log. In-thread stages leave
     # None — cost splitting per in-thread stage is out of scope for this attribution.
     if stage.is_spawn():
-        _attr = cost.attribute_stage(_rows, state.plan_path, stage.index)
+        _attr = cost.attribute_stage(_rows, state.plan_path, stage.index,
+                                     since=state.cycle_started_at, task_id=state.task_id,
+                                     session=state.session_id)
         stage.outcome.cost_usd = _attr["cost_usd"]
+        stage.outcome.unpriced_spawns = _attr["unpriced_spawns"]
         stage.outcome.duration_ms = _attr["duration_ms"]
         stage.outcome.spawn_count = _attr["spawn_count"]
 

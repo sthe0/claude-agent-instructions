@@ -10,6 +10,7 @@ are not split per stage. See scripts/cost-report.py for the whole-session estima
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
@@ -40,29 +41,58 @@ def read_rows(log_path: Path | str = COST_LOG) -> list[dict]:
     return rows
 
 
+def _row_epoch(row: dict) -> float | None:
+    try:
+        return datetime.fromisoformat(str(row.get("ts"))).timestamp()
+    except ValueError:
+        return None
+
+
 def attribute_stage(
     rows: list[dict],
     plan_path: str | None,
     stage_index: int | None,
+    *,
+    since: float | None = None,
+    task_id: str | None = None,
+    session: str | None = None,
 ) -> dict:
-    """Sum cost log rows that match (plan_path, stage_index).
+    """Sum cost log rows that match (plan_path, stage_index) and belong to this cycle.
 
-    Returns a dict with keys cost_usd / duration_ms / spawn_count.
+    Returns a dict with keys cost_usd / duration_ms / spawn_count / unpriced_spawns.
     None-safe: rows whose cost_usd or duration_ms is None are counted in
     spawn_count but excluded from the respective sum (the sum itself stays
-    None if no row contributes a numeric value).
+    None if no row contributes a numeric value); `unpriced_spawns` counts the
+    rows with no cost_usd, so a caller can tell a partial sum from a whole one.
+
+    A plan path is reused by a reopened task and can be reused by another task, so
+    the match narrows to one cycle of one task: `since` (epoch seconds, the cycle's
+    start) drops rows stamped before it (a row whose ts is unreadable cannot be
+    placed and is kept), and `task_id` / `session` drop a row that names a different
+    task or spawner session (a row naming neither is kept).
 
     Returns zeros/None when plan_path or stage_index are None — in-thread
     stages never receive attribution.
     """
     if plan_path is None or stage_index is None:
-        return {"cost_usd": None, "duration_ms": None, "spawn_count": 0}
+        return {"cost_usd": None, "duration_ms": None, "spawn_count": 0, "unpriced_spawns": 0}
 
     plan_str = str(plan_path)
-    matching = [
-        r for r in rows
-        if r.get("plan_path") == plan_str and r.get("stage_index") == stage_index
-    ]
+    # Row ts has whole-second resolution; compare at that resolution.
+    floor = None if since is None else float(int(since))
+    matching = []
+    for r in rows:
+        if r.get("plan_path") != plan_str or r.get("stage_index") != stage_index:
+            continue
+        if task_id and r.get("task_id") and r["task_id"] != task_id:
+            continue
+        if session and r.get("spawner_session") and r["spawner_session"] != session:
+            continue
+        if floor is not None:
+            at = _row_epoch(r)
+            if at is not None and at < floor:
+                continue
+        matching.append(r)
     spawn_count = len(matching)
 
     cost_values = [r["cost_usd"] for r in matching if r.get("cost_usd") is not None]
@@ -72,6 +102,7 @@ def attribute_stage(
         "cost_usd": sum(cost_values) if cost_values else None,
         "duration_ms": sum(dur_values) if dur_values else None,
         "spawn_count": spawn_count,
+        "unpriced_spawns": spawn_count - len(cost_values),
     }
 
 
@@ -89,6 +120,7 @@ def rollup_plan(rows: list[dict], plan_path: str | None, stages: list) -> "CostR
     total_duration_ms: int | None = None
     attributed = 0
     spawn_count = 0
+    unpriced = 0
 
     for stage in stages:
         outcome = stage.outcome
@@ -98,6 +130,7 @@ def rollup_plan(rows: list[dict], plan_path: str | None, stages: list) -> "CostR
         if outcome.duration_ms is not None:
             total_duration_ms = (total_duration_ms or 0) + outcome.duration_ms
         spawn_count += outcome.spawn_count
+        unpriced += outcome.unpriced_spawns
 
     note = (
         "spawn stage costs attributed from ~/.local/log/claude-spawn-costs.jsonl; "
@@ -110,4 +143,5 @@ def rollup_plan(rows: list[dict], plan_path: str | None, stages: list) -> "CostR
         spawn_count=spawn_count,
         attributed_stages=attributed,
         note=note,
+        unpriced_spawns=unpriced,
     )

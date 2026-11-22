@@ -1,6 +1,8 @@
 """Host, harness-version, model and root-session stamps on quality and spawn-cost rows."""
+import datetime as dt
 import importlib.util
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -169,6 +171,7 @@ def test_rows_carry_task_key_and_root_session_id(store, venued_fixtures_dir, tmp
     monkeypatch.setattr(spawner, "COST_LOG", tmp_path / "spawn-costs.jsonl")
     monkeypatch.delenv("AGENTCTL_OWN_SESSION", raising=False)
     monkeypatch.setattr(spawner.host_stamp, "task_key", lambda environ=None: "eng-7")
+    monkeypatch.setattr(spawner.host_stamp, "current_task_id", lambda session: None)
     spawner.log_cost_entry({"event": "spawn", **spawner._spawner_session_field(None),
                             **spawner._spawn_host_stamp({"modelUsage": {"claude-x": {}}}, {"CLAUDE_CODE_SESSION_ID": "root-7"})})
     row = json.loads((tmp_path / "spawn-costs.jsonl").read_text(encoding="utf-8"))
@@ -191,20 +194,77 @@ def test_nested_rows_carry_root_host(tmp_path, monkeypatch):
     assert (row["host"], row["root_session_id"], row["models"]) == ("opencode", "ses_root", ["m-z"])
 
 
-def test_a_reopened_task_is_one_task_in_the_comparison(store, venued_fixtures_dir, monkeypatch):
+CLOCK_ZERO = 1_800_000_000
+
+
+def _spawn_row(plan, stage_index, at, cost_usd, **extra):
+    stamp = dt.datetime.fromtimestamp(CLOCK_ZERO + at, dt.timezone.utc).isoformat(timespec="seconds")
+    return {"ts": stamp, "event": "spawn", "plan_path": plan, "stage_index": stage_index,
+            "cost_usd": cost_usd, "duration_ms": 1, "host": "claude", "spawner_session": "reopen-1",
+            "task_id": "demo", **extra}
+
+
+def _append_cost_rows(path, rows):
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+
+def test_a_reopened_task_is_one_task_in_the_comparison(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    from agentctl import cli_session, cost
     from lib.agent_report import host_comparison
     from test_resolved_reentry_gate import _reset_ns, _to_resolved
+    cost_log = tmp_path / "spawn-costs.jsonl"
+    monkeypatch.setattr(cost, "COST_LOG", cost_log)
+    clock = [CLOCK_ZERO]
+    monkeypatch.setattr(cli_session, "time", types.SimpleNamespace(time=lambda: clock[0]))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "root-r")
     monkeypatch.setattr(engine_session_binding, "transcript_for_session", lambda session: None)
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    first_stage = 1
+
+    _append_cost_rows(cost_log, [_spawn_row(plan, first_stage, 10, 1.0)])
     _to_resolved(store, venued_fixtures_dir, "reopen-1")
+
+    clock[0] = CLOCK_ZERO + 100
     assert cli_reset(store, _reset_ns("reopen-1", reopen_reason="missed a path")).ok
+    _append_cost_rows(cost_log, [
+        _spawn_row(plan, first_stage, 110, 2.0),
+        _spawn_row(plan, first_stage, 120, 8.0, task_id="another-task"),
+        _spawn_row(plan, first_stage, 130, 16.0, spawner_session="another-session"),
+    ])
     _to_resolved(store, venued_fixtures_dir, "reopen-1")
 
     rows = [r for r in _read_quality_rows(cli_final.TASK_QUALITY_LOG) if r["session"] == "reopen-1"]
     assert len(rows) == 2 and rows[0]["task_id"] == rows[1]["task_id"] == "demo"
+    assert [r["total_cost_usd"] for r in rows] == [1.0, 2.0]
     report = host_comparison.summarize(rows, [], states=host_comparison.load_states(store.root))
     assert report["groups"]["claude"]["tasks"] == 1
-    assert report["groups"]["claude"]["by_weight"]["SUBSTANTIVE"]["resolved_tasks"] == 1
+    claude = report["groups"]["claude"]["by_weight"]["SUBSTANTIVE"]
+    assert claude["resolved_tasks"] == 1
+    assert claude["total_cost_usd"] == 3.0
+
+
+def test_a_cycle_with_an_unpriced_spawn_has_no_task_cost(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    from lib.agent_report import host_comparison
+    monkeypatch.setattr(engine_session_binding, "transcript_for_session", lambda session: None)
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    cost_log = tmp_path / "spawn-costs.jsonl"
+    _append_cost_rows(cost_log, [
+        {"ts": now, "event": "spawn", "plan_path": plan, "stage_index": 1, "cost_usd": 1.0, "duration_ms": 1,
+         "spawner_session": "unpriced-1"},
+        {"ts": now, "event": "spawn", "plan_path": plan, "stage_index": 1, "cost_usd": None, "duration_ms": 1,
+         "spawner_session": "unpriced-1"},
+    ])
+
+    _drive_to_resolved(store, "unpriced-1", plan, cost_log=cost_log)
+
+    row = _read_quality_rows(cli_final.TASK_QUALITY_LOG)[-1]
+    assert (row["total_cost_usd"], row["unpriced_spawns"], row["spawn_count"]) == (1.0, 1, 2)
+    report = host_comparison.summarize([row], [], states=host_comparison.load_states(store.root))
+    claude = report["groups"]["claude"]["by_weight"]["SUBSTANTIVE"]
+    assert (claude["total_cost_usd"], claude["cost_unknown_tasks"]) == (None, 1)
 
 
 def cli_reset(store, args):
@@ -218,6 +278,22 @@ def test_spawn_rows_carry_the_spawners_task_id(tmp_path, monkeypatch):
     assert spawner._spawner_session_field("eng-9") == {"spawner_session": "eng-9", "task_id": "task-9"}
     monkeypatch.setattr(spawner.host_stamp, "current_task_id", lambda session: None)
     assert spawner._spawner_session_field("eng-9") == {"spawner_session": "eng-9"}
+
+
+def test_the_task_id_of_a_saved_state_is_read_back_and_lands_on_a_real_spawn_row(tmp_path, monkeypatch):
+    from agentctl.state import SessionState
+    from agentctl.store import FileStateStore
+    from lib import host_stamp
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "home"))
+    FileStateStore(tmp_path / "home" / "agentctl" / "state").save(SessionState(session_id="eng-s", task_id="task-s"))
+    assert host_stamp.current_task_id("eng-s") == "task-s"
+    assert host_stamp.current_task_id("absent") is None
+
+    spawner = _spawner()
+    monkeypatch.setattr(spawner, "COST_LOG", tmp_path / "spawn-costs.jsonl")
+    spawner.log_cost_entry({"event": "spawn", **spawner._spawner_session_field("eng-s")})
+    row = json.loads((tmp_path / "spawn-costs.jsonl").read_text(encoding="utf-8"))
+    assert (row["spawner_session"], row["task_id"]) == ("eng-s", "task-s")
 
 
 def test_the_root_host_variable_is_a_stamp_not_a_host_selector(monkeypatch):

@@ -818,7 +818,7 @@ def test_each_current_stage_writer_refuses_a_second_current_stage(eng):
 # --- schema 62 --------------------------------------------------------------------------
 
 
-def test_schema_61_state_loads_under_schema_62(eng):
+def test_a_v61_state_loads_at_the_current_schema_and_keeps_its_effort_actuals(eng):
     plan = eng.write(with_order())
     eng.open("s", plan)
     state = eng.state("s")

@@ -3764,6 +3764,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     # otherwise win on mtime).
     transcripts_before = _snapshot_transcripts(workdir)
     final_result_grace = final_result_grace_s()
+    spawner_stamp = _spawner_session_field(args.session)
     started = time.monotonic()
 
     # Use Popen so we can print the child's transcript path to stderr early —
@@ -3947,7 +3948,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             "cost_usd": resume.cost_usd, "duration_ms": resume.duration_ms,
             "exit_code": resume.returncode, "marker": parsed_marker if ok else None,
         }} if resume is not None else {}),
-        **_spawner_session_field(args.session),
+        **spawner_stamp,
         **_spawn_tags(),
         **_spawn_host_stamp(payload, os.environ),
         **({"child_outside_project_override": child_project_override} if child_project_override else {}),

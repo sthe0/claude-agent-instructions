@@ -3,6 +3,7 @@
 Moved verbatim from cli.py; see cli.py for the command table."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from lib import config_root, engine_session_binding
 from . import (
@@ -49,6 +50,7 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_done_criterion=getattr(args, "done_criterion", "") or "",
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
+        cycle_started_at=time.time(),
     )
     runtime_host.bind_runtime_host(
         state, getattr(args, "host", None), require=False,
@@ -115,6 +117,7 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_done_criterion=getattr(args, "done_criterion", "") or "",
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
+        cycle_started_at=time.time(),
     )
     runtime_host.bind_runtime_host(
         new, getattr(args, "host", None), require=False,

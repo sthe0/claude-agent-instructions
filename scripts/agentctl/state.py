@@ -2326,6 +2326,9 @@ class Outcome:
     # `approve --by agent` can tell "never offered" from "offered, declined, since changed"
     # and leaves the second to the customer; cleared by the next customer approval.
     declined: bool = False
+    # Spawn rows attributed to this stage whose cost_usd is null: the stage's cost_usd is a
+    # sum over the priced rows only, so a non-zero count marks it a partial figure.
+    unpriced_spawns: int = 0
 
 
 @dataclass
@@ -2336,6 +2339,7 @@ class CostRollup:
     spawn_count: int = 0
     attributed_stages: int = 0
     note: str = ""
+    unpriced_spawns: int = 0
 
 
 @dataclass
@@ -2905,6 +2909,11 @@ class SessionState:
     # {root_session_id, host, harness_version, bound_at}. A state bound before this field
     # existed holds a leading all-null entry, so the host of that stretch reads as unknown.
     host_binds: list[dict] = field(default_factory=list)
+    # Epoch seconds at which this state was built by `start` or `reset`: the lower bound of the
+    # spawn-cost rows this cycle may attribute to its stages (a reopened task reuses the plan
+    # path, so the plan path alone cannot tell its cycles apart). None on a state built before
+    # the field existed: no lower bound.
+    cycle_started_at: float | None = None
     # Stage-6 re-attest carry-forward records (schema 32): rebuilt FROM SCRATCH by
     # every substantive replan (never accumulated across replans — the only cost
     # of a gap is an unnecessary full re-dispatch, never an incorrect PASS), one
@@ -3544,7 +3553,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
     "review_release_difficulty_id", "review_cycle_sha", "review_cycle_open", "review_cycle_acts",
     "review_cycle_minutes_anchor", "review_stage_streaks", "review_trigger_fire",
-    "review_trigger_spent", "renegotiations", "runtime_host", "harness_version", "host_binds", "reattest_stash",
+    "review_trigger_spent", "renegotiations", "runtime_host", "harness_version", "host_binds", "cycle_started_at", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
