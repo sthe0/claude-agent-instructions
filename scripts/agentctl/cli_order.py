@@ -36,9 +36,8 @@ from .submission import (
     order_customer_side_missing, order_sides_violations, order_understanding_completeness_violations,
     order_understanding_violations,
 )
-from .cli_common import _renew_order_agreement, _require
+from .cli_common import REPO_ROOT, _renew_order_agreement, _require
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 LEAVES_ROOT = REPO_ROOT / "memory-global" / "leaves"
 SEARCH_TIERS = ("experience", "regularities", "principles", "system-knowledge")
 BINDING_DECISIONS = ("keep", "drop")
@@ -487,7 +486,7 @@ def cmd_order_search(args, *, store: StateStore, runner: Runner | None = None) -
     )
 
 
-def _changed_parts(before: dict[str, str], after: dict[str, str]) -> list[str]:
+def _differing_part_names(before: dict[str, str], after: dict[str, str]) -> list[str]:
     return sorted(name for name in {*before, *after} if before.get(name) != after.get(name))
 
 
@@ -496,7 +495,7 @@ def _agreed_parts_moved(doc, agreement: OrderAgreement) -> list[str]:
     attribute so the revision-unguarded mutant can replace it."""
     if understanding_digest(doc) == agreement.understanding_sha256:
         return []
-    return _changed_parts(agreement.parts, understanding_parts(doc)) or ["understanding"]
+    return _differing_part_names(agreement.parts, understanding_parts(doc)) or ["understanding"]
 
 
 def _agreed_change(moved: list[str], beside: dict, agreement: OrderAgreement) -> str | None:
@@ -563,7 +562,7 @@ def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None 
     new_parts = executor_side_parts(doc)
     state.executor_side_revisions.append({
         "at": time.time(), "by": (getattr(args, "by", "") or "agent").strip() or "agent", "why": why,
-        "changed": _changed_parts(earlier_parts, new_parts), "plan": path,
+        "changed": _differing_part_names(earlier_parts, new_parts), "plan": path,
         "earlier_executor_side_sha256": earlier_digest, "executor_side_sha256": new_digest,
         "executor_side_parts": new_parts, "agreed_understanding_sha256": agreement.understanding_sha256,
     })

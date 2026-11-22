@@ -1,4 +1,4 @@
-version = 5
+version = 8
 
 [[members]]
 name = "cli:accept"
@@ -1559,3 +1559,27 @@ kind = "elementary"
 part_of = ["order_phase"]
 place = "order_agreement"
 source_keys = ["cli:order-executor-revise"]
+
+[[members]]
+name = "cli:approve-subplan"
+since = 6
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:approve-subplan"]
+
+[[members]]
+name = "cli:approve-resources"
+since = 7
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:approve-resources"]
+
+[[members]]
+name = "cli:approve-stage-resources"
+since = 8
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:approve-stage-resources"]

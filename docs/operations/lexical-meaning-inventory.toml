@@ -3370,3 +3370,15 @@ ground = "_MIGRATION_FILE.match picks migration files by their 'NNN_name.sql' na
 hits = 1
 hit_classes = ["structural"]
 reviewed_by = "developer"
+
+[sites."scripts/method-statement-eval.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles IMPORT_TOKEN, the '@<path>' import syntax of an instruction file; the token is then kept only if it names a file under the config root, so no free-text meaning is decided."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/method-statement-eval.py::_imported_files::pattern.findall"]
+class = "structural"
+ground = "IMPORT_TOKEN.findall reads the '@<path>' import tokens out of an instruction file; fixed import syntax whose result is checked against the file system, not free-text meaning."
+hits = 1
+reviewed_by = "developer"

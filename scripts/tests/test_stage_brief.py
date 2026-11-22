@@ -322,6 +322,16 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "grants"), (Stage, "effects"), (Stage, "optional"), (Stage, "backlog_issue"),
         (Stage, "branch"), (PlanMeta, "branch"),
         (Stage, "lazy"),  # excluded: a planning-mode mark shown by plan-render, not stage material
+        # NOT rendered at this commit, and not a deliberate exclusion: the stage-description
+        # fields (schema 64) reach the stage-description review and the sub-plan presentation
+        # but `_stage_field_lines` prints none of them, so an executor's brief of a new-form
+        # stage carries no place, binding condition or size. Listed so the drift check stays
+        # exact; a later change that renders them moves them into `must_appear`.
+        (Stage, "place"), (Stage, "binding_conditions"), (Stage, "binding_conditions_stated"),
+        (Stage, "declared_size"), (Stage, "size_flags"), (Stage, "expected_minutes"),
+        # excluded: the executor's own sub-plan record, carried in its own plan; the brief is
+        # of the parent's stage, which the executor answers with that record, not receives it.
+        (PlanMeta, "sub_plan"),
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
         (Subject, "material_refs"), (Subject, "knowledge_refs"),
         (Means, "means"), (Means, "method"), (Means, "procedure"),

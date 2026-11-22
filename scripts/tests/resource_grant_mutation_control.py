@@ -161,8 +161,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     "self-grant-merge-carries-resources": Mutant(
         CLI_DISPATCH,
         "        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))\n\n\n"
-        "def _consume_once_grants",
-        "        allow=allow, add_dirs=add_dirs)\n\n\ndef _consume_once_grants",
+        "def request_outside_stage_grants",
+        "        allow=allow, add_dirs=add_dirs)\n\n\ndef request_outside_stage_grants",
         "the agent self-grant coverage drops the stage's DR-P resources",
     ),
     "self-grant-counts-resources": Mutant(
@@ -1040,8 +1040,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "dispatch-start-filter-dropped": Mutant(
         CLI_DISPATCH,
-        "        since=_dispatch_started)",
-        "        since=None)",
+        "since=_dispatch_started)",
+        "since=None)",
         "dispatch compares decision-log rows left by earlier dispatches of the stage",
     ),
     "drift-repeat-threshold": Mutant(

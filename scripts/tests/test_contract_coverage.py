@@ -600,6 +600,7 @@ def _stage(index=2, **over):
         principle=Principle(statement="s", source="src", derivation="der",
                              confidence="high", refutation="r"),
         conditions="cond", preconditions="pre", knowledge="know",
+        binding_conditions=[{"id": "b1", "text": "t", "set_by": "user"}],
         supplies=[Supply(on=1, element="result", artifact="x")],
         amendments=[Amendment(date="2026-10-17", text="t", reason="why")],
         output_artifacts=["out/path.py"], outcome=Outcome(), control=None,
@@ -661,6 +662,8 @@ def _mutate(value):
     if isinstance(value, int):
         return value + 1
     if isinstance(value, list):
+        if value and isinstance(value[0], dict):
+            return list(value) + [{"id": "MUTATED", "text": "MUTATED", "set_by": "MUTATED"}]
         return list(value) + ["MUTATED"]
     if value is None:
         return "MUTATED"
@@ -697,6 +700,11 @@ _CD = ("carry_key", "apply_refined", "diff_plans", "question_key")
 #:    the live stage tracks the plan file once the file is re-read.
 #:  - `principle.*` is read by `StageNorm` and the question key, not by carry_key,
 #:    so `_apply_refined_stage_fields` copies it only because the norm reads it.
+#:  - The stage-description fields (schema 64): `place` is the new-form mark, so every
+#:    function reads it; `binding_conditions`, `binding_conditions_stated`, `declared_size`,
+#:    `size_flags` and `expected_minutes` are copied by `_apply_refined_stage_fields` and
+#:    read by no change-decision function, so an edit to only one of them diffs as
+#:    'no_change' (they ride in the stage-description review contribution, plan.py).
 _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "title": frozenset(_CD),
     "subject.material": frozenset({"apply_refined", "question_key"}),
@@ -745,6 +753,12 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "lazy": frozenset({"apply_refined", "diff_plans"}),
     "backlog_issue": frozenset({"apply_refined"}),
     "branch": frozenset({"apply_refined", "diff_plans"}),
+    "place": frozenset(_CD),
+    "binding_conditions": frozenset({"apply_refined"}),
+    "binding_conditions_stated": frozenset({"apply_refined"}),
+    "declared_size": frozenset({"apply_refined"}),
+    "size_flags": frozenset({"apply_refined"}),
+    "expected_minutes": frozenset({"apply_refined"}),
     "amendments.date": frozenset({"apply_refined"}),
     "amendments.text": frozenset({"apply_refined"}),
     "amendments.reason": frozenset({"apply_refined"}),

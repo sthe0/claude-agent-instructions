@@ -39,6 +39,7 @@ NON_STRING_FIELDS: dict[str, frozenset[str]] = {
         "index", "depends_on", "material_refs", "knowledge_refs", "guard_exempt_paths",
         "expected_exit", "landed", "principle", "supplies", "output_artifacts", "renorms",
         "grants", "effects", "optional", "amendments", "branch", "lazy",
+        "binding_conditions", "declared_size", "size_flags", "expected_minutes",
     }),
     "meta": frozenset({"order", "assumption", "branch", "resource_request"}),
     "order": frozenset({"requirements", "requires_traceability", "coverage",
@@ -54,7 +55,7 @@ EXTERNALIZABLE_FIELDS: dict[str, frozenset[str]] = {
         "criterion_type", "verify_command", "verify_venue", "verify_kind",
         "verify_venue_at_final", "negative_control", "negative_control_waiver",
         "ephemeral_artifacts_waiver", "conditions", "preconditions", "knowledge",
-        "backlog_issue",
+        "backlog_issue", "place",
     }),
     "meta": frozenset({
         "task_id", "goal", "done_criterion", "criterion_type", "weight_class",
