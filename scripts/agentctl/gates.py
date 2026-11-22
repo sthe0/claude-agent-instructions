@@ -3492,7 +3492,8 @@ def decided_later_dispatch_blockers(state: SessionState, stage, record, *,
         return planning
     if stage.place is None or not sub_plan.is_decided_later(stage):
         return []
-    problem = sub_plan.subplan_approval_problem(entry, record)
+    problem = sub_plan.subplan_approval_problem(
+        entry, record, child_way=CHILD_REPORTS_THE_REQUEST if state.parent_link else None)
     if problem is None:
         return []
     return [f"stage {stage.index} is decided later and cannot start: {problem}"]
@@ -3508,8 +3509,8 @@ def user_plan_approval_way(state: SessionState) -> str:
 
 #: The one way a linked child can take for a request its own approval does not cover: its
 #: channel (`agentctl-own.py`) runs neither `approve --by user` nor `approve-resources`.
-CHILD_REPORTS_THE_REQUEST = ("report the request to your parent (a `COMPLETED:` / `INCOMPLETE:` / "
-                             "`PERMISSION-REQUEST:` marker naming it), who obtains the user's approval")
+CHILD_REPORTS_THE_REQUEST = ("report the request to your parent (a `PERMISSION-REQUEST:` marker "
+                             "naming it), who obtains the user's approval")
 
 
 def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
@@ -3524,9 +3525,10 @@ def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
     approved = sub_plan.approval_entry(state, stage.index).get("parent_resource_approval")
     if not approved and state.parent_link:
         return [f"stage {stage.index} cannot start: its resources and permissions are not approved: "
-                f"`approve --by agent` approves a request inside what the permissions in force for "
-                f"the parent stage cover (or the set the parent approved); a request outside them "
-                f"is not yours to approve: {CHILD_REPORTS_THE_REQUEST}"]
+                f"`approve-stage-resources --stage {stage.index}` approves a request inside what the "
+                f"permissions in force for the parent stage cover (or the set the parent approved), "
+                f"from any node; a request outside them is not yours to approve: "
+                f"{CHILD_REPORTS_THE_REQUEST}"]
     if not approved:
         return [f"stage {stage.index} cannot start: the parent has not approved its resources and "
                 f"permissions: the user approves the plan ({user_plan_approval_way(state)}), or has the stage's "
@@ -3570,11 +3572,12 @@ def recorded_pass_blockers(state: SessionState, stage, *, store=None) -> list[st
     if stage.place is None:
         return []
     if sub_plan.approval_entry(state, stage.index).get("planning"):
+        on = (f"{CHILD_REPORTS_THE_REQUEST}, then dispatch the stage itself" if state.parent_link
+              else f"present its sub-plan (present-plan --kind subplan --stage {stage.index}), "
+                   f"have the user `approve-subplan`, and dispatch the stage itself")
         return [f"stage {stage.index} was dispatched only to plan it (dispatch --subplan-only): its "
                 f"work has not been done and cannot be recorded as passed. Plan it again with "
-                f"`dispatch --subplan-only`, or present its sub-plan (present-plan --kind subplan "
-                f"--stage {stage.index}), have the user `approve-subplan`, and dispatch the stage "
-                f"itself"]
+                f"`dispatch --subplan-only`, or {on}"]
     return stage_start_blockers(state, stage, store=store)
 
 
@@ -3603,7 +3606,7 @@ def child_approval_blockers(child: SessionState, parent: SessionState | None) ->
         return []
     raw = child.sub_plan_records.get(sub_plan.record_key(index))
     record = sub_plan.SubPlanRecord.from_dict(raw) if raw else None
-    problem = sub_plan.subplan_approval_problem(entry, record)
+    problem = sub_plan.subplan_approval_problem(entry, record, child_way=CHILD_REPORTS_THE_REQUEST)
     return [f"stage {index} is decided later and its sub-plan cannot be approved by the child: "
             f"{problem}"] if problem else []
 

@@ -1984,6 +1984,7 @@ def test_a_stage_outside_a_childs_parent_set_is_not_approved_by_the_agent(store)
 
 REPORT_TO_PARENT = "report the request to your parent"
 THE_USERS_VERBS = ("approve --by user", "approve-resources")
+OUTSIDE_RULE = "Bash(make deploy:*)"
 
 
 def _standing_grant(rule="Edit", *, by="fedor", scope="stage") -> dict:
@@ -2122,8 +2123,8 @@ def test_the_grants_a_plan_declared_for_the_parent_stage_bound_the_child_too(con
 
 
 def test_a_spawned_developer_stage_holds_its_workdir_for_writing(contour, monkeypatch):
-    """A developer child runs under `acceptEdits`, which makes its workdir writable: the parent
-    stage's in-force permissions include it, so a child's request for that directory is covered
+    """A spawned developer holds its workdir for writing: the parent stage's in-force
+    permissions include it, so a child's request for that directory is covered
     (an in-thread stage holds no such grant). The test's workdir lies under the sandbox home, so
     the protected roots are emptied to let the coverage test see the directory itself."""
     monkeypatch.setattr(widening_targets, "protected_roots", lambda: [])
@@ -2158,6 +2159,100 @@ def test_a_child_whose_parent_stage_is_gone_has_no_bound_to_approve_inside(conto
     child.parent_link = {**child.parent_link, "stage_index": 9}
     assert cli_approval._outside_parent_permissions(child, contour.store, rows) \
         == ["the parent session has no stage 9"]
+
+
+def _the_own_verbs_a_refusal_names(refusal: str, stage: int = 1) -> list[list[str]]:
+    """The calls through the child's channel that `refusal` names as a way on."""
+    ways = [["approve-stage-resources", "--stage", str(stage)], ["approve", "--by", "agent"]]
+    return [argv for argv in ways if " ".join(argv) in refusal]
+
+
+def test_a_child_at_executing_follows_the_refusal_to_a_start_after_the_users_grant(contour):
+    """The whole loop from the node a started child is in. `approve` acts only from PLAN_READY
+    (at EXECUTING it does nothing), so the way the refusal names must be one that acts from
+    EXECUTING: a request outside the bound is refused with the report to the parent; the user's
+    `resolve-permission` puts the grant on the parent stage; the child takes the verb the refusal
+    names, from EXECUTING, the approval is written and the stage starts."""
+    _contour_under(contour, "old-form")
+    _childs_request(contour, (OUTSIDE_RULE,))
+    for argv in (["approve", "--by", "agent"], ["partition"], ["next-stage"]):
+        code, body, err = contour.own(*argv)
+        assert code == 0 and body.get("ok") is not False, (argv, code, body, err)
+    assert contour.child_state().node == Node.EXECUTING.value
+    refusal = _childs_start_refusal(contour)
+    assert REPORT_TO_PARENT in refusal and "not approved" in refusal, refusal
+    assert "`PERMISSION-REQUEST:`" in refusal and "COMPLETED" not in refusal, refusal
+    assert contour.own("approve-stage-resources", "--stage", "1")[1].get("ok") is not True
+    assert "parent_resource_approval" not in contour.child_state().stage_approvals.get("0:1", {})
+
+    parent = contour.store.load(PARENT)
+    parent.permission_request = cli.PermissionRequest(
+        action=OUTSIDE_RULE, stage_index=1, raw=OUTSIDE_RULE)
+    contour.store.save(parent)
+    granted = cli.cmd_resolve_permission(
+        ns(session=PARENT, decision="granted", scope="stage", by="fedor", rules=[OUTSIDE_RULE],
+           add_dirs=None), store=contour.store)
+    assert granted.ok is True, granted
+
+    refusal = _childs_start_refusal(contour)
+    assert refusal, "the grant alone approves nothing: the child's own approval is still unwritten"
+    ways = _the_own_verbs_a_refusal_names(refusal)
+    assert ways, refusal
+    for argv in ways:
+        contour.own(*argv)
+    assert contour.child_state().node == Node.EXECUTING.value
+    written = contour.child_state().stage_approvals.get("0:1", {})
+    assert written.get("parent_resource_approval"), (refusal, ways)
+    assert _childs_start_refusal(contour) == ""
+
+
+def test_a_linked_child_is_never_sent_to_a_verb_of_the_user_or_the_root(contour):
+    """`present-plan`, `approve-subplan`, `approve-resources` and `approve --by user` are run in
+    the session that presented the plan: a linked child's channel refuses each. Every refusal or
+    way on a child can meet, for a sub-plan the user has to approve and for a request outside
+    its bound, names the report to the parent instead."""
+    _contour_under(contour, "above-the-line")
+    for argv in (["approve", "--by", "agent"], ["partition"], ["next-stage"]):
+        assert contour.own(*argv)[0] == 0
+    child = contour.child_state()
+    child.stage(1).lazy, child.stage(1).actor.executor = True, "spawn:developer"
+    sub_plan.store(child, _rec(1), level=0)
+    contour.store.save(child)
+    texts = {"start guard": _childs_start_refusal(contour)}
+    code, body, err = contour.own("approve-stage-resources", "--stage", "1")
+    texts["approve-stage-resources"] = json.dumps(body) + err
+    planned = _dispatch(contour.store, CHILD, Spawns(), subplan_only=True)
+    assert planned.action == "await_subplan_approval", planned
+    texts["planning dispatch"] = planned.detail
+    child = contour.child_state()
+    texts["record-result"] = " ".join(
+        gates.recorded_pass_blockers(child, child.stage(1), store=contour.store))
+    parent = contour.store.load(PARENT)
+    parent.stage(1).lazy = True
+    texts["child approve"] = " ".join(gates.child_approval_blockers(child, parent))
+    for name, text in texts.items():
+        assert REPORT_TO_PARENT in text, (name, text)
+        assert not any(verb in text for verb in (*THE_USERS_VERBS, "approve-subplan", "present-plan")), (
+            name, text)
+    assert "approve-subplan" in sub_plan.subplan_approval_problem({}, None)
+
+
+@pytest.mark.parametrize("allow", [(), ("Edit",)], ids=["empty-request", "request-in-bound"])
+def test_a_child_whose_parent_session_cannot_be_read_gets_nothing_approved(contour, allow):
+    """The parent is the only source of what is in force for the child's stage: with its session
+    gone the child has no bound to check against, so neither verb of its channel approves, not
+    even a request that names nothing."""
+    _contour_under(contour, "old-form", _standing_grant("Edit"))
+    _childs_request(contour, allow)
+    child = contour.child_state()
+    child.parent_link = {**child.parent_link, "parent_session": "no-such-parent"}
+    contour.store.save(child)
+    for argv in (["approve", "--by", "agent"], ["approve-stage-resources", "--stage", "1"]):
+        code, body, err = contour.own(*argv)
+        assert body.get("ok") is not True, (argv, code, body, err)
+        assert contour.child_state().stage_approvals.get("0:1", {}).get(
+            "parent_resource_approval") in (None, ""), argv
+    assert _childs_start_refusal(contour) != ""
 
 
 # --- the whole sequence --------------------------------------------------------------------------

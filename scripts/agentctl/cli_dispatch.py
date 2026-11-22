@@ -863,9 +863,10 @@ def request_outside_stage_grants(state: SessionState, stage_index: int, rows) ->
     "In force" is the self-grant reading (`_effective_stage_grants_for_self_grant`): declared,
     derived and kind-baseline grants, and the user's standing runtime grants -- never a
     one-launch grant and never one the agent made itself, so nothing the agent alone does can
-    widen it. A spawned kind that runs under `acceptEdits` also holds its workdir for writing,
-    as the plan-time computation counts it. Coverage is `plan_resources.uncovered_request_entries`,
-    the test a request meets at submission."""
+    widen it. A spawn of a kind that asks for resources (`RESOURCE_REQUEST_KINDS`) also holds
+    its workdir for writing, as the plan-time computation counts it; the permission mode the
+    spawn will really run under is not consulted here. Coverage is
+    `plan_resources.uncovered_request_entries`, the test a request meets at submission."""
     grants = _effective_stage_grants_for_self_grant(state, stage_index)
     entries = [{"rule": g.rule} for g in grants.allow]
     entries += [{"path": d.path, "mode": d.mode} for d in grants.add_dirs]
@@ -1660,12 +1661,14 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
         store.save(state)
         recorded = _planning_record_exists(state, store, stage.index)
         if marker in ("COMPLETED", "PLAN-READY") and recorded:
+            on = (f"{gates.CHILD_REPORTS_THE_REQUEST}, then dispatch the stage itself"
+                  if state.parent_link else
+                  f"present the sub-plan (present-plan --kind subplan --stage {stage.index}), wait "
+                  f"for the user's approve-subplan, then dispatch the stage itself")
             return Directive(
                 True, state.node, "await_subplan_approval",
                 f"stage {stage.index}'s planning child returned {marker}: its sub-plan is on record, "
-                f"the stage is not done and its result is not recorded. Present the sub-plan "
-                f"(present-plan --kind subplan --stage {stage.index}), wait for the user's "
-                f"approve-subplan, then dispatch the stage itself",
+                f"the stage is not done and its result is not recorded. For the user's approval: {on}",
                 marker=marker, data={**base, "planning_dispatch": True})
         return Directive(
             True, state.node, "plan_again",

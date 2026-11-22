@@ -310,16 +310,22 @@ def set_planning_mark(state, stage_index: int, planning: bool) -> None:
         state.stage_approvals[key]["planning"] = False
 
 
-def subplan_approval_problem(entry: dict, record: SubPlanRecord | None) -> str | None:
-    """Why the user's approval in `entry` does not cover the live `record`, or None when it does."""
+def subplan_approval_problem(entry: dict, record: SubPlanRecord | None, *,
+                             child_way: str | None = None) -> str | None:
+    """Why the user's approval in `entry` does not cover the live `record`, or None when it does.
+    The verbs it names are the root's (`present-plan`, `approve-subplan`); a linked child runs
+    neither, so `child_way` -- what the child does instead -- replaces them."""
     if not entry.get("user_subplan_approval"):
-        return ("the user has not approved a sub-plan for it (present it with present-plan "
-                "--kind subplan --stage <n>, then approve-subplan --by user)")
+        return ("the user has not approved a sub-plan for it ("
+                + (child_way or "present it with present-plan --kind subplan --stage <n>, then "
+                   "approve-subplan --by user") + ")")
     if record is None:
-        return ("the sub-plan the user approved is no longer on record (build it again with "
-                "dispatch --subplan-only or push-subplan, present it, then approve-subplan --by user)")
+        return ("the sub-plan the user approved is no longer on record ("
+                + (child_way or "build it again with dispatch --subplan-only or push-subplan, "
+                   "present it, then approve-subplan --by user") + ")")
     if approval_digest(record) != entry["user_subplan_approval"]:
-        return "the sub-plan changed since the user approved it (approve-subplan --by user again)"
+        return ("the sub-plan changed since the user approved it ("
+                + (child_way or "approve-subplan --by user again") + ")")
     return None
 
 
