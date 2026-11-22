@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import opencode_live
+from conftest import path_with_arc_stub
 from opencode_probe import cli, core, coverage, harness, isolated, negative, paths, record, runner, stub, subject_only, userconfig
 from opencode_probe.mechanisms import c_p1, c_p6, c_p7, c_p13
 
@@ -116,7 +117,8 @@ def test_user_config_untouched(tmp_path, monkeypatch):
     (home / ".config" / "opencode").mkdir(parents=True)
     (home / ".config" / "opencode" / "opencode.json").write_text("{}\n", encoding="utf-8")
     userconfig.write_snapshot(home)
-    run = fake_harness(tmp_path).run(FAKE_SCENARIO, label="writes-home", env={"FAKE_OPENCODE_WRITE_HOME": "1"})
+    run = fake_harness(tmp_path).run(FAKE_SCENARIO, label="writes-home",
+                                     env={"FAKE_OPENCODE_WRITE_HOME": "1", "PATH": path_with_arc_stub()})
     assert run.exists("home/.claude/CLAUDE.md")
     assert not (home / ".claude").exists()
     assert userconfig.compare(home) == 0
@@ -447,7 +449,7 @@ def test_subject_only_set_counts_for_coverage_not_phases(monkeypatch):
 
 def test_isolated_env_unsets_integration_dirs(tmp_path):
     root = isolated.make_root(tmp_path)
-    caller = {"PATH": "/usr/bin", "AGENTCTL_SESSION_ID": "s", "AGENTCTL_PLAN": "p", "CLAUDE_CODE_SESSION_ID": "c",
+    caller = {"PATH": path_with_arc_stub(), "AGENTCTL_SESSION_ID": "s", "AGENTCTL_PLAN": "p", "CLAUDE_CODE_SESSION_ID": "c",
               "OPENCODE_CONFIG_DIR": "/elsewhere", "XDG_CONFIG_HOME": "/elsewhere", "CLAUDE_CONFIG_DIR": "/elsewhere"}
     env = isolated.isolated_env(root, caller)
     assert not [k for k in env if k.startswith("AGENTCTL_") or k == "CLAUDE_CODE_SESSION_ID"]
@@ -459,7 +461,7 @@ def test_p7_leaves_home_stand_ins_unchanged(tmp_path):
     untouched = fake_harness(tmp_path).run(FAKE_SCENARIO, label="plain", stand_ins=True)
     assert untouched.stand_ins_before and untouched.stand_ins_changed() == []
     written = fake_harness(tmp_path).run(FAKE_SCENARIO, label="writes", stand_ins=True,
-                                         env={"FAKE_OPENCODE_WRITE_HOME": "1"})
+                                         env={"FAKE_OPENCODE_WRITE_HOME": "1", "PATH": path_with_arc_stub()})
     assert written.stand_ins_changed() == [".claude/CLAUDE.md"]
 
 

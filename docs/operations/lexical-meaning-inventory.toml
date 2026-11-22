@@ -2444,6 +2444,24 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/lib/agent_report/host_comparison.py::<module>::re.compile"]
+class = "structural"
+ground = "CONFIG_ROW compiles the config.md markdown table-row syntax (| `key` | `value` |) used to read one numeric constant by its key; a fixed format."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/agent_report/host_comparison.py::abandon_window_days::pattern.match"]
+class = "structural"
+ground = "CONFIG_ROW.match reads a config.md table row and the key is then compared for exact equality with the constant's name; table syntax, not meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/record.py::latest_record::re.match"]
+class = "structural"
+ground = "Selects run directories whose name has the fixed UTC timestamp format YYYYMMDDTHHMMSSZ that the probe itself writes; a name format, not a meaning."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/spawn-cursor-escape.py::<module>::re.compile"]
 class = "structural"
 ground = "MARKER_RE compiles the fixed return-marker prefix syntax (RESOLVED:/INVESTIGATION:/LOOP_DETECTED:) and CONFIG_KEY_RE compiles the config.md markdown table-row syntax; both are fixed-format structural patterns."
