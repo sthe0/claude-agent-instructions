@@ -329,8 +329,8 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         # exact; a later change that renders them moves them into `must_appear`.
         (Stage, "place"), (Stage, "binding_conditions"), (Stage, "binding_conditions_stated"),
         (Stage, "declared_size"), (Stage, "size_flags"), (Stage, "expected_minutes"),
-        # excluded: the executor's own sub-plan record, carried in its own plan; the brief is
-        # of the parent's stage, which the executor answers with that record, not receives it.
+        # excluded: the plan's answer to its parent stage, not material for any of this plan's
+        # own stages.
         (PlanMeta, "sub_plan"),
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
         (Subject, "material_refs"), (Subject, "knowledge_refs"),

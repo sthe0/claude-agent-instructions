@@ -737,7 +737,11 @@ def test_the_field_tables_cover_exactly_the_keys_the_plan_schema_reads():
     from agentctl.state import Order
 
     # `s.get("derived")` in plan.py reads a grant-entry table, not a [[stage]] key.
-    stage_keys = _keys_read_by_parse_plan("s") - {"derived"}
+    # `place` is free text but not listed as externalizable: listing it changes the size
+    # lint's field list and the calibrated per-field limit (24 fields instead of 23), a
+    # separate change. A reference standing at `place` still resolves (`_map_node` resolves
+    # a reference at any key outside NON_STRING_FIELDS).
+    stage_keys = _keys_read_by_parse_plan("s") - {"derived", "place"}
     meta_keys = _keys_read_by_parse_plan("m")
     order_keys = {f.name for f in dataclasses.fields(Order)} - {"malformed", "requirements_dropped"}
     for kind, schema in (("stage", stage_keys), ("meta", meta_keys), ("order", order_keys)):

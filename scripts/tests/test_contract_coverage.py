@@ -700,11 +700,13 @@ _CD = ("carry_key", "apply_refined", "diff_plans", "question_key")
 #:    the live stage tracks the plan file once the file is re-read.
 #:  - `principle.*` is read by `StageNorm` and the question key, not by carry_key,
 #:    so `_apply_refined_stage_fields` copies it only because the norm reads it.
-#:  - The stage-description fields (schema 64): `place` is the new-form mark, so every
-#:    function reads it; `binding_conditions`, `binding_conditions_stated`, `declared_size`,
-#:    `size_flags` and `expected_minutes` are copied by `_apply_refined_stage_fields` and
-#:    read by no change-decision function, so an edit to only one of them diffs as
-#:    'no_change' (they ride in the stage-description review contribution, plan.py).
+#:  - The stage-description fields (schema 64). This map is for the stage `_stage()` builds,
+#:    with `place` unset (old form): `place` is the new-form mark and every function reads it;
+#:    `binding_conditions`, `binding_conditions_stated`, `declared_size`, `size_flags` and
+#:    `expected_minutes` are, on such a stage, copied by `_apply_refined_stage_fields` and read
+#:    by no change-decision function. On a stage with a `place` (new form, the only one on
+#:    which they mean anything) `plan.description_place` adds all of them but
+#:    `binding_conditions_stated` to every key: see `_NEW_FORM_DESCRIPTION_FIELD_COVERAGE`.
 _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "title": frozenset(_CD),
     "subject.material": frozenset({"apply_refined", "question_key"}),
@@ -824,6 +826,45 @@ def test_change_decision_coverage_is_pinned_by_mutation(leaf, expected):
         f"{leaf}: mutating it is detected by {sorted(detected)}, but "
         f"_STAGE_LEAF_COVERAGE says {sorted(expected)} — either the coverage map is "
         f"stale or a change-decision function's behavior moved"
+    )
+
+
+#: The stage-description fields on a NEW-FORM stage (a non-empty `place`), which is the only
+#: stage on which they mean anything. `plan.description_place` puts `place`, the binding
+#: conditions, `declared_size`, `size_flags` and `expected_minutes` into `carry_key`,
+#: `question_key` and `diff_plans`, so an edit of any of them is seen by all four functions.
+#: `binding_conditions_stated` is not in that contribution and stays `apply_refined` only.
+_NEW_FORM_DESCRIPTION_FIELD_COVERAGE: dict[str, frozenset[str]] = {
+    "binding_conditions": frozenset(_CD),
+    "binding_conditions_stated": frozenset({"apply_refined"}),
+    "declared_size": frozenset(_CD),
+    "size_flags": frozenset(_CD),
+    "expected_minutes": frozenset(_CD),
+}
+
+
+@pytest.mark.parametrize("leaf,expected", sorted(_NEW_FORM_DESCRIPTION_FIELD_COVERAGE.items()))
+def test_change_decision_coverage_of_a_new_form_stage_is_pinned_by_mutation(leaf, expected):
+    old_stage = _stage(place="the stage's place")
+    new_stage = _stage(place="the stage's place")
+    _set(new_stage, leaf, _mutate(_get(old_stage, leaf)))
+    assert _get(old_stage, leaf) != _get(new_stage, leaf), "mutation was a no-op"
+
+    detected = set()
+    if stage_carry_key(old_stage) != stage_carry_key(new_stage):
+        detected.add("carry_key")
+    cur = copy.deepcopy(old_stage)
+    _apply_refined_stage_fields(cur, new_stage)
+    if _get(cur, leaf) != _get(old_stage, leaf):
+        detected.add("apply_refined")
+    if diff_plans(_doc(old_stage), _doc(new_stage)) != "no_change":
+        detected.add("diff_plans")
+    if stage_question_key(old_stage) != stage_question_key(new_stage):
+        detected.add("question_key")
+
+    assert detected == expected, (
+        f"{leaf} on a new-form stage: mutating it is detected by {sorted(detected)}, but "
+        f"_NEW_FORM_DESCRIPTION_FIELD_COVERAGE says {sorted(expected)}"
     )
 
 
