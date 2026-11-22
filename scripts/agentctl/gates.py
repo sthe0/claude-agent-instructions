@@ -3513,8 +3513,12 @@ CHILD_REPORTS_THE_REQUEST = ("report the request to your parent (a `PERMISSION-R
                              "naming it), who obtains the user's approval")
 
 #: A `PERMISSION-REQUEST:` return ends in `resolve-permission`, which writes a grant and never the
-#: user's approval of a sub-plan; the return the parent's dispatch routes to the sub-plan's
-#: presentation and approval is `PLAN-READY:`.
+#: user's approval of a sub-plan, so it is not the report for one. The parent's dispatch answers a
+#: child's `PLAN-READY:` with the generic `await_plan_approval` directive, which names no sub-plan
+#: verb; only a `--subplan-only` dispatch with a sub-plan on record reaches
+#: `await_subplan_approval`. The root session itself has to choose `present-plan --kind subplan`
+#: and `approve-subplan` and dispatch the stage again, and the fresh child's own record
+#: (`sub_plan.record_carried_by`, read by `child_approval_blockers`) has to carry the approved digest.
 CHILD_REPORTS_THE_SUBPLAN = ("report it to your parent (a `PLAN-READY:` marker naming the stage), "
                              "who has the sub-plan presented to the user for approval")
 
