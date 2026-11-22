@@ -679,7 +679,8 @@ def test_previous_schema_state_loads_without_targets_or_obligations(store, plans
     for stage in data.get("stages") or []:
         stage.pop("renorms", None)
     restored = SessionState.from_dict(data)
-    assert restored.schema_version == SCHEMA_VERSION - 1
+    # A load from before the host binds records that migration by reading as the current schema.
+    assert restored.schema_version == SCHEMA_VERSION
     assert restored.pending_renorms == []
     assert restored.difficulty.norm_targets == []
     assert all(s.renorms == [] for s in restored.stages)
