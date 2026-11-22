@@ -25,9 +25,11 @@ Coordinate every substantive task yourself; a spawned specialist is a depth n+1 
 |---|---|---|
 | **Chat** | Bare "ok"/"thanks", clarification question, opinion, ≤ 3-sentence factual answer with no file changes | Answer directly; no plan, no specialization read, no memory record |
 | **Small change** | No choice, no risk: one obvious solution, reversible, no irreversible effect, no public-contract change, no new dependency; one cohesive change of ≤ `small-change-max-lines` hand-written production lines ([inline-class.md](../../memory-global/leaves/inline-class.md)) | Do it yourself; optionally consult a specialization SKILL.md inline; no plan-approval gate |
-| **Substantive** | Anything not covered above | Full coordination via `agentctl` (classify → TOML plan → plan-review → present/approve → execute → verify-final); markdown hand-walk only if engine unavailable |
+| **Substantive** | Anything not covered above | Full coordination via `agentctl` (classify → order-agree → TOML plan → plan-review → present/approve → execute → verify-final); markdown hand-walk only if engine unavailable |
 
 When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).
+
+**An external or irreversible effect makes the task Substantive** even when the delivery is commands or config for the user to run — classify by the effect. The exception is a payload the user approved verbatim (`classify --payload-approved`; that approval is the gate).
 
 **Establish the result image before acting — in plain dialogue too, not only under a plan.** The moment a message reads as a *task* (anything past the Chat row), pin down the result image as a **verification method** (the observation that would show it's done) and surface the difficulties you foresee, before acting or answering. If you cannot yet state how you'd check success, clarify with the user — don't guess the scope. Class-independent: the spine enforces it for Substantive work; Small-change and free-dialogue tasks get no engine gate, so the discipline is yours.
 
@@ -36,7 +38,7 @@ Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tier
 ### On a substantive task
 
 1. Restate the goal and a **done criterion** — *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
-2. Drive with **`agentctl`**: `classify` → TOML plan under `~/.claude-agent/plans/` → `plan-review` (tier-aware: the change tier decides which review a replan owes; inline `thinker` cognition; record via `agentctl plan-review` when using the engine) → present/approve → execute stages → `verify-final`. Commands: `python3 ~/claude-agent-instructions/scripts/agentctl-cli.py <cmd>`. Live state: `agentctl status`. Apply specialization principles in-thread at each leaf.
+2. Drive with **`agentctl`**: `classify` → the user agrees the order (`order-agree` on their marked answer) **before any stage is written** → TOML plan under `~/.claude-agent/plans/` → `plan-review` (tier-aware: the change tier decides which review a replan owes; inline `thinker` cognition; record via `agentctl plan-review` when using the engine) → present/approve → execute stages → `verify-final`. Commands: `python3 ~/claude-agent-instructions/scripts/agentctl-cli.py <cmd>`. Live state: `agentctl status`. Apply specialization principles in-thread at each leaf.
 3. **Plan approval is a hard gate** before any production Edit — never skip it; the user approves a new order's first plan, later plans of it may be self-approved (see § Acting without asking).
 4. Markdown hand-walk is **only** the fallback when `agentctl` is unavailable (`memory-global/leaves/spine-fallback.md`) — do not treat this thin mirror as license to skip the engine when it runs.
 
