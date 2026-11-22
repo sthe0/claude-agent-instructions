@@ -668,6 +668,41 @@ def log_cost_entry(entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def session_total_already_logged(child_session_id: "str | None", cost_log: "Path | None" = None) -> float:
+    """The running total the cost log already holds for one child session, 0.0 when none.
+
+    A resumed `claude -p` reports the running total of its whole session, not what the one
+    run spent, so a dispatch's own spend is that total minus this figure. A row written
+    before the log carried `session_total_usd` holds the reported total in `cost_usd`
+    (or, when the dispatch resumed for a marker, in `resume.cost_usd`).
+    """
+    if not child_session_id:
+        return 0.0
+    path = cost_log or COST_LOG
+    total, explicit = 0.0, None
+    try:
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                if child_session_id not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("child_session_id") != child_session_id:
+                    continue
+                if isinstance(row.get("session_total_usd"), (int, float)):
+                    explicit = float(row["session_total_usd"])
+                    continue
+                resume = row.get("resume") if isinstance(row.get("resume"), dict) else {}
+                for value in (row.get("cost_usd"), resume.get("cost_usd")):
+                    if isinstance(value, (int, float)):
+                        total = max(total, float(value))
+    except OSError:
+        return 0.0
+    return explicit if explicit is not None else total
+
+
 EXIT_NORM_LOOP = 3
 # 4 is also "claude not on PATH"; the engine tells the two apart by the
 # `Refusal: grant-widening` line on stdout.
@@ -3867,6 +3902,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         forwarded = _child_outcome_envelope(child_outcome, child_matched, result_text, completed.stderr)
 
     resume: "ResumeOutcome | None" = None
+    resume_spent_usd = 0.0
     resumed_marker: "str | None" = None
     resume_session = resumable_session(payload)
     if recovery and parsed_marker is None and child_outcome == CHILD_ANSWERED and resume_session:
@@ -3880,8 +3916,14 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
                 result_text, extraction = resume.result_text, resume_extraction
                 forwarded, ok, parsed_marker = r_forwarded, r_ok, resumed_marker
         if resume.cost_usd is not None:
-            # The ledger's cost_usd is what the dispatch spent, the resume included.
-            cost_usd = (cost_usd or 0.0) + resume.cost_usd
+            # The resumed run reports the session's running total, the first run included.
+            resume_spent_usd = max(0.0, resume.cost_usd - (cost_usd or 0.0))
+            cost_usd = max(cost_usd or 0.0, resume.cost_usd)
+    # What the child reported is its session's running total; the ledger's cost_usd is
+    # what this dispatch spent, the resume included.
+    session_total_usd = cost_usd
+    if cost_usd is not None:
+        cost_usd = max(0.0, cost_usd - session_total_already_logged(child_session_id))
     if usage_limit_hit or resume is not None:
         fix_firings.append(
             "A", "firing", "usage_limit" if usage_limit_hit else "resume",
@@ -3895,7 +3937,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             session=args.session or os.environ.get(OWN_SESSION_ENV),
             stage=args.stage_index,
             minutes=(resume.duration_ms / 60000) if resume is not None else 0.0,
-            cost_usd=(resume.cost_usd or 0.0) if resume is not None else 0.0,
+            cost_usd=resume_spent_usd,
         )
 
     routed_marker, _ = parse_marker(forwarded)
@@ -3928,6 +3970,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         "effort": args.effort,
         "depth": depth_next,
         "cost_usd": cost_usd,
+        "session_total_usd": session_total_usd,
         "duration_ms": duration_ms,
         "return_marker": routed_marker,
         "return_marker_source": marker_source,
@@ -3945,7 +3988,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         "review_pair": topo_pair,
         "plan_sha256": topo_plan_sha256,
         **({"resume": {
-            "cost_usd": resume.cost_usd, "duration_ms": resume.duration_ms,
+            "cost_usd": resume_spent_usd if resume.cost_usd is not None else None,
+            "duration_ms": resume.duration_ms,
             "exit_code": resume.returncode, "marker": parsed_marker if ok else None,
         }} if resume is not None else {}),
         **spawner_stamp,

@@ -363,6 +363,46 @@ CATALOGUE: "dict[str, Mutant]" = {
         "manual = dry_run or force_run or only is not None",
         _ids(T_PRESSURE, "test_a_pressure_pass_writes_no_throttle_stamp"),
     ),
+    "last-resort-runs-first": Mutant(
+        RUNNER,
+        "last = frozenset(r.name for r in reapers if r.name in due and _last_resort(r))",
+        "last = frozenset()",
+        _ids(T_PRESSURE, "test_a_last_resort_reaper_runs_after_the_ordinary_ones",
+             "test_a_last_resort_reaper_is_skipped_when_the_others_freed_enough"),
+    ),
+    "last-resort-no-remeasure": Mutant(
+        RUNNER,
+        'run_last = frozenset(name for name in last if name in after and after[name].status == "due")',
+        "run_last = last",
+        _ids(T_PRESSURE, "test_a_last_resort_reaper_is_skipped_when_the_others_freed_enough"),
+    ),
+    "last-resort-skip-unrecorded": Mutant(
+        RUNNER,
+        'record["last_resort_skipped"] = sorted(skipped)',
+        'record["last_resort_skipped"] = []',
+        _ids(T_PRESSURE, "test_a_skipped_last_resort_is_recorded_with_the_free_space_after_the_others"),
+    ),
+    "last-resort-skip-stamps": Mutant(
+        RUNNER, "for name in due - skipped:", "for name in due:",
+        _ids(T_PRESSURE, "test_a_skipped_last_resort_gets_no_cooldown_stamp"),
+    ),
+    "last-resort-never-runs": Mutant(
+        RUNNER, "        if run_last:\n", "        if False:\n",
+        _ids(T_PRESSURE, "test_a_last_resort_reaper_runs_when_free_space_is_still_short",
+             "test_a_last_resort_reaper_alone_runs_without_a_second_reading"),
+    ),
+    "last-resort-dryrun-no-order": Mutant(
+        RUNNER,
+        'print(f"order: {name} (last resort: only if free space is still below {threshold:.1f}% after the others)", file=out)',
+        "pass",
+        _ids(T_PRESSURE, "test_dry_run_prints_the_run_order_with_the_last_resort_marked_conditional"),
+    ),
+    "last-resort-scheduled-honours-flag": Mutant(
+        RUNNER,
+        "and _throttle_elapsed(r, stamps, now)\n",
+        "and _throttle_elapsed(r, stamps, now) and not _last_resort(r)\n",
+        _ids(T_PRESSURE, "test_a_scheduled_pass_runs_a_last_resort_reaper_like_any_other"),
+    ),
     "pressure-disarm-on-bad-row": Mutant(
         RUNNER, "return value if 0.0 < value < 100.0 else None", "return value",
         _ids(T_PRESSURE, "test_a_row_that_is_missing_or_not_a_percentage_disarms",
@@ -854,7 +894,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_RUNNER, "test_only_under_pressure_runs_only_that_reaper"),
     ),
     "runner-pressure-force-writes-stamp": Mutant(
-        RUNNER, "    if not force:\n        for name in due:", "    if True:\n        for name in due:",
+        RUNNER, "    if not force:\n        for name in due - skipped:", "    if True:\n        for name in due - skipped:",
         _ids(
             T_RUNNER,
             "test_force_run_under_pressure_ignores_the_cooldown_and_writes_no_stamp",

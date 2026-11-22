@@ -513,6 +513,11 @@ def test_two_tasks_of_one_session_each_count_their_difficulty():
     assert masses(run("--threshold", "1")[1]) == {"plan_approval": 4}
 
 
+def test_in_process_tests_run_with_a_long_store_deadline():
+    # Under load the production 0.25 s deadline made store.origin_id() return None here.
+    assert store.DEADLINE_S == 30.0
+
+
 def test_band_mass_reads_the_severity_table():
     severity = substrate.load_severity()
     members = tables.load("severity").members
