@@ -3493,7 +3493,7 @@ def decided_later_dispatch_blockers(state: SessionState, stage, record, *,
     if stage.place is None or not sub_plan.is_decided_later(stage):
         return []
     problem = sub_plan.subplan_approval_problem(
-        entry, record, child_way=CHILD_REPORTS_THE_REQUEST if state.parent_link else None)
+        entry, record, child_way=CHILD_OWN_SUBPLAN_HAS_NO_WAY if state.parent_link else None)
     if problem is None:
         return []
     return [f"stage {stage.index} is decided later and cannot start: {problem}"]
@@ -3511,6 +3511,18 @@ def user_plan_approval_way(state: SessionState) -> str:
 #: channel (`agentctl-own.py`) runs neither `approve --by user` nor `approve-resources`.
 CHILD_REPORTS_THE_REQUEST = ("report the request to your parent (a `PERMISSION-REQUEST:` marker "
                              "naming it), who obtains the user's approval")
+
+#: A `PERMISSION-REQUEST:` return ends in `resolve-permission`, which writes a grant and never the
+#: user's approval of a sub-plan; the return the parent's dispatch routes to the sub-plan's
+#: presentation and approval is `PLAN-READY:`.
+CHILD_REPORTS_THE_SUBPLAN = ("report it to your parent (a `PLAN-READY:` marker naming the stage), "
+                             "who has the sub-plan presented to the user for approval")
+
+#: The sub-plan of a stage of a child's own plan has no approval path yet: `approve-subplan` is
+#: refused to a linked child and no other verb of the user carries it.
+CHILD_OWN_SUBPLAN_HAS_NO_WAY = ("no verb yet lets the user approve the sub-plan of a stage of your "
+                                "own plan: report the stage to your parent (an `ESCALATE:` marker) "
+                                "and do not start it")
 
 
 def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
@@ -3572,12 +3584,12 @@ def recorded_pass_blockers(state: SessionState, stage, *, store=None) -> list[st
     if stage.place is None:
         return []
     if sub_plan.approval_entry(state, stage.index).get("planning"):
-        on = (f"{CHILD_REPORTS_THE_REQUEST}, then dispatch the stage itself" if state.parent_link
-              else f"present its sub-plan (present-plan --kind subplan --stage {stage.index}), "
+        on = (f"; {CHILD_OWN_SUBPLAN_HAS_NO_WAY}" if state.parent_link
+              else f", or present its sub-plan (present-plan --kind subplan --stage {stage.index}), "
                    f"have the user `approve-subplan`, and dispatch the stage itself")
         return [f"stage {stage.index} was dispatched only to plan it (dispatch --subplan-only): its "
                 f"work has not been done and cannot be recorded as passed. Plan it again with "
-                f"`dispatch --subplan-only`, or {on}"]
+                f"`dispatch --subplan-only`{on}"]
     return stage_start_blockers(state, stage, store=store)
 
 
@@ -3606,7 +3618,7 @@ def child_approval_blockers(child: SessionState, parent: SessionState | None) ->
         return []
     raw = child.sub_plan_records.get(sub_plan.record_key(index))
     record = sub_plan.SubPlanRecord.from_dict(raw) if raw else None
-    problem = sub_plan.subplan_approval_problem(entry, record, child_way=CHILD_REPORTS_THE_REQUEST)
+    problem = sub_plan.subplan_approval_problem(entry, record, child_way=CHILD_REPORTS_THE_SUBPLAN)
     return [f"stage {index} is decided later and its sub-plan cannot be approved by the child: "
             f"{problem}"] if problem else []
 

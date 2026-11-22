@@ -1984,6 +1984,7 @@ def test_a_stage_outside_a_childs_parent_set_is_not_approved_by_the_agent(store)
 
 REPORT_TO_PARENT = "report the request to your parent"
 THE_USERS_VERBS = ("approve --by user", "approve-resources")
+NO_WAY_FOR_OWN_SUBPLAN = "no verb yet lets the user approve the sub-plan of a stage of your own plan"
 OUTSIDE_RULE = "Bash(make deploy:*)"
 
 
@@ -2208,9 +2209,12 @@ def test_a_child_at_executing_follows_the_refusal_to_a_start_after_the_users_gra
 
 def test_a_linked_child_is_never_sent_to_a_verb_of_the_user_or_the_root(contour):
     """`present-plan`, `approve-subplan`, `approve-resources` and `approve --by user` are run in
-    the session that presented the plan: a linked child's channel refuses each. Every refusal or
-    way on a child can meet, for a sub-plan the user has to approve and for a request outside
-    its bound, names the report to the parent instead."""
+    the session that presented the plan: a linked child's channel refuses each. A refusal about
+    a sub-plan the user must approve names the return the parent's engine routes to the
+    sub-plan's presentation (`PLAN-READY:`), never the permission one, whose end is a grant
+    (`resolve-permission`); for a stage of the child's own plan, where no verb lets the user
+    approve the sub-plan yet, it promises no way on and says so; a request outside the bound
+    keeps the permission report."""
     _contour_under(contour, "above-the-line")
     for argv in (["approve", "--by", "agent"], ["partition"], ["next-stage"]):
         assert contour.own(*argv)[0] == 0
@@ -2218,22 +2222,30 @@ def test_a_linked_child_is_never_sent_to_a_verb_of_the_user_or_the_root(contour)
     child.stage(1).lazy, child.stage(1).actor.executor = True, "spawn:developer"
     sub_plan.store(child, _rec(1), level=0)
     contour.store.save(child)
-    texts = {"start guard": _childs_start_refusal(contour)}
+    start = _childs_start_refusal(contour)
+    assert REPORT_TO_PARENT in start and "PERMISSION-REQUEST:" in start, start
+    child = contour.child_state()
+    record = sub_plan.read(child, 1, contour.store)
+    dead_ends = {"start guard": " ".join(
+        gates.decided_later_dispatch_blockers(child, child.stage(1), record))}
     code, body, err = contour.own("approve-stage-resources", "--stage", "1")
-    texts["approve-stage-resources"] = json.dumps(body) + err
+    dead_ends["approve-stage-resources"] = json.dumps(body) + err
     planned = _dispatch(contour.store, CHILD, Spawns(), subplan_only=True)
     assert planned.action == "await_subplan_approval", planned
-    texts["planning dispatch"] = planned.detail
+    dead_ends["planning dispatch"] = planned.detail
     child = contour.child_state()
-    texts["record-result"] = " ".join(
+    dead_ends["record-result"] = " ".join(
         gates.recorded_pass_blockers(child, child.stage(1), store=contour.store))
     parent = contour.store.load(PARENT)
     parent.stage(1).lazy = True
-    texts["child approve"] = " ".join(gates.child_approval_blockers(child, parent))
-    for name, text in texts.items():
-        assert REPORT_TO_PARENT in text, (name, text)
-        assert not any(verb in text for verb in (*THE_USERS_VERBS, "approve-subplan", "present-plan")), (
-            name, text)
+    way = " ".join(gates.child_approval_blockers(child, parent))
+    for name, text in dead_ends.items():
+        assert NO_WAY_FOR_OWN_SUBPLAN in text and "`ESCALATE:`" in text, (name, text)
+        assert not any(wrong in text for wrong in (
+            *THE_USERS_VERBS, "approve-subplan", "present-plan", "PERMISSION-REQUEST:",
+            "PLAN-READY:", "then dispatch the stage")), (name, text)
+    assert "`PLAN-READY:`" in way and "PERMISSION-REQUEST" not in way, way
+    assert not any(wrong in way for wrong in (*THE_USERS_VERBS, "approve-subplan", "present-plan")), way
     assert "approve-subplan" in sub_plan.subplan_approval_problem({}, None)
 
 

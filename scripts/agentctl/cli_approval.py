@@ -1137,7 +1137,8 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
                              f"stage {stage.index}: the user's approval does not cover the live "
                              f"resource request (approve-subplan --by user on the changed sub-plan)")
         problem = sub_plan.subplan_approval_problem(
-            entry, record, child_way=gates.CHILD_REPORTS_THE_REQUEST if state.parent_link else None)
+            entry, record,
+            child_way=gates.CHILD_OWN_SUBPLAN_HAS_NO_WAY if state.parent_link else None)
         if problem:
             return Directive(False, state.node, "await_user_approval",
                              f"stage {stage.index} is decided later and {problem}")

@@ -1661,14 +1661,14 @@ def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
         store.save(state)
         recorded = _planning_record_exists(state, store, stage.index)
         if marker in ("COMPLETED", "PLAN-READY") and recorded:
-            on = (f"{gates.CHILD_REPORTS_THE_REQUEST}, then dispatch the stage itself"
-                  if state.parent_link else
-                  f"present the sub-plan (present-plan --kind subplan --stage {stage.index}), wait "
-                  f"for the user's approve-subplan, then dispatch the stage itself")
+            on = (gates.CHILD_OWN_SUBPLAN_HAS_NO_WAY if state.parent_link else
+                  f"for the user's approval, present the sub-plan (present-plan --kind subplan "
+                  f"--stage {stage.index}), wait for the user's approve-subplan, then dispatch the "
+                  f"stage itself")
             return Directive(
                 True, state.node, "await_subplan_approval",
                 f"stage {stage.index}'s planning child returned {marker}: its sub-plan is on record, "
-                f"the stage is not done and its result is not recorded. For the user's approval: {on}",
+                f"the stage is not done and its result is not recorded: {on}",
                 marker=marker, data={**base, "planning_dispatch": True})
         return Directive(
             True, state.node, "plan_again",
