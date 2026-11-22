@@ -350,6 +350,26 @@ def _harness_version(session: str) -> "str | None":
     return None
 
 
+def _session_host(session: str) -> "str | None":
+    """The one runtime host the engine bound the session's root sessions to; None when the
+    session has no engine state, never bound one, predates the stamps (a null `host_binds`
+    entry) or ran on more than one host. A pre-stamp session stays NULL, as it reads unknown on
+    the quality-row side. A current-schema session bound without a root session id has no binds
+    either: the host-comparison report then groups its task by the stamps of its rows, which a
+    sessions row does not have, so telemetry keeps NULL (unknown) rather than guess a host."""
+    path = config_root.resolve_agentctl_state_file(session)
+    if path is None:
+        return None
+    try:
+        binds = json.loads(path.read_text(encoding="utf-8")).get("host_binds")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(binds, list) or not binds:
+        return None
+    hosts = {b.get("host") if isinstance(b, dict) else None for b in binds}
+    return next(iter(hosts)) if len(hosts) == 1 and None not in hosts else None
+
+
 def subagent_contours(session: str) -> "list[str]":
     ids = []
     for root in config_root.projects_roots():
@@ -599,6 +619,7 @@ def materialize(sessions: "list[str]") -> dict:
         conn.close()
     head, dirty = _canon_state() if needing_head else (None, None)
     versions = {s: _harness_version(s) for s in needing_head} if head else {}
+    hosts = {s: _session_host(s) for s in targets}
     extras = {s: (subagent_contours(s), _artifact_texts(s)) for s in targets}
 
     def advance(conn):
@@ -618,6 +639,9 @@ def materialize(sessions: "list[str]") -> dict:
     def file_session(conn, session):
         subagents, artifacts = extras[session]
         _materialize_session(conn, origin, session, subagents, artifacts)
+        if hosts.get(session):
+            conn.execute("UPDATE sessions SET host = COALESCE(host, ?) WHERE session_id = ?",
+                         (hosts[session], session))
         if head:
             conn.execute(
                 "UPDATE sessions SET core_head = ?, dirty = ?, harness_version = COALESCE(harness_version, ?) "

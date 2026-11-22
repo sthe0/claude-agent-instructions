@@ -670,6 +670,7 @@ _STAGE_RESIDUAL_COVERAGE = {
     "outcome.cost_usd": "outside: the mutable execution RECORD, same reason",
     "outcome.duration_ms": "outside: the mutable execution RECORD, same reason",
     "outcome.spawn_count": "outside: the mutable execution RECORD, same reason",
+    "outcome.unpriced_spawns": "outside: the mutable execution RECORD, same reason",
     "outcome.delivered_head": "outside: the mutable execution RECORD, same reason",
     "outcome.delivered_base": "outside: the mutable execution RECORD, same reason",
     "outcome.landed_head": "outside: the mutable execution RECORD, same reason",

@@ -26,6 +26,7 @@
 # --- exempt-maintenance: edit tracked files, run by a maintainer in a worktree ---
 "scripts/verify-judge-prose-numbers.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
 "scripts/verify-config-root-refs.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
+"scripts/opencode_probe/record.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "writes record.json under the probe state dir; pin --record rewrites the tracked pin.toml, a deliberate maintainer action reviewed in the diff" }
 "scripts/memory-leaf-size-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-leaf-size-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 "scripts/inline-size-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/inline-size-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 "scripts/review-cost-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/review-cost-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
@@ -39,6 +40,14 @@
 "scripts/hook-resource-grant-check.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only decision-log rows under the agentctl state dir (resource-uses); the git and file-write verbs in its text are patterns it recognises, never commands it runs" }
 "scripts/measure-branch-refresh.py" = { disposition = "not-canon", category = "not-canon", reason = "--check-trailers builds and commits in a temporary repository it creates and removes; every other mode only reads history and transcripts" }
 "scripts/code_effects_live_probe.py" = { disposition = "not-canon", category = "not-canon", reason = "runs in a temporary directory it creates and removes; writes nothing in the repo" }
+"scripts/opencode_probe/harness.py" = { disposition = "not-canon", category = "not-canon", reason = "writes run scenarios, plugin and config files and event logs only under the isolated run root and the event directory its caller names, both under the probe state dir; no tracked file" }
+"scripts/opencode_probe/isolated.py" = { disposition = "not-canon", category = "not-canon", reason = "creates the isolated run root under the probe state dir and fills it with copies of the agent home files; no tracked file" }
+"scripts/opencode_probe/runner.py" = { disposition = "not-canon", category = "not-canon", reason = "creates the per-case event log files in the record directory under the probe state dir; no tracked file" }
+"scripts/opencode_probe/stub.py" = { disposition = "not-canon", category = "not-canon", reason = "appends the request log beside the scenario file it is given, under the isolated run root; no tracked file" }
+"scripts/opencode_probe/userconfig.py" = { disposition = "not-canon", category = "not-canon", reason = "writes the user-config snapshot under the probe state dir; the user's own OpenCode files are only read" }
+"scripts/opencode_probe/assets/mcp_server.py" = { disposition = "not-canon", category = "not-canon", reason = "a stand-in MCP server that writes a marker file to the path argv[1] names, a path the probe puts under the isolated run root; no tracked file" }
+"scripts/opencode_probe/mechanisms/c_p11.py" = { disposition = "not-canon", category = "not-canon", reason = "copies the fake binary and writes a wrapper script into a directory under the record directory in the probe state dir; no tracked file" }
+"scripts/opencode_probe/paths.py" = { disposition = "not-canon", category = "not-canon", reason = "holds the scripted tool calls whose marker files (touch) the probe asks OpenCode to write under the isolated run root; the module itself writes no tracked file" }
 
 # --- exempt-landing: the sync / landing path itself ---
 "scripts/land-branch.py" = { disposition = "exempt", category = "exempt-landing", reason = "advances main from a branch; the route calls it, so it cannot be routed through itself" }

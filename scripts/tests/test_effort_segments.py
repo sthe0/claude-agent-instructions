@@ -18,7 +18,7 @@ import pytest
 from agentctl import cli, cost, effort, order_approvals as oa
 from agentctl import effort_segments as seg
 from agentctl.plan import load_plan, order_digest
-from agentctl.state import GateRecord, Node, SessionState, StageStatus
+from agentctl.state import HOST_BINDS_SCHEMA, GateRecord, Node, SessionState, StageStatus
 from agentctl.store import FileStateStore
 from ast_purity import impure_names
 from conftest import STAGE_OBSERVATIONS, SUBSTANTIVE_ORDER, declare_venue
@@ -818,7 +818,7 @@ def test_each_current_stage_writer_refuses_a_second_current_stage(eng):
 # --- schema 62 --------------------------------------------------------------------------
 
 
-def test_schema_61_state_loads_under_schema_62(eng):
+def test_a_v61_state_loads_at_the_current_schema_and_keeps_its_effort_actuals(eng):
     plan = eng.write(with_order())
     eng.open("s", plan)
     state = eng.state("s")
@@ -826,7 +826,7 @@ def test_schema_61_state_loads_under_schema_62(eng):
     eng.store.save(state)
     eng.to_v61("s")
     loaded = eng.state("s")
-    assert loaded.schema_version == 61
+    assert loaded.schema_version == HOST_BINDS_SCHEMA
     assert loaded.effort_actuals == {"spend_usd": 1.0, "active_minutes": 2.0}
     assert loaded.effort_migrated["armed"] is False
 

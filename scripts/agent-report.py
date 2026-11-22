@@ -12,6 +12,8 @@ Views:
   hooks           decisions (deny / nudge / silent) per hook and engine gate
   time-profile    where session wall-clock goes: decayed mean ± SE per mechanism,
                   [--format text|json] [--half-life D] [--by-sha] [--check]
+  host-comparison resolved-task and spawn figures per coordination host and weight
+                  class [--json] [--since D]
   core-version    per Core HEAD x weight class from the telemetry record: convergence,
                   reliability, resources, causes, mechanisms, losses
                   [--format text|json] [--task T] [--check] [--check-self-cost]

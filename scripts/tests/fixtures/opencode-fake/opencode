@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""A stand-in for the opencode binary used by the probe suite's own tests and by case P11.
+
+``--version`` prints ``opencode v$FAKE_OPENCODE_VERSION`` (default 2.3.2). ``run`` appends a line to
+``$FAKE_OPENCODE_MARKER`` when set, writes a CLAUDE.md into the home's ``.claude`` directory when
+``FAKE_OPENCODE_WRITE_HOME`` is set, and prints one JSON ``text`` event and a ``step_finish`` event, the shape of the real
+``run --format json`` stream.
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+version = os.environ.get("FAKE_OPENCODE_VERSION", "2.3.2")
+args = sys.argv[1:]
+if "--version" in args:
+    print(f"opencode v{version}")
+    sys.exit(0)
+if args and args[0] == "run":
+    marker = os.environ.get("FAKE_OPENCODE_MARKER")
+    if marker:
+        with open(marker, "a", encoding="utf-8") as handle:
+            handle.write("run\n")
+    if os.environ.get("FAKE_OPENCODE_WRITE_HOME"):
+        target = Path(os.environ["HOME"]) / ".claude" / "CLAUDE.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("written by the fake binary\n", encoding="utf-8")
+    print(json.dumps({"type": "text", "sessionID": "ses_fake", "part": {"text": "fake"}}))
+    print(json.dumps({"type": "step_finish", "sessionID": "ses_fake", "part": {"tokens": {"input": 0, "output": 0}}}))
+    sys.exit(0)
+print("fake opencode: unsupported arguments", file=sys.stderr)
+sys.exit(64)

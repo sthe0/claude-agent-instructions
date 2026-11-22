@@ -756,6 +756,7 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "outcome.cost_usd": frozenset(),
     "outcome.duration_ms": frozenset(),
     "outcome.spawn_count": frozenset(),
+    "outcome.unpriced_spawns": frozenset(),
     "outcome.delivered_head": frozenset(),
     "outcome.delivered_base": frozenset(),
     "outcome.landed_head": frozenset(),

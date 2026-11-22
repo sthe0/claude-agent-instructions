@@ -990,6 +990,10 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "SKIPPED stage, and a changed one is left PENDING with `declined` set so only the "
         "customer's approve can re-offer it"
     ),
+    ("agentctl/cli_replan.py", "_reattest_prior_outcome"): (
+        "guarded: copies the status of a stage the caller already found PASSED (the stash "
+        "holds PASSED prior outcomes only), so no SKIPPED stage reaches the write"
+    ),
     ("agentctl/plan.py", "parse_plan"): (
         "n/a: constructs every stage PENDING at load; SKIPPED exists only in session state"
     ),

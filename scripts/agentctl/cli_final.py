@@ -44,7 +44,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from lib import ask_evidence, transcript_turns
+from lib import ask_evidence, host_stamp, transcript_turns
 from .cli_common import (
     REPO_ROOT,
     _VALID_QUALITY_RATINGS,
@@ -167,6 +167,21 @@ def _instructions_head() -> str | None:
     if proc.returncode != 0:
         return None
     return proc.stdout.strip() or None
+
+
+def _host_stamp_fields(state) -> dict:
+    """The host stamp of a quality row. ``hosts`` is the host of each root session that bound
+    the task, in order; a stretch bound before stamps existed stays null."""
+    binds = [b for b in state.host_binds if isinstance(b, dict)]
+    root = next((b["root_session_id"] for b in reversed(binds) if b.get("root_session_id")), None)
+    fields = host_stamp.stamp(
+        state.runtime_host,
+        state.harness_version or host_stamp.version_from_transcript(state.session_id),
+        host_stamp.models_from_transcript(*(b.get("root_session_id") for b in binds), state.session_id),
+        root,
+    )
+    fields["hosts"] = [b.get("host") for b in binds]
+    return fields
 
 
 def _write_quality_row(row: dict) -> None:
@@ -850,6 +865,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             "total_duration_ms": rollup.total_duration_ms,
             "spawn_count": rollup.spawn_count,
             "attributed_stages": rollup.attributed_stages,
+            "unpriced_spawns": rollup.unpriced_spawns,
             "note": rollup.note,
         },
         "resolution_ask_marker": RESOLUTION_ASK_MARKER,
@@ -924,6 +940,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             "total_duration_ms": state.cost.total_duration_ms,
             "spawn_count": state.cost.spawn_count,
             "attributed_stages": state.cost.attributed_stages,
+            "unpriced_spawns": state.cost.unpriced_spawns,
             "note": state.cost.note,
         }
         state.log("cost", **{k: v for k, v in cost_surface.items() if k != "note"})
@@ -988,6 +1005,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         ),
         "n_renormalize_replans": sum(1 for h in state.history if h.get("event") == "renormalize"),
         "spawn_count": cost_surface.get("spawn_count", 0),
+        "attributed_stages": cost_surface.get("attributed_stages"),
+        "unpriced_spawns": cost_surface.get("unpriced_spawns", 0),
         "total_cost_usd": cost_surface.get("total_cost_usd"),
         "weight_class": state.weight_class,
         "deliverable_kind": state.deliverable_kind or None,
@@ -1013,6 +1032,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "landing_gate_override": landing["override"],
         "resolution_ask_gate_override": resolution_ask["override"],
         "resolution_ask_unverifiable": resolution_ask["unverifiable"],
+        "n_review_rounds": max(state.plan_review_rounds, state.review_rounds),
+        **_host_stamp_fields(state),
     }
     _write_quality_row(quality_row)
     # Whether to stamp is fully decidable from observed state (resolved + a known

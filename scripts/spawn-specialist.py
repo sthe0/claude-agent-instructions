@@ -75,6 +75,7 @@ from agentctl.render import (  # build_site_prompt is the one place a spawn's pl
 from lib import hook_wiring  # the managed-settings path, one definition
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
+from lib import engine_session_binding, host_stamp  # host stamp of a cost row
 from lib import fix_firings  # firing log of flagged fixes (child-noanswer-recovery writes fix A rows)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
@@ -137,9 +138,52 @@ def _spawn_tags() -> dict:
 
 
 def _spawner_session_field(session: str | None) -> dict:
-    """The engine session this spawn was made on behalf of: --session, else the spawner's own contour."""
-    spawner = session or os.environ.get(OWN_SESSION_ENV)
-    return {"spawner_session": spawner} if spawner else {}
+    """The engine session this spawn was made on behalf of: --session, else the spawner's own
+    contour, else the engine session the harness conversation last drove."""
+    spawner = session or os.environ.get(OWN_SESSION_ENV) or host_stamp.task_key()
+    if not spawner:
+        return {}
+    task_id = host_stamp.current_task_id(spawner)
+    return {"spawner_session": spawner, **({"task_id": task_id} if task_id else {})}
+
+
+ROOT_SESSION_ENV = "AGENTCTL_ROOT_SESSION_ID"
+# Stamp-only: AGENTCTL_RUNTIME_HOST also arms the cross-host refusal in spawn-cursor-escape.py
+# and in this wrapper, so it must not be set in a Claude child that never had it.
+ROOT_HOST_ENV = "AGENTCTL_ROOT_HOST"
+
+
+def _root_context(environ: "Mapping[str, str]") -> dict:
+    """The host, harness version and root session of the task a spawner works for: inherited
+    from the environment a parent spawn set, else read from the spawner being the root itself
+    (Claude Code when it carries CLAUDE_CODE_SESSION_ID; an OpenCode root sets the variables)."""
+    context = {
+        ROOT_HOST_ENV: environ.get(ROOT_HOST_ENV) or environ.get("AGENTCTL_RUNTIME_HOST")
+        or ("claude" if environ.get("CLAUDE_CODE_SESSION_ID") else None),
+        host_stamp.HARNESS_VERSION_ENV: host_stamp.bind_time_version(environ),
+        ROOT_SESSION_ENV: environ.get(ROOT_SESSION_ENV) or engine_session_binding.harness_session_id(environ),
+    }
+    return {name: value for name, value in context.items() if value}
+
+
+def _performing_models(payload) -> "list[str]":
+    """The full model ids the child ran on, in the order the result reports them (the same
+    vocabulary as the quality rows, not the CLI alias the spawn asked for)."""
+    usage = payload.get("modelUsage") if isinstance(payload, dict) else None
+    return [m for m in usage if isinstance(m, str)] if isinstance(usage, dict) else []
+
+
+def _spawn_host_stamp(payload, environ: "Mapping[str, str]") -> dict:
+    """The host stamp of a spawn-cost row: the host, harness version and root session of the
+    task the spawn belongs to (a nested spawn carries its task's root, not its parent's own
+    session) and the model ids the child performed on. An unknown host stays null."""
+    context = _root_context(environ)
+    return host_stamp.stamp(
+        context.get(ROOT_HOST_ENV),
+        context.get(host_stamp.HARNESS_VERSION_ENV),
+        _performing_models(payload),
+        context.get(ROOT_SESSION_ENV),
+    )
 
 
 CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")
@@ -215,6 +259,7 @@ def build_child_env(environ: "Mapping[str, str]", depth_next: int, session_id: "
     inherited = {name: value for name, value in environ.items() if name != "TMUX_PANE"}
     return {
         **inherited,
+        **_root_context(environ),
         "AGENT_RECURSION_DEPTH": str(depth_next),
         "CLAUDE_CODE_DISABLE_CRON": "1",
         "AGENT_LINEAGE_IDS": build_child_lineage(environ.get("AGENT_LINEAGE_IDS", ""), session_id),
@@ -3754,6 +3799,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     # otherwise win on mtime).
     transcripts_before = _snapshot_transcripts(workdir)
     final_result_grace = final_result_grace_s()
+    spawner_stamp = _spawner_session_field(args.session)
     started = time.monotonic()
 
     # Use Popen so we can print the child's transcript path to stderr early —
@@ -3946,8 +3992,9 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             "duration_ms": resume.duration_ms,
             "exit_code": resume.returncode, "marker": parsed_marker if ok else None,
         }} if resume is not None else {}),
-        **_spawner_session_field(args.session),
+        **spawner_stamp,
         **_spawn_tags(),
+        **_spawn_host_stamp(payload, os.environ),
         **({"child_outside_project_override": child_project_override} if child_project_override else {}),
     })
     try:
