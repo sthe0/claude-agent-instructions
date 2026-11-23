@@ -309,6 +309,16 @@ def test_given_source_project_relative_checked(tree):
     assert (pp.GIVEN_SOURCE, leaf) in {(f.kind, f.path) for f in pp.unaccounted(corpus)}
 
 
+def test_given_source_root_skips_an_empty_dot_git_ancestor(tmp_path):
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    (outer / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    inner = outer / "inner"
+    (inner / ".git").mkdir(parents=True)
+    leaf = inner / ".claude" / "agent-memory" / "regularities" / "x.md"
+    assert leaf_forms.given_source_root("project", leaf) == outer
+
+
 def test_given_source_root_global_is_core_repo(tree):
     leaf = tree.write("regularities/widget-regularity.md", _given())
     assert leaf_forms.given_source_root("global", leaf) == tree.repo

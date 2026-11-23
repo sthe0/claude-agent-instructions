@@ -2,7 +2,9 @@
 
 One answer shared by `hook-guard-permission-surface.py` (whether a settings
 write forges a project's settings) and `spawn-specialist.py` (whether a
-spawned child may load its start directory's project settings).
+spawned child may load its start directory's project settings), and by the
+repo-detection callers `leaf_forms.given_source_root` and
+`segment_resolver._worktree_root` (which directory is a repository root).
 
 Difficulty removed: both callers must tell a real checkout from a scratch
 directory dressed up as one. Two copies of the marker rules drift apart, and a
@@ -22,7 +24,8 @@ def git_root_marker(directory: str) -> bool | None:
     a file whose `gitdir:` target (taken relative to `directory` unless
     absolute) exists and holds `HEAD` — a linked worktree. An empty `.git`
     directory (git itself walks past it), a stray `.git` file and a dangling
-    `gitdir:` are no marker. None when a `.git` file cannot be read."""
+    `gitdir:` are no marker. None when a `.git` file cannot be read: unlike
+    the former "any `.git` exists" rule, an unreadable one is not a repo."""
     git = os.path.join(directory, ".git")
     if os.path.isdir(git) and os.path.isfile(os.path.join(git, "HEAD")):
         return True
