@@ -161,7 +161,7 @@ from .cli_review import (
     _count_plan_review_round,
     _count_review_act,
 )
-from .cli_approval import cmd_approve, cmd_approve_resources, cmd_approve_stage_resources, cmd_approve_subplan, cmd_partition, cmd_partition_units, cmd_next_stage
+from .cli_approval import cmd_approve, cmd_approve_resources, cmd_approve_stage_resources, cmd_estimate_correct, cmd_approve_subplan, cmd_partition, cmd_partition_units, cmd_next_stage
 # Re-exported: read as agentctl.cli.<name> by 7 test files.
 from .cli_approval import (
     _stamp_accepted_plan_digest,
@@ -310,6 +310,7 @@ COMMANDS = {
     "approve-subplan": cmd_approve_subplan,
     "approve-resources": cmd_approve_resources,
     "approve-stage-resources": cmd_approve_stage_resources,
+    "estimate-correct": cmd_estimate_correct,
     "partition": cmd_partition,
     "partition-units": cmd_partition_units,
     "next-stage": cmd_next_stage,

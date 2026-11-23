@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import time
 from . import (
     advisor,
+    answer_ledger,
     cli_dispatch,
     effort,
     gates,
@@ -19,7 +21,8 @@ from . import (
     task_accumulator,
     mandate_store,
 )
-from lib import config_root
+from lib import ask_evidence, config_root
+from .cli_order import _no_marked_answer_refusal
 from .own_contour import OWN_SESSION_ENV
 from .partition import render_section, render_units, verdict
 from .directive import Directive
@@ -46,6 +49,7 @@ from .state import (
     PARTITION_UNIT_MODES,
     SessionState,
     Stage,
+    estimate_correction_marker,
 )
 from .store import StateStore
 from . import effort_segments
@@ -81,6 +85,7 @@ from .cli_common import (
     _carried_live_stage_blockers,
     _hand_on_after_approval,
     _select_stage_arming,
+    _reprice_open_arming,
     _note_user_approved_tiers,
     _close_armings_at_user_approval,
     _open_armings_after_user_approval,
@@ -1052,6 +1057,98 @@ def _agent_approval_outside(state: SessionState, store: StateStore, stage: Stage
     return None
 
 
+def _figure_scales(figure: dict) -> dict:
+    return {effort_segments.SCALE_MINUTES: figure.get("minutes"),
+            effort_segments.SCALE_USD: figure.get("usd")}
+
+
+def _acting_authority(state: SessionState, *, by_user: bool) -> str:
+    if by_user:
+        return sub_plan.AUTHORITY_USER
+    return sub_plan.AUTHORITY_PARENT if state.parent_link else sub_plan.AUTHORITY_AGENT
+
+
+def _overrun_scales(state: SessionState, stage: Stage, figure: dict, thr: Thresholds,
+                    against: dict | None) -> list[str]:
+    """The scales on which `figure` for `stage` is past the allowed overrun: against the figure
+    the user approved for the stage (`against`, when there is one) and, with the figure in place,
+    the composed task estimate against the task estimate the user approved. The one margin is
+    `effort_segments.fire_margin`, through `effort.estimate_past_margin`."""
+    scales: list[str] = []
+    if against:
+        scales += effort.estimate_past_margin(_figure_scales(figure), _figure_scales(against), thr)
+    copies = sub_plan.copies_of(state)
+    copies[stage.index] = {"agreed": True, **figure}
+    scales += effort.task_overrun(state, effort.composed_estimate(state, copies, thr)["total"], thr)
+    return sorted(set(scales))
+
+
+def _past_margin_text(state: SessionState, stage: Stage, figure: dict, scales: list[str]) -> str:
+    head = (f"stage {stage.index}'s figure {figure['minutes']} min / {figure['usd']} usd is past the "
+            f"estimate the user approved by more than the allowed overrun (on {', '.join(scales)})")
+    if state.parent_link:
+        return f"{head}: it is not applied. {gates.CHILD_ESCALATES_THE_ESTIMATE}"
+    marker = estimate_correction_marker(stage.index, figure["minutes"], figure["usd"])
+    return (f"{head}: it is held unapplied and the stage stays refused at dispatch until the user "
+            f"decides. Put an AskUserQuestion to the user with an option marked {marker} beside an "
+            f"unmarked one; once they choose it, run `estimate-correct --stage {stage.index} "
+            f"--minutes {figure['minutes']} --usd {figure['usd']} --basis '<why>' --by <their name>`")
+
+
+def _agree_first_figure(state: SessionState, stage: Stage, record, *, authority: str,
+                        approved_digest: str | None = None) -> tuple[str, str]:
+    """Agree the figure of the stage's record as it stands, as the stage's first figure.
+    Returns `(outcome, text)`: `agreed`, `kept` (a figure is already agreed: the record guard keeps
+    the record equal to it), `held` (past the allowed overrun, kept unapplied for the user),
+    `escalate` (the same in a linked child, which cannot ask the user), or `refused` (no estimate
+    with a basis, or one that is not the estimate the approved request carried)."""
+    estimate = record.estimate if record is not None else None
+    if estimate is None or not estimate.basis.strip():
+        return "refused", (f"stage {stage.index}'s request carries no estimate with a basis: the "
+                           f"executor sets its figure and what it rests on in its record before "
+                           f"the stage's resources are approved")
+    if sub_plan.estimate_copy(state, stage.index).get("agreed"):
+        return "kept", ""
+    if approved_digest is not None and approved_digest != sub_plan.estimate_digest(estimate):
+        return "refused", (f"stage {stage.index}'s estimate changed since the sub-plan the user "
+                           f"approved: present it again (present-plan --kind subplan --stage "
+                           f"{stage.index}) and have the user approve-subplan")
+    thr = Thresholds()
+    figure = sub_plan.figure_of(estimate.minutes, estimate.usd)
+    decided_later = sub_plan.is_decided_later(stage)
+    provisional = effort.tier_figure(stage, thr)
+    price = {"minutes": provisional[effort_segments.SCALE_MINUTES],
+             "usd": provisional[effort_segments.SCALE_USD]}
+    against = price if decided_later else None
+    over = _overrun_scales(state, stage, figure, thr, against)
+    if over:
+        text = _past_margin_text(state, stage, figure, over)
+        if state.parent_link:
+            return "escalate", text
+        sub_plan.hold_figure(state, stage.index, minutes=figure["minutes"], usd=figure["usd"],
+                             basis=estimate.basis, author=estimate.author, at=time.time())
+        return "held", text
+    sub_plan.agree_copy(
+        state, stage.index, minutes=figure["minutes"], usd=figure["usd"], basis=estimate.basis,
+        author=estimate.author, agreer=state.session_id, authority=authority,
+        user_approved=figure if decided_later or authority == sub_plan.AUTHORITY_USER else price)
+    _reprice_open_arming(state, stage)
+    return "agreed", ""
+
+
+def _agree_tier_price(state: SessionState, stage: Stage) -> None:
+    """A stage below the size line enters the composed estimate at its size-class tier price,
+    agreed by the approval that covers it: no confirmation, basis or method review is asked."""
+    copy = sub_plan.estimate_copy(state, stage.index)
+    if copy.get("agreed"):
+        return
+    tier = effort.tier_figure(stage, Thresholds())
+    price = {"minutes": tier[effort_segments.SCALE_MINUTES], "usd": tier[effort_segments.SCALE_USD]}
+    sub_plan.agree_copy(state, stage.index, **price, basis=sub_plan.TIER_BASIS, author="",
+                        agreer=state.session_id, authority=sub_plan.AUTHORITY_TIER,
+                        user_approved=price)
+
+
 def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: bool) -> None:
     """The parent's approval of the resources and permissions of each stage above the size line,
     written by `approve`: the user's approval writes it for every such stage and sets the
@@ -1060,20 +1157,40 @@ def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: 
     request that names nothing. A decided-later stage is approved through its sub-plan
     (approve-subplan), not here."""
     thr = Thresholds()
+    authority = _acting_authority(state, by_user=not by_agent)
     for stage in state.stages:
-        if stage.place is None or sub_plan.is_decided_later(stage) \
-                or not stage_above_threshold(stage, thr):
+        if stage.place is None:
+            continue
+        if not stage_above_threshold(stage, thr):
+            _agree_tier_price(state, stage)
             continue
         record = _stage_record(state, store, stage)
+        if sub_plan.is_decided_later(stage):
+            _agree_named_figure(state, stage, record, authority)
+            continue
         rows = record.resource_request if record else []
         if not by_agent:
             sub_plan.write_parent_approval(state, stage.index, rows)
+            _agree_named_figure(state, stage, record, authority)
             continue
         outside = _agent_approval_outside(state, store, stage, rows)
         if outside is None:
             outside = sub_plan.request_within(rows, {})
         if not outside:
             sub_plan.write_parent_approval(state, stage.index, rows, widens_set=False)
+            _agree_named_figure(state, stage, record, authority)
+
+
+def _agree_named_figure(state: SessionState, stage: Stage, record, authority: str) -> None:
+    """`approve` agrees the figure an executor named with a basis; a stage whose record names none
+    (a decided-later stage not planned yet) is left to the act that approves it."""
+    if record is None or record.estimate is None or not record.estimate.basis.strip():
+        return
+    approved = sub_plan.approval_entry(state, stage.index).get("user_subplan_estimate")
+    outcome, text = _agree_first_figure(state, stage, record, authority=authority,
+                                        approved_digest=approved)
+    if outcome in ("held", "escalate", "refused"):
+        state.log("estimate_not_agreed", stage=stage.index, outcome=outcome, reason=text)
 
 
 def cmd_approve_subplan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1159,6 +1276,14 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
         return Directive(False, state.node, "await_user_approval",
                          f"stage {stage.index}'s request is outside {bound}: "
                          + "; ".join(outside) + f" -- {way}", data={"outside": outside})
+    outcome, text = _agree_first_figure(
+        state, stage, record, authority=_acting_authority(state, by_user=False),
+        approved_digest=(sub_plan.approval_entry(state, stage.index).get("user_subplan_estimate")
+                         if sub_plan.is_decided_later(stage) else None))
+    if outcome in ("held", "escalate", "refused"):
+        store.save(state)
+        return Directive(False, state.node, "await_user_approval", text,
+                         data={"estimate": outcome})
     sub_plan.write_parent_approval(state, stage.index, record.resource_request, widens_set=False)
     state.log("approve_stage_resources", stage=stage.index)
     store.save(state)
@@ -1205,6 +1330,11 @@ def cmd_approve_resources(args, *, store: StateStore, runner: Runner | None = No
                          "; ".join(shown) + f". approve-resources approves the request the user was "
                          f"shown: the plan's own approval ({gates.user_plan_approval_way(state)}) is the "
                          f"other way on")
+    outcome, text = _agree_first_figure(state, stage, record, authority=sub_plan.AUTHORITY_USER)
+    if outcome in ("held", "escalate", "refused"):
+        store.save(state)
+        return Directive(False, state.node, "await_user_approval", text,
+                         data={"estimate": outcome})
     sub_plan.write_parent_approval(state, stage.index, record.resource_request)
     state.log("approve_resources", stage=stage.index, by=by)
     store.save(state)
@@ -1212,7 +1342,124 @@ def cmd_approve_resources(args, *, store: StateStore, runner: Runner | None = No
                      f"stage {stage.index}'s resources and permissions approved by {by}")
 
 
+def _correction_answer(state: SessionState, stage: Stage, copy: dict, figure: dict):
+    """`(answer time, None)` for the user's answer choosing the marked option of this correction
+    that no earlier correction used, given after a figure was held; else `(None, refusal)`. The
+    answer ledger is the only evidence: no flag stands in for it."""
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    if state_file is None:
+        return None, "no state file for this session to read the answer ledger beside"
+    marker = estimate_correction_marker(stage.index, figure["minutes"], figure["usd"])
+    since = float((copy.get("held") or {}).get("at") or 0.0)
+    used = set(sub_plan.consumed_answers(state, stage.index))
+    ledger_read = answer_ledger.read(state_file)
+    for record in ledger_read.records:
+        if (record.at >= since and record.at not in used
+                and ask_evidence.chose_marked_option(record.tool_input(), record.answers, marker)):
+            return record.at, None
+    return None, _no_marked_answer_refusal(
+        f"deciding the correction of stage {stage.index}", marker, ledger_read, since)
+
+
+def cmd_estimate_correct(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Correct the agreed estimate of a stage the acting session ordered, or decide a first figure
+    held for the user. The only writer of `estimate.corrections` and of the agreer: both come from
+    the acting session, never from the record. Inside the allowed overrun the acting session
+    agrees the correction; past it the figure is held for the user (a linked child escalates to its
+    parent), and `--by <user>` is admitted only on the user's ledger answer choosing the option
+    marked for that very correction, one answer per correction."""
+    state = _require(store, args.session)
+
+    def refuse(msg: str, **data) -> Directive:
+        return Directive(False, state.node, "noop", msg, data=data or None)
+
+    own = os.environ.get(OWN_SESSION_ENV, "").strip()
+    if own and config_root.sanitize_session_id(own) != config_root.sanitize_session_id(state.session_id):
+        return refuse("estimate-correct corrects the stages of the calling session's own plan: a "
+                      "linked child names its own session through agentctl-own.py")
+    try:
+        stage = state.stage(args.stage)
+    except KeyError:
+        return refuse(f"stage {args.stage} is not a stage of this session's own plan: only the "
+                      f"session that ordered a stage corrects its estimate")
+    if stage.place is None:
+        return refuse(f"stage {stage.index} is an old-form stage: it keeps its tier price and has "
+                      f"no estimate to correct")
+    by = (args.by or "").strip() or AGENT_ACTOR
+    by_user = by.casefold() != AGENT_ACTOR
+    figure = sub_plan.figure_of(args.minutes, args.usd)
+    if not any(v for v in figure.values()):
+        return refuse("estimate-correct needs a figure: --minutes and/or --usd, above zero")
+    basis = (args.basis or "").strip()
+    if not basis:
+        return refuse("estimate-correct needs --basis: the reason the figure changes")
+    thr = Thresholds()
+    copy = sub_plan.estimate_copy(state, stage.index)
+    above = stage_above_threshold(stage, thr)
+    held = copy.get("held")
+    if not copy.get("agreed") and not held:
+        return refuse(f"stage {stage.index}'s first figure is not agreed yet: until the stage's "
+                      f"resources are approved its executor rewrites the estimate in its own "
+                      f"record, and nothing is corrected")
+    record = _stage_record(state, store, stage) if above else None
+    if above and (record is None or record.estimate is None):
+        return refuse(f"stage {stage.index} has no sub-plan record with an estimate: a correction "
+                      f"of a stage above the size line rewrites that record's estimate")
+    if by_user and state.parent_link:
+        return refuse(f"the user's decision is taken in the root session: {gates.CHILD_ESCALATES_THE_ESTIMATE}")
+    against = copy.get("user_approved_figure")
+    if against is None and sub_plan.is_decided_later(stage):
+        provisional = effort.tier_figure(stage, thr)
+        against = {"minutes": provisional[effort_segments.SCALE_MINUTES],
+                   "usd": provisional[effort_segments.SCALE_USD]}
+    over = _overrun_scales(state, stage, figure, thr, against)
+    answered_at = None
+    if by_user:
+        answered_at, why = _correction_answer(state, stage, copy, figure)
+        if answered_at is None:
+            return refuse(why)
+    elif over:
+        text = _past_margin_text(state, stage, figure, over)
+        if state.parent_link:
+            return refuse(text)
+        sub_plan.hold_figure(state, stage.index, minutes=figure["minutes"], usd=figure["usd"],
+                             basis=basis, author=state.session_id, at=time.time())
+        store.save(state)
+        return Directive(False, state.node, "await_user_approval", text, data={"estimate": "held"})
+    authority = _acting_authority(state, by_user=by_user)
+    if copy.get("agreed"):
+        sub_plan.add_correction(state, stage.index, {
+            "from": sub_plan.figure_of(copy.get("minutes"), copy.get("usd")), "to": figure,
+            "basis": basis, "by": by, "agreer": state.session_id, "authority": authority,
+            "at": time.time()})
+    sub_plan.agree_copy(
+        state, stage.index, **figure, basis=basis, author=state.session_id,
+        agreer=state.session_id, authority=authority,
+        user_approved=figure if by_user else None)
+    if answered_at is not None:
+        sub_plan.consume_answer(state, stage.index, answered_at)
+    if above:
+        sub_plan.mirror_into_record(
+            state, stage.index, store, minutes=figure["minutes"], usd=figure["usd"], basis=basis,
+            who=state.session_id,
+            corrections=sub_plan.estimate_copy(state, stage.index).get("corrections") or [])
+    _reprice_open_arming(state, stage)
+    state.log("estimate_correct", stage=stage.index, by=by, authority=authority, **{
+        k: v for k, v in figure.items() if v is not None})
+    store.save(state)
+    return Directive(True, state.node, "next_stage",
+                     f"stage {stage.index}'s estimate is {figure['minutes']} min / {figure['usd']} usd, "
+                     f"agreed by {authority} {state.session_id}")
+
+
 def register(sub, add):
+    sp = add("estimate-correct"); sp.add_argument("--session", required=True)
+    sp.add_argument("--stage", type=int, required=True)
+    sp.add_argument("--minutes", type=float, default=None)
+    sp.add_argument("--usd", type=float, default=None)
+    sp.add_argument("--basis", default="", help="the reason the figure changes")
+    sp.add_argument("--by", default=AGENT_ACTOR,
+                    help="`agent` (default), or the user's name on the user's marked answer")
     sp = add("approve-resources"); sp.add_argument("--session", required=True)
     sp.add_argument("--stage", type=int, required=True); sp.add_argument("--by", required=True)
     sp = add("approve-subplan"); sp.add_argument("--session", required=True)

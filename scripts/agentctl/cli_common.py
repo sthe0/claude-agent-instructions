@@ -810,7 +810,7 @@ def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, ac
     uid = arming["segment"].removeprefix(effort_segments.STAGE_PREFIX)
     stage = (next((s for s in state.stages if state.stage_uid(s.index) == uid), None)
              if arming["segment"].startswith(effort_segments.STAGE_PREFIX) else None)
-    budget, user_budget = _agreed_budgets(state, stage, budget)
+    budget, user_budget = _agreed_budgets(state, stage, budget, tier)
     if user_budget is not None:
         source = effort_segments.SOURCE_AGREED
     renewed = effort_segments.open_arming(ledger, arming["segment"], budget, source, now, act, spanned=held)
@@ -1206,7 +1206,7 @@ def _ensure_stage_arming(state: SessionState, stage, now: float, by: str, *, uid
     budget = dict(unfold["budget"]) if unfold else effort.stage_budget(tier, thr)
     source = (unfold["source"] if unfold
               else effort_segments.SOURCE_USER_APPROVED if approved else effort_segments.SOURCE_DECLARED)
-    budget, user_budget = _agreed_budgets(state, stage, budget)
+    budget, user_budget = _agreed_budgets(state, stage, budget, tier)
     if user_budget is not None:
         source = effort_segments.SOURCE_AGREED
     arming = effort_segments.open_arming(ledger, segment, budget, source, now, by, spanned=spanned)
@@ -1218,20 +1218,48 @@ def _ensure_stage_arming(state: SessionState, stage, now: float, by: str, *, uid
     return arming
 
 
-def _agreed_budgets(state: SessionState, stage, priced: dict) -> tuple[dict, dict | None]:
+def _agreed_budgets(state: SessionState, stage, priced: dict,
+                    tier: str | None = None) -> tuple[dict, dict | None]:
     """(budget, user_budget) of a stage's arming, `priced` being its tier price (or unfolded
-    figure). A stage whose estimate the parent agreed is judged on the difficulty line against
-    the agreed figure and on the user line against the figure the user approved (the tier price
-    where the user decided none): the agreed figure moves the first and never the second. A stage
-    with no agreed figure keeps `priced` and has no separate user line."""
+    figure; `tier` names the price when it is one). A stage whose estimate the parent agreed is
+    judged on the difficulty line against the agreed figure and on the user line against the
+    figure the user approved (the tier price where the user decided none): the agreed figure moves
+    the first and never the second. A stage with no agreed figure keeps `priced` and has no
+    separate user line."""
     if stage is None:
         return priced, None
     agreed = sub_plan.agreed_figure(state, stage.index)
-    if agreed is None:
+    if agreed is None or sub_plan.estimate_copy(state, stage.index).get(
+            "authority") == sub_plan.AUTHORITY_TIER:
         return priced, None
-    decided = sub_plan.user_figure(state, stage.index)
-    user_budget = {**priced, **effort.agreed_figures(**(decided or {}))}
-    return {**priced, **effort.agreed_figures(**agreed)}, user_budget
+
+    def priced_at(figures: dict) -> dict:
+        figures = effort.agreed_figures(figures.get("minutes"), figures.get("usd"))
+        if tier is None:
+            return {**priced, **figures}
+        return effort.stage_budget(tier, Thresholds(), figures)
+
+    return priced_at(agreed), priced_at(sub_plan.user_figure(state, stage.index) or {})
+
+
+def _reprice_open_arming(state: SessionState, stage) -> None:
+    """After an agreed correction: the stage's open arming is judged against the corrected figure
+    from now on (the difficulty line moves, the user line stays as the user decided it). An arming
+    opened from an unfolded budget keeps it."""
+    uid = state.stage_uid(stage.index)
+    arming = (effort_segments.open_arming_of(state.effort_segments, effort_segments.stage_segment(uid))
+              if uid else None)
+    if arming is None or arming.get("budget_source") not in (
+            effort_segments.SOURCE_AGREED, effort_segments.SOURCE_DECLARED,
+            effort_segments.SOURCE_USER_APPROVED):
+        return
+    tier = arming.get("declared_tier") or effort.stage_tier(stage)
+    priced = effort.stage_budget(tier, Thresholds())
+    budget, user_budget = _agreed_budgets(state, stage, priced, tier)
+    arming["budget"] = budget
+    if user_budget is not None:
+        arming["user_budget"] = user_budget
+        arming["budget_source"] = effort_segments.SOURCE_AGREED
 
 
 def _select_stage_arming(state: SessionState, stage, now: float) -> None:
@@ -3763,7 +3791,7 @@ _SESSION_COMMANDS = (
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
-    "approve-subplan", "approve-resources", "approve-stage-resources", "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "approve-subplan", "approve-resources", "approve-stage-resources", "estimate-correct", "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "record-landing", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",

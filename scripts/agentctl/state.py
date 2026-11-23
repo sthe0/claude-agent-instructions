@@ -1412,6 +1412,19 @@ def order_agree_marker(understanding_digest: str) -> str:
     return f"{ORDER_AGREE_MARKER_PREFIX}{understanding_digest[:12]}]"
 
 
+# The marker of the AskUserQuestion option by which the user decides one estimate correction:
+# the prefix, the stage and the figure decided (`<minutes>m/<usd>usd`, `none` for a scale the
+# figure leaves out). `estimate-correct --by user` is admitted only on a ledger answer choosing it.
+ESTIMATE_CORRECTION_MARKER_PREFIX = "[estimate-correction:"
+
+
+def estimate_correction_marker(stage: int, minutes, usd) -> str:
+    def part(value) -> str:
+        return "none" if value is None else f"{float(value):g}"
+
+    return f"{ESTIMATE_CORRECTION_MARKER_PREFIX}{stage}:{part(minutes)}m/{part(usd)}usd]"
+
+
 # The anchor a sub-plan rendering carries and an approval ask's option repeats, bound to the
 # sub-plan presented: the prefix, the stage and the first 12 hex digits of its approval digest.
 # Emitted by `present-plan --kind subplan`, checked by the delivery hook.

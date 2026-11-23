@@ -307,6 +307,7 @@ def write_user_approval(state, stage_index: int, record: SubPlanRecord) -> dict:
     entry["user_subplan_approval"] = approval_digest(record)
     entry["user_subplan_request"] = resource_request_digest(record.resource_request)
     entry["user_subplan_set"] = request_parts(record.resource_request)
+    entry["user_subplan_estimate"] = estimate_digest(record.estimate)
     return entry
 
 
@@ -331,7 +332,9 @@ def set_planning_mark(state, stage_index: int, planning: bool) -> None:
 
 AUTHORITY_USER = "user"
 AUTHORITY_AGENT = "agent"
+AUTHORITY_PARENT = "parent"
 AUTHORITY_TIER = "size-class-tier-price"
+TIER_BASIS = "size-class tier price"
 
 
 def order_revision(state) -> int:
@@ -401,10 +404,12 @@ def agree_copy(state, stage_index: int, *, minutes, usd, basis: str, author: str
     return slot
 
 
-def hold_figure(state, stage_index: int, *, minutes, usd, basis: str, author: str) -> dict:
-    """Keep a figure past the allowed overrun beside the copy, unapplied, until the user decides."""
+def hold_figure(state, stage_index: int, *, minutes, usd, basis: str, author: str,
+                at: float = 0.0) -> dict:
+    """Keep a figure past the allowed overrun beside the copy, unapplied, until the user decides.
+    `at` is when it was held: the user's decision is an answer given after it."""
     slot = _copy_slot(state, stage_index)
-    slot["held"] = {**figure_of(minutes, usd), "basis": basis, "author": author}
+    slot["held"] = {**figure_of(minutes, usd), "basis": basis, "author": author, "at": at}
     slot.setdefault("corrections", [])
     return slot
 
@@ -412,6 +417,28 @@ def hold_figure(state, stage_index: int, *, minutes, usd, basis: str, author: st
 def add_correction(state, stage_index: int, correction: dict) -> None:
     """Append a correction to the copy: the one writer of `corrections` (`estimate-correct`)."""
     _copy_slot(state, stage_index).setdefault("corrections", []).append(dict(correction))
+
+
+def estimate_digest(estimate: Estimate | None) -> str:
+    """The digest of a figure and its basis: what an agreement is checked against."""
+    if estimate is None:
+        return ""
+    text = json.dumps([estimate.minutes, estimate.usd, estimate.basis.strip()])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def copies_of(state) -> dict:
+    """The current copy of each stage's estimate of the plan `state` is running, by stage number."""
+    return {stage.index: estimate_copy(state, stage.index) for stage in state.stages}
+
+
+def consumed_answers(state, stage_index: int) -> list[float]:
+    """The ledger answers (their times) that already licensed a correction of the stage."""
+    return list(estimate_copy(state, stage_index).get("answers_used") or [])
+
+
+def consume_answer(state, stage_index: int, at: float) -> None:
+    _copy_slot(state, stage_index).setdefault("answers_used", []).append(at)
 
 
 def confirm_estimate(record: SubPlanRecord, writer: str, parent_copy: dict | None) -> None:
@@ -477,6 +504,19 @@ def agree_estimate(record: SubPlanRecord, estimate: Estimate) -> bool:
             f"{current.confirmer}; a different figure needs a new agreement, not a rewrite")
     record.estimate = estimate
     return True
+
+
+#: The kind of the review record that judges the method of one stage's sub-plan (the pair review
+#: judges the stage orders and their cover; method concerns go here).
+METHOD_REVIEW_KIND = "method"
+_METHOD_REVIEW_PASSING = ("pass", "override")
+
+
+def method_review_recorded(record: SubPlanRecord | None) -> bool:
+    """Whether the record carries a method review that did not ask for a revision."""
+    return record is not None and any(
+        review.get("kind") == METHOD_REVIEW_KIND and review.get("verdict") in _METHOD_REVIEW_PASSING
+        for review in record.reviews)
 
 
 def is_decided_later(stage) -> bool:
@@ -602,6 +642,31 @@ def read(state, stage_index: int, store_=None, children=None) -> SubPlanRecord |
              if (child.parent_link or {}).get("stage_index") == stage_index
              and child.sub_plan_records.get(record_key(stage_index))]
     return SubPlanRecord.from_dict(max(found, key=lambda item: item[0])[1]) if found else None
+
+
+def mirror_into_record(state, stage_index: int, store_, *, minutes, usd, basis: str, who: str,
+                       corrections: list[dict]) -> None:
+    """Write an agreed correction into the record of the stage: the frame's own record in `state`,
+    or the record of the child contour linked at the stage (saved through `store_`). The writer is
+    `estimate-correct` only; the figure is the copy's, so the record guard (`confirm_estimate`)
+    finds the record equal to the agreed figure on the next carrier write."""
+    def update(raw: dict) -> None:
+        raw["estimate"] = {**(raw.get("estimate") or {}), "minutes": _number(minutes),
+                           "usd": _number(usd), "basis": basis, "author": who, "confirmer": who,
+                           "corrections": [dict(c) for c in corrections]}
+
+    key = record_key(stage_index, len(state.plan_stack))
+    if state.sub_plan_records.get(key):
+        update(state.sub_plan_records[key])
+        return
+    found = [child for child in linked_children(state, store_)
+             if (child.parent_link or {}).get("stage_index") == stage_index
+             and child.sub_plan_records.get(record_key(stage_index))]
+    if not found:
+        return
+    child = max(found, key=lambda c: ((c.parent_link or {}).get("created_at") or "", c.session_id))
+    update(child.sub_plan_records[record_key(stage_index)])
+    store_.save(child)
 
 
 RELEASING_VALUES = ("changed", "withdrawn")

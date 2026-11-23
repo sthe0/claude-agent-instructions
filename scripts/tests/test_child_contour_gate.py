@@ -67,7 +67,7 @@ OWN_CONTOUR_VERBS = {
     "question-dispose", "question-research", "question-candidate-dispose",
     "order-raise", "order-dispose",
     "plan-review-walk", "plan-review-pair-history", "plan-review-compose",
-    "approve-stage-resources",
+    "approve-stage-resources", "estimate-correct",
 }
 PARTITION_MARKER_FLAGS = ("--m1", "--m2", "--m3", "--m4", "--m3-severe", "--m4-severe")
 NAMED_EXCLUDED_VERBS = (
@@ -894,3 +894,64 @@ def test_linked_failing_final_check_blocks(store, tmp_path, monkeypatch):
     assert d.ok is False and d.action == "declare", d
     assert d.data["failures"] == ["final_check 'fails': exit 1 != 0"], d
     assert store.load("lnk").node == "DIAGNOSING"
+
+
+def _estimate_view(store, session: str) -> str:
+    from agentctl import sub_plan
+
+    state = store.load(session)
+    return json.dumps({"copy": sub_plan.copies_of(state), "segments": state.effort_segments},
+                      sort_keys=True, default=str)
+
+
+def _order_stage_one_in_the_new_form(contour, session: str) -> None:
+    """Stage 1 of `session`'s own plan as a stage the session ordered: in the description form,
+    with its figure agreed at the tier price."""
+    from agentctl import sub_plan
+
+    state = contour.store.load(session)
+    state.stage(1).place = "the engine"
+    state.stage(1).expected_minutes = 5
+    sub_plan.agree_copy(state, 1, minutes=10, usd=1.0, basis="priced at its tier",
+                        author=session, agreer=session, authority=sub_plan.AUTHORITY_TIER)
+    contour.store.save(state)
+
+
+def test_own_channel_agrees_correction_of_ordered_stage_only(contour):
+    """A linked session that is itself the parent of a stage corrects that stage's estimate
+    through its own channel; the stage it executes belongs to its parent's plan and is out of its
+    reach on that route, whatever session it names, and the user's decision is not taken at
+    depth."""
+    from agentctl import sub_plan
+    from lib.widening_targets import AGENTCTL_USER_AUTHORITY_VERBS
+
+    assert "estimate-correct" in OWN_CONTOUR_VERBS
+    assert "estimate-correct" not in AGENTCTL_USER_AUTHORITY_VERBS
+    contour.to_executing()
+    _order_stage_one_in_the_new_form(contour, CHILD)
+    _order_stage_one_in_the_new_form(contour, PARENT)
+    parent_before = _estimate_view(contour.store, PARENT)
+    correct = ("estimate-correct", "--stage", "1", "--minutes", "12", "--usd", "1.0",
+               "--basis", "one more file")
+
+    for session_args in (["--session", PARENT], [f"--session={PARENT}"], ["--sess", PARENT]):
+        proc = contour.own(*correct, *session_args)
+        assert proc.returncode == 2 and REFUSED in proc.stderr, (session_args, proc.stderr)
+        assert proc.stdout == "", proc.stdout
+    assert _estimate_view(contour.store, PARENT) == parent_before
+
+    child_before = _estimate_view(contour.store, CHILD)
+    at_depth = contour.own(*correct[:-2], "--minutes", "900", "--basis", "much more", "--by", "fedor")
+    assert json.loads(at_depth.stdout)["ok"] is False
+    assert "root session" in json.loads(at_depth.stdout)["detail"]
+    assert _estimate_view(contour.store, CHILD) == child_before
+    unknown = contour.own("estimate-correct", "--stage", "9", "--minutes", "12", "--basis", "x")
+    assert json.loads(unknown.stdout)["ok"] is False
+    assert _estimate_view(contour.store, CHILD) == child_before
+
+    done = _expect_ok(contour.own(*correct), "own channel `estimate-correct`")
+    assert "agreed by" in done["detail"]
+    copy = sub_plan.estimate_copy(contour.store.load(CHILD), 1)
+    assert copy["minutes"] == 12.0 and copy["agreer"] == CHILD
+    assert [c["to"]["minutes"] for c in copy["corrections"]] == [12.0]
+    assert _estimate_view(contour.store, PARENT) == parent_before

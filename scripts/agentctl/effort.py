@@ -861,6 +861,57 @@ def agreed_figures(minutes, usd) -> dict:
             if isinstance(figure, (int, float)) and not isinstance(figure, bool) and figure > 0}
 
 
+def tier_figure(stage, thr: Thresholds) -> dict:
+    """What the stage's size-class tier prices, per segment scale (`stage_budget` without an
+    agreed estimate): the provisional price of a stage whose figure is not agreed yet."""
+    return stage_budget(stage_tier(stage), thr)
+
+
+def composed_estimate(state: SessionState, copies: dict, thr: Thresholds | None = None) -> dict:
+    """The task's estimate composed per stage, per segment scale: the user-approved task estimate
+    (`order_effort_frozen`, else the plan's own `estimate`) with each stage whose figure is agreed
+    priced at that figure instead of its tier price. `copies` maps a stage number to the parent-side
+    copy of its estimate (`sub_plan.estimate_copy`); a stage whose copy is not agreed stays at its
+    tier price, a stage below the size line has no copy and stays there too.
+
+    Returns `{"total": {scale: figure}, "stages": [{stage, source, minutes, usd, author, agreer,
+    authority}]}`; `source` is `agreed` or `tier`, so a reader sees whose figure each part is."""
+    thr = thr if thr is not None else Thresholds()
+    base = dict(state.order_effort_frozen or estimate(state, thr))
+    total = {SEGMENT_SCALE[scale]: float(base.get(scale) or 0.0) for scale in RATIO_SCALES}
+    stages = []
+    for stage in state.stages:
+        if is_skipped(stage):
+            continue
+        tier = tier_figure(stage, thr)
+        copy = copies.get(stage.index) or {}
+        agreed = bool(copy.get("agreed"))
+        row = {"stage": stage.index, "source": "agreed" if agreed else "tier",
+               "author": copy.get("author", ""), "agreer": copy.get("agreer", ""),
+               "authority": copy.get("authority", "")}
+        for scale, key in ((effort_segments.SCALE_MINUTES, "minutes"), (effort_segments.SCALE_USD, "usd")):
+            priced = tier[scale]
+            counted = priced if scale == effort_segments.SCALE_MINUTES or stage.is_spawn() else 0.0
+            figure = copy.get(key) if agreed and isinstance(copy.get(key), (int, float)) else None
+            row[key] = float(figure) if figure else priced
+            if figure:
+                total[scale] += float(figure) - counted
+        stages.append(row)
+    return {"total": total, "stages": stages}
+
+
+def task_overrun(state: SessionState, composed: dict, thr: Thresholds | None = None) -> list[str]:
+    """The scales on which the composed estimate (`composed_estimate`'s total) is past the task
+    estimate the user approved by more than the allowed overrun; none for a session with no
+    approved task estimate."""
+    if not state.order_effort_frozen:
+        return []
+    thr = thr if thr is not None else Thresholds()
+    approved = {SEGMENT_SCALE[scale]: float(state.order_effort_frozen[scale])
+                for scale in RATIO_SCALES if scale in state.order_effort_frozen}
+    return estimate_past_margin(composed, approved, thr)
+
+
 def estimate_past_margin(composed: dict, user_approved: dict, thr: Thresholds) -> list[str]:
     """The scales on which the figure `composed` is past `user_approved` by more than the allowed
     overrun (`effort_segments.fire_margin`, the margin the fire route uses). Asked of a pair of

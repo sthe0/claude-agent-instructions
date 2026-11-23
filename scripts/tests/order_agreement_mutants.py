@@ -502,7 +502,24 @@ def _parent_resource_dispatched(mp):
                lambda state, stage, record, *, subplan_only=False: [], raising=True)
 
 
+def _stage_budget_tier_only(mp):
+    """A stage's budget is its tier price whatever estimate the parent agreed."""
+    from agentctl import effort
+    real = effort.stage_budget
+    mp.setattr("agentctl.effort.stage_budget",
+               lambda tier, thr, agreed=None: real(tier, thr), raising=True)
+
+
+def _user_line_on_corrected_estimate(mp):
+    """The user line is measured against the corrected estimate, not the figure the user approved."""
+    from agentctl import sub_plan
+    mp.setattr("agentctl.sub_plan.user_figure",
+               lambda state, stage_index: sub_plan.agreed_figure(state, stage_index), raising=True)
+
+
 MUTANTS = {
+    "stage_budget_tier_only": _stage_budget_tier_only,
+    "user_line_on_corrected_estimate": _user_line_on_corrected_estimate,
     "decided_later_dispatched": _decided_later_dispatched,
     "parent_resource_dispatched": _parent_resource_dispatched,
     "size_predicate_hardcoded": _size_predicate_hardcoded,

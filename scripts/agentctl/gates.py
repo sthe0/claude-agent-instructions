@@ -3449,6 +3449,18 @@ def unplanned_stage_blockers(state: SessionState, target_plan: str | None, *, st
                 f"stage {stage.index} is above the size line and has neither a sub-plan nor the "
                 f"decided-later mark: record its sub-plan (push-subplan, or the child's contour) "
                 f"or mark it `lazy = true` before the plan is presented")
+            continue
+        estimate = record.estimate
+        if estimate is None or not estimate.basis.strip() or not estimate.confirmer:
+            out.append(
+                f"stage {stage.index} is above the size line and its sub-plan has no estimate "
+                f"confirmed by its executor with a basis: the executor states the figure and its "
+                f"basis in the record before the plan is presented")
+        if not sub_plan.method_review_recorded(record):
+            out.append(
+                f"stage {stage.index} is above the size line and its sub-plan has no method review "
+                f"recorded (a review record of kind `{sub_plan.METHOD_REVIEW_KIND}` in the "
+                f"sub-plan's `reviews`) before the plan is presented")
     return out
 
 
@@ -3529,6 +3541,52 @@ CHILD_OWN_SUBPLAN_HAS_NO_WAY = ("no verb yet lets the user approve the sub-plan 
                                 "and do not start it")
 
 
+#: The user's decision on an estimate is taken in the root session: `estimate-correct --by <user>`
+#: is refused to a linked child, whose channel has no verb of the user.
+CHILD_ESCALATES_THE_ESTIMATE = ("report it to your parent (an `ESCALATE:` marker naming the stage "
+                                "and the figure): the user's decision is taken in the root session")
+
+
+def estimate_dispatch_blockers(state: SessionState, stage, record, *,
+                               subplan_only: bool = False) -> list[str]:
+    """A stage above the size line starts (spawned or in-thread) only with no figure held for the
+    user; a decided-later stage also needs its estimate confirmed with a basis and agreed by the
+    parent, and its method review recorded. A stage below the line and an old-form stage have
+    none of these: they keep their size-class tier price. Separate from the user's approval of the
+    sub-plan, which lifts none of these and none lifts it."""
+    planning = _planning_dispatch_blockers(state, stage, record, subplan_only)
+    if planning is not None:
+        return planning
+    if stage.place is None or not stage_above_threshold(stage, Thresholds()):
+        return []
+    copy = sub_plan.estimate_copy(state, stage.index)
+    held = copy.get("held")
+    if held:
+        way = (CHILD_ESCALATES_THE_ESTIMATE if state.parent_link
+               else f"the user decides it: `estimate-correct --stage {stage.index} --by <their name>` "
+                    f"on their answer choosing the option marked for it")
+        return [f"stage {stage.index} cannot start: its figure {held.get('minutes')} min / "
+                f"{held.get('usd')} usd is held past the allowed overrun and not decided; {way}"]
+    if not sub_plan.is_decided_later(stage):
+        return []
+    out: list[str] = []
+    estimate = record.estimate if record is not None else None
+    if estimate is None or not estimate.basis.strip() or not estimate.confirmer:
+        out.append(f"stage {stage.index} is decided later and cannot start: its executor has not "
+                   f"confirmed an estimate with a basis in the sub-plan record")
+    elif not copy.get("agreed"):
+        way = (CHILD_REPORTS_THE_REQUEST if state.parent_link
+               else f"the stage's resource approval agrees it (`approve-stage-resources --stage "
+                    f"{stage.index}`, or `approve-resources` for the user)")
+        out.append(f"stage {stage.index} is decided later and cannot start: its estimate is "
+                   f"confirmed but not agreed; {way}")
+    if record is None or not sub_plan.method_review_recorded(record):
+        out.append(f"stage {stage.index} is decided later and cannot start: no method review of "
+                   f"its sub-plan is recorded (a review record of kind "
+                   f"`{sub_plan.METHOD_REVIEW_KIND}` in the sub-plan's `reviews`)")
+    return out
+
+
 def parent_resource_dispatch_blockers(state: SessionState, stage, record, *,
                                       subplan_only: bool = False) -> list[str]:
     """A stage above the line starts only while the parent's approval of its resources and
@@ -3578,6 +3636,7 @@ def stage_start_blockers(state: SessionState, stage, *, store=None,
         return [f"the sub-plan record of stage {stage.index} cannot be read: {exc}"]
     return list(dict.fromkeys(
         decided_later_dispatch_blockers(state, stage, record, subplan_only=subplan_only)
+        + estimate_dispatch_blockers(state, stage, record, subplan_only=subplan_only)
         + parent_resource_dispatch_blockers(state, stage, record, subplan_only=subplan_only)))
 
 

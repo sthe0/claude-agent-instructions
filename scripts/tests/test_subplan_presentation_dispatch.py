@@ -119,6 +119,9 @@ def _described(store, sid=SESSION, *, lazy=False, minutes=None, in_thread=True, 
 def _rec(stage=1, allow=("Edit",), method="split the module", dirs=()):
     return sub_plan.SubPlanRecord(
         stage=stage, means="Edit", method=method, procedure="1. read 2. edit", conditions="- c",
+        estimate=sub_plan.Estimate(minutes=30, usd=1.0, author="executor", confirmer="executor",
+                                   basis="sized by the test"),
+        reviews=[{"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "reviewer"}],
         resource_request=[{"stage": stage, "allow": list(allow),
                            "add_dirs": [list(d) for d in dirs]}])
 
@@ -128,6 +131,12 @@ def _put(store, record, sid=SESSION):
     sub_plan.store(state, record, level=0)
     store.save(state)
     return state
+
+
+def _agree_estimate(state, stage=1):
+    """The parent's agreement of the figure `_rec` carries: the estimate condition of a start."""
+    sub_plan.agree_copy(state, stage, minutes=30, usd=1.0, basis="sized by the test",
+                        author="executor", agreer="root", authority=sub_plan.AUTHORITY_USER)
 
 
 def _entry(store, stage=1, sid=SESSION) -> dict:
@@ -317,7 +326,7 @@ def test_presentation_shows_subplans_estimates_and_decided_later_stages(
     doc = load_plan(_new_form_plan(venued_fixtures_dir, tmp_path, lazy=(2,)))
     text = render_mod.render_subplans(doc, state, store)
     assert "stage 2" in text and "decided later" in text
-    assert "estimate 90.0 min / $3.0, confirmed by parent" in text
+    assert "estimate 90.0 min / $3.0, confirmed by parent (basis: two files; written by executor)" in text
     assert "`Edit`" in text and "`/work/x` (write)" in text
 
 
@@ -407,6 +416,10 @@ def test_parent_approval_alone_refused(store, venued_fixtures_dir, in_thread):
 
     state = store.load(SESSION)
     sub_plan.write_user_approval(state, 1, _rec(1))
+    store.save(state)
+    _not_started(_dispatch(store, spawns=spawns), spawns, "estimate is confirmed but not agreed")
+    state = store.load(SESSION)
+    _agree_estimate(state)
     store.save(state)
     _started(_dispatch(store, spawns=spawns), spawns, in_thread)
 
@@ -652,6 +665,7 @@ def _subplan_table(method="split the module", **approvals) -> str:
     lines += ["[[meta.sub_plan.resource_request]]", "stage = 1", 'allow = ["Edit"]',
               "[meta.sub_plan.estimate]", "minutes = 40", "usd = 2.0",
               'basis = "one module split and a suite run"',
+              "[[meta.sub_plan.reviews]]", 'kind = "method"', 'verdict = "pass"',
               "[[meta.compared_plans.entries]]", 'ref = "plan-a"', 'departure = "no migration"']
     return "\n".join(lines) + "\n"
 
@@ -780,6 +794,8 @@ def test_subplan_digest_same_for_both_carriers(contour, tmp_path):
     _put(store, in_a_frame, PARENT)
     assert sub_plan.read(store.load(PARENT), 1, store).building_place.session == "root"
     assert sub_plan.approval_digest(in_a_frame) == approved
+    in_a_frame.estimate = through_the_link.estimate
+    _put(store, in_a_frame, PARENT)
     assert _agent_approves_stage_resources(store, sid=PARENT).ok is True
     spawns = Spawns()
     assert _dispatch(store, PARENT, spawns).ok is not False and spawns.argvs
@@ -1030,6 +1046,7 @@ def test_a_planning_childs_run_is_not_the_stages_work(home_store, venued_fixture
     state = store.load(SESSION)
     sub_plan.write_user_approval(state, 1, _rec(1))
     sub_plan.write_parent_approval(state, 1, _rec(1).resource_request)
+    _agree_estimate(state)
     store.save(state)
     assert _dispatch(store, spawns=Spawns()).ok is not False
     assert classified and booked
@@ -1301,7 +1318,9 @@ def test_below_threshold_stage_needs_no_subplan_or_separate_approval(
     assert cli.cmd_approve(ns(session=SESSION, by="user"), store=store).ok is True
     cli.cmd_partition(ns(session=SESSION, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    assert list(store.load(SESSION).stage_approvals) == ["0:1"]
+    approvals = store.load(SESSION).stage_approvals
+    assert list(approvals) == ["0:1", "0:2"]
+    assert set(approvals["0:2"]) == {"estimates"}
     assert _start_blockers(store, 1) == [] and _start_blockers(store, 2) == []
     _refused(_agent_approves_stage_resources(store, stage=2), "below the size line")
     assert _next_stage(store).ok is not False

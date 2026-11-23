@@ -81,8 +81,8 @@ def test_gates_gained_no_new_blocker_for_the_record_only_scale():
     from agentctl import gates
 
     names = [n for n, _ in inspect.getmembers(gates, inspect.isfunction) if n.endswith("_blockers")]
-    assert len(names) == 38, (
-        f"expected 38 *_blockers functions (parent-accounting stage 3 added escalation_orphan_blockers; "
+    assert len(names) == 39, (
+        f"expected 39 *_blockers functions (parent-accounting stage 3 added escalation_orphan_blockers; "
         f"pretrial-fixes stage 5 added protected_grant_blockers; "
         f"order-agreement stage 2 added order_review_blockers; "
         f"order-agreement stage 3 added order_agreement_blockers; "
@@ -95,6 +95,9 @@ def test_gates_gained_no_new_blocker_for_the_record_only_scale():
         f"the one call every way of starting a stage makes), recorded_pass_blockers (a stage "
         f"is not recorded as passed on a planning dispatch or against the guards) and "
         f"child_approval_blockers (a linked child's own approval); "
+        f"order-plan-separation stage 7 added estimate_dispatch_blockers (a stage above the line "
+        f"starts only on an estimate that is confirmed and agreed, with no held figure "
+        f"outstanding); "
         f"the record-only scale still adds none), found {len(names)}: {sorted(names)}"
     )
     assert "protected_grant_blockers" in names

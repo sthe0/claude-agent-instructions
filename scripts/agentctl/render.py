@@ -701,6 +701,14 @@ def node_file_name(node: "int | str") -> str:
     return f"stage-{int(node)}.md"
 
 
+METHOD_CONCERN_ROUTING = (
+    "The stages are shown as orders: what each is to deliver and the cover it carries, not who "
+    "executes it or how the work is divided. A concern about the method, the means, the "
+    "division of work or the executor's estimate is not a concern of this review: leave it "
+    "out; the executor-level method review of the stage's sub-plan takes it."
+)
+
+
 def node_file_text(doc: PlanDoc, node: "int | str") -> str:
     """One node's own FULL file: the order block for `base` (empty when the
     plan declares no order), `render_stage_brief` for a stage. The bundle's
@@ -709,7 +717,29 @@ def node_file_text(doc: PlanDoc, node: "int | str") -> str:
     if node == PAIR_BASE_NODE:
         lines = render_order_md(doc)
         return _lines_text(lines) if lines else ""
+    if _is_description_stage(doc, int(node)):
+        return render_stage_order(doc, int(node))
     return render_stage_brief(doc, int(node))
+
+
+def _is_description_stage(doc: PlanDoc, stage_index: int) -> bool:
+    """Whether the stage is in the description form (it states a place): the form moves the
+    executor's division of work out of the stage, so its node is the stage order alone."""
+    return any(s.index == stage_index and s.place is not None for s in doc.stages)
+
+
+def render_stage_order(doc: PlanDoc, stage_index: int) -> str:
+    """What the order asks of a stage in the description form and nothing of how the executor
+    divides the work: title, expected result image, criterion type, done criterion, output
+    artifacts and, under them, each requirement the coverage map attributes to the stage with the
+    control it names. No executor, place, binding conditions or size: those are the executor's
+    description, reviewed in the executor-level method review, not by a pair review."""
+    lines = render_stage_interface(doc, stage_index).rstrip("\n").split("\n")
+    entries = plan_coverage_entries(doc).get(stage_index, ())
+    if entries:
+        lines.extend(["", "**Cover (requirement → control):**"])
+        lines.extend(f"- {req_id} → `{control}`" for req_id, control in entries)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def unit_base_text(doc: PlanDoc) -> str:
@@ -949,7 +979,7 @@ def pair_service_text(doc: PlanDoc, service: "int | str", base: "int | str | Non
             lines.append(f"- {req_id} → `{control}`: {_control_text(doc, control)}")
         return "\n".join(lines) + "\n"
     if _is_source_stage(doc, service):
-        return render_stage_brief(doc, int(service))
+        return node_file_text(doc, service)
     return render_stage_interface(doc, int(service), contract=True)
 
 
@@ -1225,6 +1255,10 @@ def render_pair_review_bundle(
         "4. Check the remaining conditions below for this pair only, then reply per the "
         "protocol. Judge nothing about other stages."
     )
+    if is_two_sided(doc.meta.order):
+        lines.append(
+            f"5. {METHOD_CONCERN_ROUTING}"
+        )
     lines.append("")
 
     if history is not None:
@@ -2106,7 +2140,8 @@ def render_subplans(doc: PlanDoc, state, store=None) -> str:
                     sub_plan.record_key(index, level))),
                 plan_rows_of(frame.plan_path), f"{label}level {level}, ")
         children = children_of(owner)
-        out += _subplan_stage_lines(stages, read_current(owner, children), plan_rows, label)
+        out += _subplan_stage_lines(stages, read_current(owner, children), plan_rows, label,
+                                    lambda index: sub_plan.estimate_copy(owner, index))
         for child in children:
             if child.session_id in seen:
                 continue
@@ -2136,15 +2171,39 @@ def _record_from(raw):
     return sub_plan.SubPlanRecord.from_dict(raw) if raw else None
 
 
-def _estimate_text(est) -> str:
+def _figure_text(figure: dict) -> str:
+    minutes, usd = figure.get("minutes"), figure.get("usd")
+    return f"{minutes if minutes is not None else '?'} min / ${usd if usd is not None else '?'}"
+
+
+def _estimate_text(est, copy: dict | None = None) -> str:
+    """The estimate of a sub-plan record with who wrote and confirmed it and the basis it rests
+    on; with the parent-side `copy` also who agreed it (and with what authority), each correction
+    and the figure the user approved."""
     if est is None:
         return "no estimate"
-    return (f"estimate {est.minutes if est.minutes is not None else '?'} min"
+    text = (f"estimate {est.minutes if est.minutes is not None else '?'} min"
             f" / ${est.usd if est.usd is not None else '?'}"
             + (f", confirmed by {est.confirmer}" if est.confirmer else ""))
+    if est.basis:
+        text += f" (basis: {est.basis}"
+        text += f"; written by {est.author})" if est.author else ")"
+    copy = copy or {}
+    if copy.get("agreed"):
+        text += f"; agreed by {copy.get('agreer') or '?'} ({copy.get('authority') or '?'} authority)"
+    elif copy.get("held"):
+        text += f"; held at {_figure_text(copy['held'])}, awaiting the user's decision"
+    corrections = copy.get("corrections") or est.corrections
+    for correction in corrections:
+        text += (f"; corrected to {_figure_text(correction.get('to') or {})} by "
+                 f"{correction.get('agreer') or '?'} ({correction.get('basis') or 'no basis'})")
+    if copy.get("user_approved_figure"):
+        text += f"; the user approved {_figure_text(copy['user_approved_figure'])}"
+    return text
 
 
-def _subplan_stage_lines(stages, record_of, plan_rows: dict, label: str) -> list[str]:
+def _subplan_stage_lines(stages, record_of, plan_rows: dict, label: str,
+                         copy_of=lambda index: None) -> list[str]:
     """One line per described stage of one plan: a stage decided later by name, a stage below the
     size line with the price of its cost tier and the resources it is shown with, a stage above
     it with its recorded sub-plan (`record_of(stage number)`), its estimate and what it asks for.
@@ -2174,7 +2233,7 @@ def _subplan_stage_lines(stages, record_of, plan_rows: dict, label: str) -> list
         if record is None:
             lines.append(head + "above the size line and has no sub-plan yet")
             continue
-        lines.append(head + f"sub-plan recorded — {_estimate_text(record.estimate)}; "
+        lines.append(head + f"sub-plan recorded — {_estimate_text(record.estimate, copy_of(stage.index))}; "
                      + subplan_request_text(record))
     return lines
 
