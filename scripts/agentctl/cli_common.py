@@ -807,10 +807,18 @@ def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, ac
     _close_at_user_act(state, arming, act, by, now)
     thr = Thresholds()
     budget, source, tier = _next_arming_terms(state, arming, thr)
+    uid = arming["segment"].removeprefix(effort_segments.STAGE_PREFIX)
+    stage = (next((s for s in state.stages if state.stage_uid(s.index) == uid), None)
+             if arming["segment"].startswith(effort_segments.STAGE_PREFIX) else None)
+    budget, user_budget = _agreed_budgets(state, stage, budget)
+    if user_budget is not None:
+        source = effort_segments.SOURCE_AGREED
     renewed = effort_segments.open_arming(ledger, arming["segment"], budget, source, now, act, spanned=held)
     renewed["declared_tier"] = tier
     renewed["title"] = arming.get("title")
     renewed["tier_ladder"] = effort.tier_ladder(thr)
+    if user_budget is not None:
+        renewed["user_budget"] = user_budget
     return renewed
 
 
@@ -1198,11 +1206,32 @@ def _ensure_stage_arming(state: SessionState, stage, now: float, by: str, *, uid
     budget = dict(unfold["budget"]) if unfold else effort.stage_budget(tier, thr)
     source = (unfold["source"] if unfold
               else effort_segments.SOURCE_USER_APPROVED if approved else effort_segments.SOURCE_DECLARED)
+    budget, user_budget = _agreed_budgets(state, stage, budget)
+    if user_budget is not None:
+        source = effort_segments.SOURCE_AGREED
     arming = effort_segments.open_arming(ledger, segment, budget, source, now, by, spanned=spanned)
     arming["declared_tier"] = tier
     arming["title"] = stage.title
     arming["tier_ladder"] = effort.tier_ladder(thr)
+    if user_budget is not None:
+        arming["user_budget"] = user_budget
     return arming
+
+
+def _agreed_budgets(state: SessionState, stage, priced: dict) -> tuple[dict, dict | None]:
+    """(budget, user_budget) of a stage's arming, `priced` being its tier price (or unfolded
+    figure). A stage whose estimate the parent agreed is judged on the difficulty line against
+    the agreed figure and on the user line against the figure the user approved (the tier price
+    where the user decided none): the agreed figure moves the first and never the second. A stage
+    with no agreed figure keeps `priced` and has no separate user line."""
+    if stage is None:
+        return priced, None
+    agreed = sub_plan.agreed_figure(state, stage.index)
+    if agreed is None:
+        return priced, None
+    decided = sub_plan.user_figure(state, stage.index)
+    user_budget = {**priced, **effort.agreed_figures(**(decided or {}))}
+    return {**priced, **effort.agreed_figures(**agreed)}, user_budget
 
 
 def _select_stage_arming(state: SessionState, stage, now: float) -> None:
@@ -1350,20 +1379,15 @@ def stamp_and_judge(session_id: str, now: float, *, store: StateStore) -> bool:
     return True
 
 
-def _fire_floor(thr: Thresholds) -> dict:
-    return {
-        effort_segments.SCALE_USD: thr.effort_fire_floor_usd(),
-        effort_segments.SCALE_MINUTES: thr.effort_fire_floor_minutes(),
-    }
-
-
 def _record_arming_fire(state: SessionState, arming: dict, scales: list[str], *, now: float,
-                        store: StateStore | None) -> dict:
-    """The arming's fire record, gaining `scales`: one record per arming while it stands open. A
-    fire leaves every other stage's budget and the whole-window baselines alone. A ledgered order
-    owes the user the fire in every later session too (K3)."""
+                        store: StateStore | None,
+                        line: str = effort_segments.LINE_DIFFICULTY) -> dict:
+    """The arming's fire record, gaining `scales`: one record per arming while it stands open,
+    naming the line crossed (the user line wins when both are). A fire leaves every other stage's
+    budget and the whole-window baselines alone. A ledgered order owes the user the fire in every
+    later session too (K3)."""
     actual = effort_segments.arming_actual(arming)
-    budget = arming["budget"]
+    budget = arming["user_budget"] if line == effort_segments.LINE_USER else arming["budget"]
     fire = next((f for f in state.effort_fires
                  if f.get("arming_id") == arming["arming_id"] and f.get("ack") is None), None)
     if fire is None:
@@ -1389,9 +1413,13 @@ def _record_arming_fire(state: SessionState, arming: dict, scales: list[str], *,
             "replaced_baseline": {},
         }
         state.effort_fires.append(fire)
-    fire["scales"].extend(scales)
+    fire["scales"].extend(scale for scale in scales if scale not in fire["scales"])
     fire["arming_actual"] = actual
-    effort_segments.note_fire(arming, scales, now)
+    effort_segments.note_fire(arming, scales, now, line)
+    fire["line"] = arming["fire"]["line"]
+    if line == effort_segments.LINE_USER:
+        fire["user_scales"] = list(arming["fire"]["user_scales"])
+        fire["user_budget"] = dict(budget)
     key = _ledgered_order_key(state)
     if key is not None:
         _flush_order_effort(state, key, store=store)
@@ -1425,8 +1453,14 @@ def _judge_act(state: SessionState, act: str, *, store: StateStore | None,
             state, thr, cross_session_totals=_effort_cross_totals(state, at, store=store), now=at)
         if div is not None:
             fire = _record_effort_fire(state, div, now=at, store=store)
-    scales = effort_segments.scales_to_fire(
-        arming, act, float(thr.effort_divergence_multiple()), _fire_floor(thr))
+    margin = effort_segments.fire_margin(thr)
+    by_line = effort_segments.lines_to_fire(arming, act, margin.multiple, margin.floor)
+    user_scales = by_line[effort_segments.LINE_USER]
+    if user_scales:
+        fire = _record_arming_fire(state, arming, user_scales, now=at, store=store,
+                                   line=effort_segments.LINE_USER)
+    scales = [scale for scale in by_line[effort_segments.LINE_DIFFICULTY]
+              if scale not in user_scales]
     if scales:
         fire = _record_arming_fire(state, arming, scales, now=at, store=store)
     return fire

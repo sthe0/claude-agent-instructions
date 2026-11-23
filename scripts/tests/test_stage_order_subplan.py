@@ -261,7 +261,8 @@ _META = {
     "sub_plan": {
         "stage": 2, "means": "Edit", "method": "split the module", "procedure": "1. read 2. edit",
         "conditions": "- the module imports [probe: python3 -c 'import m' => ok]",
-        "estimate": {"minutes": 90, "usd": 3.0, "author": "executor", "confirmer": "parent"},
+        "estimate": {"minutes": 90, "usd": 3.0, "author": "executor", "confirmer": "parent",
+                     "basis": "two files to split, one suite run"},
         "setter_decisions": [{"condition": "B1", "value": "kept", "setter": "user",
                               "decided_by": "user"}],
         "resource_request": [{"stage": 2, "allow": ["Edit"]}],
@@ -661,9 +662,8 @@ _REFUSALS = [
     ("procedure", {"procedure": ""}, "states no procedure"),
     ("unsecured condition", {"conditions": "- the module imports"}, "unmarked"),
     ("estimate missing", {"estimate": None}, "has no estimate"),
-    ("estimate confirmer", {"estimate": {"minutes": 9, "author": "executor"}},
-     "names no confirmer"),
-    ("estimate author", {"estimate": {"minutes": 9, "confirmer": "parent"}}, "names no author"),
+    ("estimate basis", {"estimate": {"minutes": 9}}, "states no basis"),
+    ("estimate blank basis", {"estimate": {"minutes": 9, "basis": "  "}}, "states no basis"),
     ("wrong stage", {"stage": 7}, "builds stage 2, not stage 7"),
 ]
 
@@ -1139,8 +1139,7 @@ conditions = "- the suite stays green [probe: python3 -m pytest -q => passes]"
 
 [meta.sub_plan.estimate]
 minutes = 40
-author = "executor"
-confirmer = "parent"
+basis = "one module split, one suite run"
 
 [meta.compared_plans]
 none = true
@@ -1225,7 +1224,8 @@ def test_a_good_record_is_stored_at_submit_with_all_its_elements_and_its_buildin
     state = store.load("w")
     record = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"])
     assert record.means and record.method and record.procedure
-    assert record.estimate.author == "executor" and record.estimate.confirmer == "parent"
+    assert record.estimate.author == record.estimate.confirmer == "w", (
+        "the record guard names the writing session as author and confirmer")
     assert record.compared_plans.none and record.compared_plans.search_id == "S1"
     assert [h.condition for h in record.how_kept] == ["B1"]
     assert [d.value for d in record.setter_decisions] == ["kept"]
@@ -1597,7 +1597,7 @@ def test_a_good_record_goes_through_the_child_contour(store, tmp_path):
     assert list(state.sub_plan_records) == ["1"], "a contour record is keyed by its stage alone"
     record = sub_plan.read(store.load("p"), 1, store)
     assert record.method and [h.condition for h in record.how_kept] == ["B1"]
-    assert record.estimate.author == "executor" and record.estimate.confirmer == "parent"
+    assert record.estimate.author == record.estimate.confirmer == "c"
 
 
 def test_a_child_contours_own_plan_on_a_two_sided_order_describes_its_stages(store, tmp_path):

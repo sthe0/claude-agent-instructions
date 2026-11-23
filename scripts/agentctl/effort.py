@@ -842,11 +842,36 @@ def planning_fallback(thr: Thresholds) -> dict:
     return budget
 
 
-def stage_budget(tier: str, thr: Thresholds) -> dict:
-    return {
+def stage_budget(tier: str, thr: Thresholds, agreed: dict | None = None) -> dict:
+    """A stage's budget: its tier price, with a scale the stage's agreed estimate (`{scale:
+    figure}`, see `agreed_figures`) names priced at that figure instead."""
+    budget = {
         effort_segments.SCALE_USD: _tier_estimate(SCALE_SPEND, tier, thr),
         effort_segments.SCALE_MINUTES: _tier_estimate(SCALE_WALL_CLOCK, tier, thr),
     }
+    budget.update({scale: figure for scale, figure in (agreed or {}).items()
+                   if scale in budget and figure})
+    return budget
+
+
+def agreed_figures(minutes, usd) -> dict:
+    """An estimate's figures keyed by the scale they price (an unnamed figure is left out)."""
+    return {scale: float(figure) for scale, figure in
+            ((effort_segments.SCALE_MINUTES, minutes), (effort_segments.SCALE_USD, usd))
+            if isinstance(figure, (int, float)) and not isinstance(figure, bool) and figure > 0}
+
+
+def estimate_past_margin(composed: dict, user_approved: dict, thr: Thresholds) -> list[str]:
+    """The scales on which the figure `composed` is past `user_approved` by more than the allowed
+    overrun (`effort_segments.fire_margin`, the margin the fire route uses). Asked of a pair of
+    figures: the composed estimate against the task estimate, a stage's corrected figure against
+    the figure the user approved for it, a decided-later stage's first figure against its
+    provisional tier price. A scale `user_approved` does not name is not judged."""
+    margin = effort_segments.fire_margin(thr)
+    return [scale for scale in effort_segments.SCALES
+            if effort_segments.scale_crossed(
+                float(composed.get(scale) or 0.0), user_approved.get(scale),
+                margin.multiple, margin.floor.get(scale))]
 
 
 def priced_snapshot(state: SessionState) -> dict:

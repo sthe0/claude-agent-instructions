@@ -25,6 +25,11 @@ SCALE_USD = "usd"
 SCALE_MINUTES = "minutes"
 SCALES = (SCALE_USD, SCALE_MINUTES)
 
+# The two lines a segment is judged against: the figure the work was priced at (a difficulty to
+# diagnose) and the figure the user approved (owed to the user).
+LINE_DIFFICULTY = "difficulty"
+LINE_USER = "user"
+
 SOURCE_UNBUDGETED = "unbudgeted"
 SOURCE_STRETCH = "unjudged-stretch"
 SOURCE_WINDOW = "migrated-window"
@@ -494,40 +499,79 @@ def match_identities(prev: list[dict], new: list[dict],
     return resolved
 
 
-def judge(arming: dict, multiple: float, floor: dict | None) -> list[str]:
-    """The scales whose fire point is reached: actual at least `multiple` times the budget AND
-    excess over the budget at least the floor. A scale with no floor needs the multiple only."""
-    budget = arming.get("budget")
+def scale_crossed(actual: float, limit, multiple: float, minimum) -> bool:
+    """The one fire test of one scale: `actual` at least `multiple` times `limit` AND the excess
+    over `limit` at least `minimum` (no `minimum` needs the multiple only). The segment judge, the
+    fire route's two lines and the estimate boundary all apply it, so a figure is "past the
+    allowed overrun" by the same margin wherever it is asked."""
+    if not limit or limit <= 0 or actual < multiple * limit:
+        return False
+    return minimum is None or actual - limit >= minimum
+
+
+class FireMargin(tuple):
+    """The allowed overrun: the multiple and the per-scale minimum excess."""
+    __slots__ = ()
+
+    def __new__(cls, multiple: float, floor: dict):
+        return super().__new__(cls, (multiple, floor))
+
+    multiple = property(lambda self: self[0])
+    floor = property(lambda self: self[1])
+
+
+def fire_margin(thr) -> FireMargin:
+    """The margin of `thr` (a `config.Thresholds`), read once for every caller of
+    `scale_crossed`."""
+    return FireMargin(float(thr.effort_divergence_multiple()), {
+        SCALE_USD: thr.effort_fire_floor_usd(),
+        SCALE_MINUTES: thr.effort_fire_floor_minutes(),
+    })
+
+
+def judge(arming: dict, multiple: float, floor: dict | None, line: str = LINE_DIFFICULTY
+          ) -> list[str]:
+    """The scales whose fire point is reached on `line`: the difficulty line judges the arming's
+    `budget` (the agreed figure), the user line its `user_budget` (the figure the user approved,
+    never moved by an agent's or parent's correction). A line with no budget crosses nothing."""
+    budget = arming.get("user_budget" if line == LINE_USER else "budget")
     if not budget:
         return []
     actual = arming_actual(arming)
-    crossed = []
-    for scale in SCALES:
-        limit = budget.get(scale)
-        if not limit or limit <= 0 or actual[scale] < multiple * limit:
-            continue
-        minimum = (floor or {}).get(scale)
-        if minimum is not None and actual[scale] - limit < minimum:
-            continue
-        crossed.append(scale)
-    return crossed
+    return [scale for scale in SCALES
+            if scale_crossed(actual[scale], budget.get(scale), multiple, (floor or {}).get(scale))]
 
 
-def unfired_scales(arming: dict, crossed: list[str]) -> list[str]:
-    """`crossed` less what the arming's fire already names: an arming fires once per scale."""
-    fired = (arming.get("fire") or {}).get("scales") or ()
+def unfired_scales(arming: dict, crossed: list[str], line: str = LINE_DIFFICULTY) -> list[str]:
+    """`crossed` less what the arming's fire already names for `line`: an arming fires once per
+    scale per line (a user-line fire is also named in `scales`, the fire's whole set)."""
+    fire = arming.get("fire") or {}
+    fired = (fire.get("user_scales") if line == LINE_USER else fire.get("scales")) or ()
     return [scale for scale in crossed if scale not in fired]
 
 
-def scales_to_fire(arming: dict, act: str, multiple: float, floor: dict | None) -> list[str]:
-    """What `act` fires on `arming`: nothing outside its segment's judging acts or on a migrated
-    window, else the scales crossed and not yet fired."""
+def lines_to_fire(arming: dict, act: str, multiple: float, floor: dict | None) -> dict:
+    """What `act` fires on `arming`, per line: nothing outside its segment's judging acts or on a
+    migrated window, else the scales each line has crossed and not yet fired."""
     if act not in judging_acts_of(arming["segment"]) or arming["budget_source"] == SOURCE_WINDOW:
-        return []
-    return unfired_scales(arming, judge(arming, multiple, floor))
+        return {LINE_DIFFICULTY: [], LINE_USER: []}
+    return {line: unfired_scales(arming, judge(arming, multiple, floor, line), line)
+            for line in (LINE_DIFFICULTY, LINE_USER)}
 
 
-def note_fire(arming: dict, scales: list[str], at: float) -> None:
+def scales_to_fire(arming: dict, act: str, multiple: float, floor: dict | None) -> list[str]:
+    """The scales either line fires (the union of `lines_to_fire`)."""
+    fires = lines_to_fire(arming, act, multiple, floor)
+    return [scale for scale in SCALES if scale in fires[LINE_DIFFICULTY] or scale in fires[LINE_USER]]
+
+
+def note_fire(arming: dict, scales: list[str], at: float, line: str = LINE_DIFFICULTY) -> None:
     fire = arming["fire"] or {"scales": [], "ack": None, "ts": at}
     fire["scales"].extend(scale for scale in scales if scale not in fire["scales"])
+    if line == LINE_USER:
+        user = fire.setdefault("user_scales", [])
+        user.extend(scale for scale in scales if scale not in user)
+        fire["line"] = LINE_USER
+    else:
+        fire.setdefault("line", LINE_DIFFICULTY)
     arming["fire"] = fire

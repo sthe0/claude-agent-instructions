@@ -56,11 +56,17 @@ def _rows(value, malformed: list[str], name: str) -> list[dict]:
 
 @dataclass
 class Estimate:
-    """The one estimate of the sub-plan: the executor's figure and who confirmed it."""
+    """The one estimate of the sub-plan: the executor's figure with the basis it rests on, and
+    who confirmed it. `confirmer` is the executor's own confirmation of the record; the parent's
+    agreement lives in the parent-side copy (`estimate_copy`), never here. `corrections` is the
+    parent-side copy's list, mirrored for readers of the record: the record cannot write it
+    (`confirm_estimate`)."""
     minutes: float | None = None
     usd: float | None = None
     author: str = ""
     confirmer: str = ""
+    basis: str = ""
+    corrections: list[dict] = field(default_factory=list)
 
     @property
     def agreed(self) -> bool:
@@ -68,8 +74,12 @@ class Estimate:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Estimate":
+        raw = d.get("corrections")
         return cls(minutes=_number(d.get("minutes")), usd=_number(d.get("usd")),
-                   author=_text(d.get("author")), confirmer=_text(d.get("confirmer")))
+                   author=_text(d.get("author")), confirmer=_text(d.get("confirmer")),
+                   basis=_text(d.get("basis")),
+                   corrections=[dict(r) for r in raw if isinstance(r, dict)]
+                   if isinstance(raw, list) else [])
 
 
 @dataclass
@@ -310,6 +320,132 @@ def set_planning_mark(state, stage_index: int, planning: bool) -> None:
         state.stage_approvals[key]["planning"] = False
 
 
+# --- The parent-side copy of a stage's estimate ------------------------------------------------
+#
+# The agreed figure, its basis, the corrections and the figure the user approved sit in the engine
+# state of the session that ordered the stage, inside that stage's `stage_approvals` entry under
+# `estimates[<order revision>]`, and only that session's engine writes them: the agreeing acts of
+# `cli_approval` and the `estimate-correct` verb. The executor's record carries the same figure
+# for readers, but a figure in the record prices nothing until the copy agrees it. An entry of an
+# earlier order revision stays as a record and counts for nothing (`estimate_copy`).
+
+AUTHORITY_USER = "user"
+AUTHORITY_AGENT = "agent"
+AUTHORITY_TIER = "size-class-tier-price"
+
+
+def order_revision(state) -> int:
+    """The revision of the order the copy is keyed by: the number of agreements it has replaced."""
+    return len(state.order_agreement_history)
+
+
+def estimate_copy(state, stage_index: int, level: int | None = None) -> dict:
+    """The current order revision's copy of the estimate of stage `stage_index` of the plan at
+    stack level `level` (the plan the session is running when None); empty when none counts."""
+    key = approval_key(state, stage_index) if level is None else f"{level}:{stage_index}"
+    estimates = (state.stage_approvals.get(key) or {}).get("estimates") or {}
+    return estimates.get(str(order_revision(state))) or {}
+
+
+def _copy_slot(state, stage_index: int, level: int | None = None) -> dict:
+    key = approval_key(state, stage_index) if level is None else f"{level}:{stage_index}"
+    entry = state.stage_approvals.setdefault(key, {})
+    return entry.setdefault("estimates", {}).setdefault(str(order_revision(state)), {})
+
+
+def figure_of(minutes, usd) -> dict:
+    """A figure as the copy keeps it: both scales, None where the estimate names none."""
+    return {"minutes": _number(minutes), "usd": _number(usd)}
+
+
+def agreed_figure(state, stage_index: int) -> dict | None:
+    """The figure the parent agreed for the stage, None while none is agreed (a held or merely
+    confirmed figure prices nothing)."""
+    copy = estimate_copy(state, stage_index)
+    return figure_of(copy.get("minutes"), copy.get("usd")) if copy.get("agreed") else None
+
+
+def user_figure(state, stage_index: int) -> dict | None:
+    """The figure the user approved for the stage, None when the user decided none."""
+    return estimate_copy(state, stage_index).get("user_approved_figure")
+
+
+def held_figure(state, stage_index: int) -> dict | None:
+    """The figure proposed past the allowed overrun and waiting for the user's decision."""
+    return estimate_copy(state, stage_index).get("held")
+
+
+def write_confirmed_copy(state, stage_index: int, estimate: Estimate,
+                         level: int | None = None) -> dict:
+    """Record a child contour's estimate as read through the link: confirmed by its executor,
+    not agreed, so no budget follows. An agreed copy is left as it stands."""
+    slot = _copy_slot(state, stage_index, level)
+    if not slot.get("agreed"):
+        slot.update(figure_of(estimate.minutes, estimate.usd), basis=estimate.basis,
+                    author=estimate.author, agreed=False)
+        slot.setdefault("corrections", [])
+    return slot
+
+
+def agree_copy(state, stage_index: int, *, minutes, usd, basis: str, author: str, agreer: str,
+               authority: str, user_approved: dict | None = None) -> dict:
+    """The parent's agreement of a figure: it prices the stage from now on. `user_approved` is the
+    figure the user approved when the act is the user's (it sets the user line); an agent's or a
+    parent's agreement never moves it."""
+    slot = _copy_slot(state, stage_index)
+    slot.update(figure_of(minutes, usd), basis=basis, author=author, agreer=agreer,
+                authority=authority, agreed=True, held=None)
+    slot.setdefault("corrections", [])
+    if user_approved is not None:
+        slot["user_approved_figure"] = dict(user_approved)
+    return slot
+
+
+def hold_figure(state, stage_index: int, *, minutes, usd, basis: str, author: str) -> dict:
+    """Keep a figure past the allowed overrun beside the copy, unapplied, until the user decides."""
+    slot = _copy_slot(state, stage_index)
+    slot["held"] = {**figure_of(minutes, usd), "basis": basis, "author": author}
+    slot.setdefault("corrections", [])
+    return slot
+
+
+def add_correction(state, stage_index: int, correction: dict) -> None:
+    """Append a correction to the copy: the one writer of `corrections` (`estimate-correct`)."""
+    _copy_slot(state, stage_index).setdefault("corrections", []).append(dict(correction))
+
+
+def confirm_estimate(record: SubPlanRecord, writer: str, parent_copy: dict | None) -> None:
+    """The guard every write of a record's estimate passes (`record_carried_by` is the one writer,
+    for a frame's record and a child contour's alike). A structural check, not a judgement of the
+    figure: an estimate with no basis is refused. Before the parent agreed a figure the write
+    replaces figure and basis freely and names the writer as author and confirmer; once agreed
+    the same figure and basis is a no-op and a different one is refused. The record cannot write
+    a correction: entries it carries must be the copy's, and it takes the copy's list."""
+    estimate = record.estimate
+    if estimate is None:
+        return
+    if not estimate.basis.strip():
+        raise SubPlanError(
+            f"stage {record.stage}'s estimate states no basis: say what the figure rests on")
+    copy = parent_copy or {}
+    known = copy.get("corrections") or []
+    foreign = [c for c in estimate.corrections if c not in known]
+    if foreign:
+        raise SubPlanError(
+            f"stage {record.stage}'s estimate carries a correction the record cannot write: only "
+            f"`estimate-correct` run by the session that ordered the stage writes one")
+    estimate.corrections = [dict(c) for c in known]
+    if copy.get("agreed"):
+        if (estimate.minutes, estimate.usd, estimate.basis) != (
+                copy.get("minutes"), copy.get("usd"), copy.get("basis")):
+            raise SubPlanError(
+                f"stage {record.stage}'s estimate was agreed as {copy.get('minutes')} min / "
+                f"{copy.get('usd')} usd on the basis {copy.get('basis')!r}; a different figure or "
+                f"basis is a correction, agreed through `estimate-correct`, not a rewrite")
+        return
+    estimate.author = estimate.confirmer = writer
+
+
 def subplan_approval_problem(entry: dict, record: SubPlanRecord | None, *,
                              child_way: str | None = None) -> str | None:
     """Why the user's approval in `entry` does not cover the live `record`, or None when it does.
@@ -380,14 +516,33 @@ def frame_push_position(state, stage_index: int) -> int | None:
     return None
 
 
-def record_carried_by(state, doc) -> None:
+def _parent_copy(state, stage_index: int, level: int | None, store_) -> dict:
+    """The parent-side copy the record of `stage_index` is guarded against: this session's own
+    for a frame (it ordered the stage), the linked parent's for a child contour."""
+    if level is not None:
+        return estimate_copy(state, stage_index, level)
+    link = state.parent_link or {}
+    if store_ is None or not link.get("parent_session"):
+        return {}
+    try:
+        parent = store_.load(link["parent_session"])
+    except Exception:
+        return {}
+    return estimate_copy(parent, link.get("stage_index", stage_index))
+
+
+def record_carried_by(state, doc, store_=None) -> None:
     """Store the record a submitted plan carries, with the place it was built: this session,
     and, when the plan runs in a pushed frame, the interval that opens at the push. A plan
-    carrying no record stores nothing."""
+    carrying no record stores nothing. The estimate it carries passes `confirm_estimate`; a
+    refusal is raised as `SubPlanError` before anything is stored."""
     record = doc.meta.sub_plan
     if record is None or record.stage <= 0:
         return
     level = len(state.plan_stack) - 1 if state.plan_stack else None
+    confirm_estimate(record, state.session_id, _parent_copy(state, record.stage, level, store_))
+    if level is not None and record.estimate is not None:
+        write_confirmed_copy(state, record.stage, record.estimate, level)
     pushed = frame_push_position(state, record.stage) if state.plan_stack else None
     previous = state.sub_plan_records.get(record_key(record.stage, level)) or {}
     place = previous.get("building_place")

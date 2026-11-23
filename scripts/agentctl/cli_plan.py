@@ -848,7 +848,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             scope: pr for scope, pr in state.plan_stage_reviews.items() if _still_covers(pr)
         }
     _register_plan_assumptions(state, doc, plan_path)
-    sub_plan.record_carried_by(state, doc)
+    try:
+        sub_plan.record_carried_by(state, doc, store)
+    except sub_plan.SubPlanError as exc:
+        return Directive(False, state.node, "fix_plan", f"the sub-plan's estimate is refused: {exc}",
+                         data={"problems": [str(exc)]})
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting,
               plan_sha256=_submitted_plan_sha256)

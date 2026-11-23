@@ -1449,9 +1449,9 @@ def _sub_plan_estimate_violations(record, prefix: str) -> list[str]:
     estimate = record.estimate
     if estimate is None or (estimate.minutes is None and estimate.usd is None):
         return [f"{prefix} has no estimate (minutes or usd)"]
-    missing = [role for role, who in (("author", estimate.author),
-                                      ("confirmer", estimate.confirmer)) if not who.strip()]
-    return [f"{prefix}'s estimate names no {role}" for role in missing]
+    if not estimate.basis.strip():
+        return [f"{prefix}'s estimate states no basis: say what the figure rests on"]
+    return []
 
 
 def _sub_plan_compared_violations(record, prefix: str, ctx: StageOrderContext) -> list[str]:

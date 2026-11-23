@@ -311,7 +311,8 @@ def test_presentation_shows_subplans_estimates_and_decided_later_stages(
         store, venued_fixtures_dir, tmp_path):
     state = _submitted(store, venued_fixtures_dir)
     record = _rec(1, dirs=(("/work/x", "write"),))
-    record.estimate = sub_plan.Estimate(minutes=90, usd=3.0, author="executor", confirmer="parent")
+    record.estimate = sub_plan.Estimate(minutes=90, usd=3.0, author="executor", confirmer="parent",
+                                        basis="two files")
     sub_plan.store(state, record, level=0)
     doc = load_plan(_new_form_plan(venued_fixtures_dir, tmp_path, lazy=(2,)))
     text = render_mod.render_subplans(doc, state, store)
@@ -335,7 +336,8 @@ def _three_stages(stages, *, lazy, small):
 
 def _level_record(stage, minutes, allow):
     record = _rec(stage, allow=allow)
-    record.estimate = sub_plan.Estimate(minutes=minutes, usd=minutes / 10, author="a", confirmer="b")
+    record.estimate = sub_plan.Estimate(minutes=minutes, usd=minutes / 10, author="a", confirmer="b",
+                                        basis="sized by the test")
     return record
 
 
@@ -592,7 +594,8 @@ def test_restamp_follows_an_edit_that_leaves_the_resource_request_alone(
     assert _dispatch(store).action == "execute_in_thread"
 
     estimated = _rec(1, method="split it differently")
-    estimated.estimate = sub_plan.Estimate(minutes=400, usd=9.0, author="a", confirmer="b")
+    estimated.estimate = sub_plan.Estimate(minutes=400, usd=9.0, author="a", confirmer="b",
+                                           basis="sized by the test")
     _put(store, estimated)
     assert _dispatch(store).action == "execute_in_thread"
 
@@ -648,7 +651,7 @@ def _subplan_table(method="split the module", **approvals) -> str:
     lines += [f'{field} = "{value}"' for field, value in approvals.items()]
     lines += ["[[meta.sub_plan.resource_request]]", "stage = 1", 'allow = ["Edit"]',
               "[meta.sub_plan.estimate]", "minutes = 40", "usd = 2.0",
-              'author = "executor"', 'confirmer = "parent"',
+              'basis = "one module split and a suite run"',
               "[[meta.compared_plans.entries]]", 'ref = "plan-a"', 'departure = "no migration"']
     return "\n".join(lines) + "\n"
 
@@ -772,7 +775,8 @@ def test_subplan_digest_same_for_both_carriers(contour, tmp_path):
 
     in_a_frame = sub_plan.SubPlanRecord.from_dict(through_the_link.to_dict())
     in_a_frame.building_place = sub_plan.BuildingPlace(session="root", pushed=3, popped=9)
-    in_a_frame.estimate = sub_plan.Estimate(minutes=5, usd=1.0, author="a", confirmer="b")
+    in_a_frame.estimate = sub_plan.Estimate(minutes=5, usd=1.0, author="a", confirmer="b",
+                                            basis="sized by the test")
     _put(store, in_a_frame, PARENT)
     assert sub_plan.read(store.load(PARENT), 1, store).building_place.session == "root"
     assert sub_plan.approval_digest(in_a_frame) == approved
@@ -1876,7 +1880,8 @@ def test_resource_request_edit_voids_parent_approval(store, venued_fixtures_dir,
     assert _start_blockers(store) == []
 
     same_request = _rec(1, allow=("Edit", "Read"))
-    same_request.estimate = sub_plan.Estimate(minutes=99, usd=9.0, author="a", confirmer="b")
+    same_request.estimate = sub_plan.Estimate(minutes=99, usd=9.0, author="a", confirmer="b",
+                                              basis="sized by the test")
     _put(store, same_request)
     assert _start_blockers(store) == []
 
