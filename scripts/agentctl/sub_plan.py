@@ -314,8 +314,10 @@ def write_user_approval(state, stage_index: int, record: SubPlanRecord) -> dict:
 def write_presented_estimate(state, stage_index: int, estimate: Estimate | None) -> None:
     """Record the estimate of the stage as it stood when a presentation showed it to the user: the
     estimate's own digest (a record's estimate is outside the sub-plan's approval digest), which
-    every act that agrees the stage's first figure is checked against (`shown_estimate`)."""
+    every act that agrees the stage's first figure is checked against (`shown_estimate`). A
+    presentation that showed no estimate clears the digest of an earlier one."""
     if estimate is None:
+        state.stage_approvals.get(approval_key(state, stage_index), {}).pop("presented_estimate", None)
         return
     state.stage_approvals.setdefault(approval_key(state, stage_index), {})[
         "presented_estimate"] = estimate_digest(estimate)
@@ -543,10 +545,22 @@ _METHOD_REVIEW_PASSING = ("pass", "override")
 
 
 def method_review_recorded(record: SubPlanRecord | None) -> bool:
-    """Whether the record carries a method review that did not ask for a revision."""
-    return record is not None and any(
+    """Whether the record carries a method review that did not ask for a revision and was given
+    for the record as it stands: a review bound to another digest judged a method since rewritten.
+    An estimate correction is not a rewrite (`APPROVAL_EXCLUDED`)."""
+    if record is None:
+        return False
+    bound = approval_digest(record)
+    return any(
         review.get("kind") == METHOD_REVIEW_KIND and review.get("verdict") in _METHOD_REVIEW_PASSING
+        and review.get("bound_to") == bound
         for review in record.reviews)
+
+
+def _unless_stale_method_review(reviews: list[dict], record: SubPlanRecord) -> list[dict]:
+    """`reviews` without the method reviews given for a digest other than the record's own."""
+    bound = approval_digest(record)
+    return [r for r in reviews if r.get("kind") != METHOD_REVIEW_KIND or r.get("bound_to") == bound]
 
 
 def is_decided_later(stage) -> bool:
@@ -570,7 +584,7 @@ def store(state, record: SubPlanRecord, level: int | None = None) -> None:
     previous = state.sub_plan_records.get(key)
     if previous:
         kept = SubPlanRecord.from_dict(previous)
-        record.reviews = record.reviews or kept.reviews
+        record.reviews = record.reviews or _unless_stale_method_review(kept.reviews, record)
         record.objections = record.objections or kept.objections
         record.building_place = record.building_place or kept.building_place
     state.sub_plan_records[key] = record.to_dict()
@@ -618,7 +632,8 @@ def record_carried_by(state, doc, store_=None) -> None:
     confirm_estimate(record, state.session_id, _parent_copy(state, record.stage, level, store_))
     previous_reviews = (state.sub_plan_records.get(record_key(record.stage, level)) or {}).get(
         "reviews") or []
-    engine = [r for r in previous_reviews if r.get("kind") == METHOD_REVIEW_KIND]
+    engine = [r for r in _unless_stale_method_review(previous_reviews, record)
+              if r.get("kind") == METHOD_REVIEW_KIND]
     record.reviews = engine + (record.reviews
                                or [r for r in previous_reviews if r.get("kind") != METHOD_REVIEW_KIND])
     if level is not None and record.estimate is not None:

@@ -343,6 +343,8 @@ def _case_changed_after_user_sub_plan_approval(store, vfd, tmp_path):
     _put(store, changed)
     refused = _agent_approves_stage_resources(store)
     assert refused.ok is False and "changed since the sub-plan the user approved" in refused.detail
+    assert "present-plan --kind subplan --stage 1" in refused.detail and "approve-subplan" in refused.detail
+    assert "--kind essence" not in refused.detail
     assert sub_plan.estimate_copy(store.load(SESSION), 1) == {}
 
 
@@ -360,7 +362,8 @@ def _case_decided_later_first_figure_past_margin_held(store, vfd, tmp_path):
     assert sub_plan.agreed_figure(store.load(SESSION), 1) is None
     refused = _dispatch(store, SESSION, Spawns())
     command = f"estimate-correct --stage 1 {sub_plan.figure_args(copy['held'])} --basis"
-    _refused(refused, "held past the allowed overrun", command, "--by <their name>")
+    _refused(refused, "held past the allowed overrun", command, "--by <their name>",
+             estimate_correction_marker(1, 400.0, 1.0))
     assert command in held.detail
 
 
@@ -446,6 +449,7 @@ def _case_held_figure_decided_by_the_user_reaches_dispatch(store, vfd, tmp_path)
     state = store.load(SESSION)
     copy = sub_plan.estimate_copy(state, 1)
     assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
+    assert copy["author"] == "executor" != SESSION
     assert sub_plan.user_figure(state, 1) == {"minutes": 400.0, "usd": 1.0}
     assert _start_blockers(store) == []
     assert _dispatch(store, SESSION, Spawns()).ok is not False
@@ -471,7 +475,10 @@ def _case_estimate_changed_after_the_presentation_refused_by_resource_approval_o
     _put(store, _record(31, 1.0, "resized after it was shown"))
     refused = cli_approval.cmd_approve_resources(ns(session=SESSION, stage=1, by="fedor"), store=store)
     assert refused.ok is False and refused.data == {"estimate": "refused"}
-    assert "changed since the sub-plan the user approved" in refused.detail
+    assert "changed since the plan the user was shown" in refused.detail
+    assert "present-plan --kind essence" in refused.detail
+    assert "then run `approve-resources --stage 1 --by fedor` again" in refused.detail
+    assert "approve-subplan" not in refused.detail
     assert sub_plan.estimate_copy(store.load(SESSION), 1) == {}
     assert not sub_plan.approval_entry(store.load(SESSION), 1).get("parent_resource_approval")
     _present(store, tmp_path)
@@ -489,7 +496,28 @@ def _case_estimate_changed_after_the_presentation_refused_by_resource_approval_o
     _put(store, _record(31, 1.0, "resized after it was shown"))
     refused = _agent_approves_stage_resources(store)
     assert refused.ok is False and refused.data == {"estimate": "refused"}
+    assert "changed since the plan the user was shown" in refused.detail
+    assert "then run `approve-stage-resources --stage 1` again" in refused.detail
+    assert "approve-subplan" not in refused.detail
     assert sub_plan.estimate_copy(store.load(SESSION), 1) == {}
+
+
+def _case_a_childs_estimate_changed_after_the_presentation_names_the_report_to_its_parent(
+        store, vfd, tmp_path):
+    _stage_one(store, vfd, lazy=True)
+    state = store.load(SESSION)
+    state.parent_link = {"parent_session": "above", "stage_index": 3}
+    store.save(state)
+    shown = _rec()
+    _put(store, _record(31, 1.0, "resized after it was shown"))
+    state = store.load(SESSION)
+    outcome, text = cli_approval._agree_first_figure(
+        state, state.stage(1), sub_plan.read(state, 1, store), authority=sub_plan.AUTHORITY_PARENT,
+        approved_digest=sub_plan.estimate_digest(shown.estimate))
+    assert outcome == "refused"
+    assert "changed since the estimate the user approved" in text
+    assert gates.CHILD_ESCALATES_THE_ESTIMATE in text
+    assert "present-plan" not in text and "approve-subplan" not in text
 
 
 def _case_estimate_changed_after_the_presentation_refused_by_plan_approval(store, vfd, tmp_path):
@@ -500,7 +528,8 @@ def _case_estimate_changed_after_the_presentation_refused_by_plan_approval(store
     state = store.load(SESSION)
     assert sub_plan.estimate_copy(state, 1) == {}
     [event] = [h for h in state.history if h.get("event") == "estimate_not_agreed"]
-    assert event["outcome"] == "refused" and "changed since" in event["reason"]
+    assert event["outcome"] == "refused" and "changed since the plan the user was shown" in event["reason"]
+    assert "present-plan --kind essence" in event["reason"] and "then run" not in event["reason"]
 
 
 _CASES = {
@@ -517,6 +546,8 @@ _CASES = {
         _case_estimate_changed_after_the_presentation_refused_by_resource_approval_of_the_user,
     "estimate-changed-after-the-presentation-refused-at-the-agents-resource-approval":
         _case_estimate_changed_after_the_presentation_refused_by_resource_approval_of_the_agent,
+    "child-estimate-changed-after-the-presentation-names-the-report-to-its-parent":
+        _case_a_childs_estimate_changed_after_the_presentation_names_the_report_to_its_parent,
     "decided-later-first-figure-past-margin-held": _case_decided_later_first_figure_past_margin_held,
     "decided-later-agreed-by-the-agent-sets-the-line-at-the-tier-price":
         _case_decided_later_agreed_by_the_agent_sets_the_line_at_the_tier_price,
@@ -566,6 +597,20 @@ def test_plan_approval_agrees_the_figures_then_freezes_the_composed_task_estimat
 
     second = cli_approval._agree_figures_and_freeze_task_estimate(state, store, dict(armed))
     assert second == first
+
+
+def test_an_estimate_correction_leaves_the_method_review_of_the_record_standing(
+        store, venued_fixtures_dir):
+    """The method review is bound to what the executor authored; the figure is outside it, so the
+    correction `estimate-correct` writes into the record does not ask for the review again."""
+    _stage_one(store, venued_fixtures_dir)
+    _plan_approval_sets_resources(store)
+    assert sub_plan.method_review_recorded(sub_plan.read(store.load(SESSION), 1, store))
+    corrected = _estimate_correct(store, minutes=35, usd=1.0, basis="the work grew")
+    assert corrected.ok, corrected
+    record = sub_plan.read(store.load(SESSION), 1, store)
+    assert record.estimate.minutes == 35.0
+    assert sub_plan.method_review_recorded(record) and len(record.reviews) == 1
 
 
 def test_decided_later_stage_without_a_figure_is_skipped_by_plan_approval(store, venued_fixtures_dir):
@@ -898,6 +943,146 @@ def test_presentation_shows_the_composed_total_and_marks_decided_later_stages_pr
     assert render._figure_text({"minutes": tier_only["minutes"], "usd": tier_only["usd"]}) in shown
     [line] = render._subplan_stage_lines([later.stage(1)], lambda index: None, {}, "")
     assert "decided later — provisional estimate: its tier" in line
+
+
+def test_a_plan_presented_again_after_its_first_approval_shows_the_frozen_total_not_the_stage_figure_twice(
+        store, venued_fixtures_dir):
+    """The figure the plan approval froze already holds the stage's agreed figure (`frozen_in`):
+    the total the presentation shows over the same figures is that frozen figure, as the engine
+    composes it, and not the frozen figure plus the stage's figure less its tier price a second time."""
+    from agentctl import render
+
+    _stage_one(store, venued_fixtures_dir)
+    state = store.load(SESSION)
+    first = cli_approval._agree_figures_and_freeze_task_estimate(
+        state, store, {effort.SCALE_SPEND: 4.0, effort.SCALE_WALL_CLOCK: 40.0})
+    state.order_effort_frozen = dict(first)
+    store.save(state)
+    state = store.load(SESSION)
+    tier = effort.tier_figure(state.stage(1), THR)[effort_segments.SCALE_MINUTES]
+    assert 30.0 != tier, "the stage's figure must differ from its tier price for a double count to show"
+
+    composed = effort.composed_estimate(state, sub_plan.copies_of(state), THR)["total"]
+    assert composed[effort_segments.SCALE_MINUTES] == first[effort.SCALE_WALL_CLOCK]
+    shown = render._composed_total_text(state, lambda index: sub_plan.read(state, index, store))
+    assert render._figure_text({"minutes": composed[effort_segments.SCALE_MINUTES],
+                                "usd": composed[effort_segments.SCALE_USD]}) in shown
+
+
+def _plan_naming_customer(base_dir, tmp_path, customer, *, lazy=(1,)) -> str:
+    """The new-form two-stage plan (stage 1 decided later unless `lazy` says otherwise) with an
+    order naming `customer`; `customer=None` leaves the plan without an order."""
+    from conftest import SUBSTANTIVE_ORDER
+
+    path = base._new_form_plan(base_dir, tmp_path, in_thread=(1, 2), lazy=lazy)
+    if customer is None:
+        return path
+    text = Path(path).read_text(encoding="utf-8")
+    order = SUBSTANTIVE_ORDER.replace('customer_id = "user"', f'customer_id = "{customer}"')
+    head, sep, tail = text.partition("\n[[stage]]")
+    Path(path).write_text(head + "\n" + order + sep + tail, encoding="utf-8")
+    return path
+
+
+def _approve_past_the_margin(store, base_dir, tmp_path, customer, by, *, monkeypatch=None):
+    """Approve a plan whose decided-later stage 1 carries a figure far past its tier price
+    (the allowed overrun the agent's agreement is measured against), as `by`."""
+    base._planning(store)
+    plan = _plan_naming_customer(base_dir, tmp_path, customer)
+    assert cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store).ok
+    state = store.load(SESSION)
+    sub_plan.store(state, _record(400, 1.0, "the whole module is rewritten"), level=0)
+    store.save(state)
+    approved = cli.cmd_approve(ns(session=SESSION, by=by), store=store)
+    assert approved.ok, approved
+    return store.load(SESSION)
+
+
+def test_the_customers_approval_agrees_a_figure_past_the_margin_as_the_users_own_act(
+        store, venued_fixtures_dir, tmp_path):
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", "user")
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
+    assert sub_plan.user_figure(state, 1) == _tier_price(state)
+
+
+def test_a_reviewers_approval_of_an_order_naming_another_customer_agrees_as_the_agent_does(
+        store, venued_fixtures_dir, tmp_path):
+    """`approve --by <reviewer>` of a plan whose order names a customer is not the customer's act:
+    its figure past the allowed overrun is held for the user, the user line stays unset, and
+    nothing is agreed with the user's authority."""
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", "reviewer")
+    copy = sub_plan.estimate_copy(state, 1)
+    assert not copy.get("agreed") and copy["held"]["minutes"] == 400.0
+    assert sub_plan.user_figure(state, 1) is None
+    assert copy.get("authority") != sub_plan.AUTHORITY_USER
+
+
+def test_a_reviewers_approval_inside_the_margin_is_agreed_with_the_agents_authority(
+        store, venued_fixtures_dir, tmp_path):
+    base._planning(store)
+    plan = _plan_naming_customer(venued_fixtures_dir, tmp_path, "user")
+    assert cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store).ok
+    state = store.load(SESSION)
+    sub_plan.store(state, _record(12, 1.0, "a small module"), level=0)
+    store.save(state)
+    assert cli.cmd_approve(ns(session=SESSION, by="reviewer"), store=store).ok
+    copy = sub_plan.estimate_copy(store.load(SESSION), 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_AGENT
+
+
+def test_the_approval_of_an_order_that_names_no_customer_keeps_agreeing_as_the_user(
+        store, venued_fixtures_dir, tmp_path):
+    """A plan authored without `[meta.order]` has no customer to tell the user from: any
+    non-agent approver is the user, as before the order existed."""
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, None, "fedor")
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
+
+
+def test_a_mandate_approval_agrees_as_the_users_standing_authority(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    from agentctl import mandate as mandate_rules
+
+    monkeypatch.setattr(cli_approval, "_mandate_basis_problems", lambda *a, **k: [])
+    by = mandate_rules.mandate_approver("cycle-1")
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", by)
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER
+
+
+@pytest.mark.parametrize("by_agent, by_user, linked, expected", [
+    (False, None, False, sub_plan.AUTHORITY_USER),
+    (False, True, False, sub_plan.AUTHORITY_USER),
+    (False, False, False, sub_plan.AUTHORITY_AGENT),
+    (False, False, True, sub_plan.AUTHORITY_PARENT),
+    (True, None, False, sub_plan.AUTHORITY_AGENT),
+    (True, None, True, sub_plan.AUTHORITY_PARENT),
+], ids=["default-user", "explicit-user", "non-customer", "non-customer-in-a-child",
+        "agent", "agent-in-a-child"])
+def test_the_stage_approvals_carry_the_authority_of_who_acts(
+        store, venued_fixtures_dir, by_agent, by_user, linked, expected):
+    """`_write_stage_approvals` (`approve`, `approve-stage-resources`, `approve-resources`) writes
+    the first figure of a decided-later stage with the acting party's authority; only the user's
+    own act (explicit or by default for a non-agent) reaches `AUTHORITY_USER`."""
+    _stage_one(store, venued_fixtures_dir, lazy=True)
+    state = store.load(SESSION)
+    if linked:
+        state.parent_link = {"parent_session": "above", "stage_index": 3}
+    sub_plan.store(state, _record(12, 1.0, "a small module"), level=0)
+    cli_approval._write_stage_approvals(state, store, by_agent=by_agent, by_user=by_user)
+    assert sub_plan.estimate_copy(state, 1)["authority"] == expected
+
+
+def test_a_presentation_that_showed_no_estimate_clears_the_digest_of_an_earlier_one():
+    state = _frame_session()
+    sub_plan.write_presented_estimate(state, 1, _estimate(30, 1.0, "first"))
+    entry = sub_plan.approval_entry(state, 1)
+    assert entry["presented_estimate"] == sub_plan.estimate_digest(_estimate(30, 1.0, "first"))
+    sub_plan.write_presented_estimate(state, 1, None)
+    assert "presented_estimate" not in sub_plan.approval_entry(state, 1)
+    sub_plan.write_presented_estimate(state, 2, None)
+    assert sub_plan.approval_entry(state, 2) == {}
 
 
 def test_estimate_correct_is_the_agents_verb_and_not_the_users():

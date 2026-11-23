@@ -117,13 +117,20 @@ def _described(store, sid=SESSION, *, lazy=False, minutes=None, in_thread=True, 
 
 
 def _rec(stage=1, allow=("Edit",), method="split the module", dirs=()):
-    return sub_plan.SubPlanRecord(
+    record = sub_plan.SubPlanRecord(
         stage=stage, means="Edit", method=method, procedure="1. read 2. edit", conditions="- c",
         estimate=sub_plan.Estimate(minutes=30, usd=1.0, author="executor", confirmer="executor",
                                    basis="sized by the test"),
-        reviews=[{"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "reviewer"}],
         resource_request=[{"stage": stage, "allow": list(allow),
                            "add_dirs": [list(d) for d in dirs]}])
+    return _method_reviewed(record)
+
+
+def _method_reviewed(record):
+    """`record` with the thinker's passing review bound to the sub-plan as it stands."""
+    record.reviews = [{"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "reviewer",
+                       "bound_to": sub_plan.approval_digest(record)}]
+    return record
 
 
 def _put(store, record, sid=SESSION):
@@ -734,7 +741,7 @@ class Contour:
     def submit(self, text: str | None = None, *, reviewed: bool = True) -> dict:
         """Link the child and run its start, classify, plan and `submit-plan`; the record it
         carries is then reviewed (`reviewed`) the way a passing plan-review writes it."""
-        plan = self.write(text or self.text())
+        plan = self.plan = self.write(text or self.text())
         self.child.link(grants=self.tca._covering_grants(plan) + [{"rule": "Edit"}])
         self.handoff = os.environ[norm_handoff.NORM_HANDOFF_ENV]
         self.mp.delenv(norm_handoff.NORM_HANDOFF_ENV)

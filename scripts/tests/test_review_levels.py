@@ -123,9 +123,18 @@ def test_review_record_through_subplan_field_lifts_blocker(
     _put(store, other_kind)
     assert any("no method review" in line for line in _unplanned(store, plan))
 
-    passed = _record_without_review()
-    passed.reviews = [{"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "r"}]
-    _put(store, passed)
+    unbound = _record_without_review()
+    unbound.reviews = [{"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "r"}]
+    _put(store, unbound)
+    assert any("no method review" in line for line in _unplanned(store, plan))
+
+    stale = _record_without_review()
+    stale.reviews = [{"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "r",
+                      "bound_to": "0" * 64}]
+    _put(store, stale)
+    assert any("no method review" in line for line in _unplanned(store, plan))
+
+    _put(store, base._method_reviewed(_record_without_review()))
     assert not any("method review" in line for line in _unplanned(store, plan))
 
 
@@ -195,7 +204,34 @@ def test_a_record_cannot_carry_the_method_review_it_is_judged_by():
     rewritten.method = "a rewritten method"
     sub_plan.record_carried_by(state, doc_of(rewritten), Carrier())
     stored = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"])
-    assert stored.method == "a rewritten method" and sub_plan.method_review_recorded(stored)
+    assert stored.method == "a rewritten method" and not sub_plan.method_review_recorded(stored)
+    assert stored.reviews == []
+
+
+@pytest.mark.parametrize("rewrite, keeps", [
+    (lambda r: setattr(r, "method", "a rewritten method"), False),
+    (lambda r: setattr(r, "procedure", "1. a rewritten procedure"), False),
+    (lambda r: setattr(r, "conditions", "- a rewritten condition"), False),
+    (lambda r: setattr(r, "means", "Bash"), False),
+    (lambda r: r.resource_request.append({"stage": 1, "allow": ["Read"], "add_dirs": []}), False),
+    (lambda r: setattr(r, "estimate", sub_plan.Estimate(minutes=99, usd=9.0, author="a",
+                                                         confirmer="a", basis="sized again")), True),
+    (lambda r: setattr(r, "building_place", sub_plan.BuildingPlace(session="x", pushed=1, popped=2)), True),
+], ids=["method", "procedure", "conditions", "means", "resource-request", "estimate", "building-place"])
+def test_the_store_keeps_the_method_review_through_a_rewrite_only_of_what_the_review_did_not_judge(
+        rewrite, keeps):
+    """`store` writes a record that carries no review over the stored one: the engine's review
+    stays only when the authored parts it is bound to are unchanged (the estimate and the place
+    the sub-plan was built in are not among them)."""
+    state, record, doc_of = _framed_record()
+    assert sub_plan.record_method_review(
+        state, None, doc_of(record), verdict="pass", reviewer="thinker", plan_sha256="a" * 64, at=5.0)
+    rewritten = _record_without_review()
+    rewrite(rewritten)
+    sub_plan.store(state, rewritten, 0)
+    stored = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"])
+    assert sub_plan.method_review_recorded(stored) is keeps
+    assert bool(stored.reviews) is keeps
 
 
 def test_missing_method_review_blocks_presentation_of_new_form_plan_but_not_decided_later_or_old_form(
@@ -230,8 +266,9 @@ def test_decided_later_stage_without_method_review_refused_at_dispatch_until_rec
     assert not any("estimate" in line for line in blockers), blockers
 
     state = store.load(SESSION)
-    sub_plan.add_review(state, 1, {"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "r"},
-                        level=0)
+    bound = sub_plan.approval_digest(sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"]))
+    sub_plan.add_review(state, 1, {"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "r",
+                                   "bound_to": bound}, level=0)
     store.save(state)
     assert not any("method review" in line for line in _start_blockers(store))
 

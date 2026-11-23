@@ -110,7 +110,7 @@ from .state import plan_review_scope_stage_index as _plan_review_scope_stage_ind
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import PLAN_PRESENTATION_KIND_SUBPLAN as _PLAN_PRESENTATION_KIND_SUBPLAN
-from .state import subplan_receipt_path
+from .state import estimate_correction_marker, subplan_receipt_path
 from .state import Stage as _Stage
 from .state import asserts_landing
 from .state import is_settled, is_skipped
@@ -3420,6 +3420,18 @@ def subplan_presentation_blockers(state: SessionState, stage: int, live_digest: 
     return []
 
 
+#: The engine writes a stage's method review (`sub_plan.record_method_review`) when a thinker's
+#: pass of the sub-plan file is recorded as a whole-plan pass: `plan-review` of the file, or, for
+#: a sub-plan whose shape is reviewed pair by pair, `plan-review-compose` over its pairs. A
+#: linked child's channel runs both verbs.
+METHOD_REVIEW_WAY = (
+    "the thinker's pass of the sub-plan file gives it: `plan-review --verdict pass --reviewer "
+    "thinker --target <sub-plan file>`, or for a sub-plan reviewed pair by pair "
+    "`plan-review-topological.py --plan <sub-plan file>` then `plan-review-compose --target "
+    "<sub-plan file>` (the review is given for the sub-plan as it stands, so it is asked again "
+    "after the method, procedure, means or conditions change)")
+
+
 def unplanned_stage_blockers(state: SessionState, target_plan: str | None, *, store=None) -> list[str]:
     """A plan is not shown for approval while a stage above the line (`plan.stage_above_threshold`)
     has neither a sub-plan record nor the decided-later mark: the user would approve a stage
@@ -3459,8 +3471,7 @@ def unplanned_stage_blockers(state: SessionState, target_plan: str | None, *, st
         if not sub_plan.method_review_recorded(record):
             out.append(
                 f"stage {stage.index} is above the size line and its sub-plan has no method review "
-                f"recorded (a review record of kind `{sub_plan.METHOD_REVIEW_KIND}` in the "
-                f"sub-plan's `reviews`) before the plan is presented")
+                f"for the sub-plan as it stands before the plan is presented; {METHOD_REVIEW_WAY}")
     return out
 
 
@@ -3565,7 +3576,8 @@ def estimate_dispatch_blockers(state: SessionState, stage, record, *,
         way = (CHILD_ESCALATES_THE_ESTIMATE if state.parent_link
                else f"the user decides it: `estimate-correct --stage {stage.index} "
                     f"{sub_plan.figure_args(held)} --basis '<why>' --by <their name>` on their "
-                    f"answer choosing the option marked for that figure")
+                    f"answer choosing the option marked "
+                    f"{estimate_correction_marker(stage.index, held.get('minutes'), held.get('usd'))}")
         return [f"stage {stage.index} cannot start: its figure {held.get('minutes')} min / "
                 f"{held.get('usd')} usd is held past the allowed overrun and not decided; {way}"]
     if not sub_plan.is_decided_later(stage):
@@ -3583,8 +3595,7 @@ def estimate_dispatch_blockers(state: SessionState, stage, record, *,
                    f"confirmed but not agreed; {way}")
     if record is None or not sub_plan.method_review_recorded(record):
         out.append(f"stage {stage.index} is decided later and cannot start: no method review of "
-                   f"its sub-plan is recorded (a review record of kind "
-                   f"`{sub_plan.METHOD_REVIEW_KIND}` in the sub-plan's `reviews`)")
+                   f"its sub-plan as it stands is recorded; {METHOD_REVIEW_WAY}")
     return out
 
 

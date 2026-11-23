@@ -2173,7 +2173,8 @@ def _composed_total_text(state, record_of) -> str:
         record = record_of(stage.index)
         shown = record.estimate if record is not None else None
         if shown is not None and shown.basis.strip():
-            copies[stage.index] = {"agreed": True, "minutes": shown.minutes, "usd": shown.usd}
+            copies[stage.index] = {"agreed": True, "minutes": shown.minutes, "usd": shown.usd,
+                                   "frozen_in": sub_plan.estimate_copy(state, stage.index).get("frozen_in")}
     total = effort.composed_estimate(state, copies, thr)["total"]
     later = [str(s.index) for s in state.stages if s.place is not None and sub_plan.is_decided_later(s)]
     provisional = (f"; stage {', '.join(later)} decided later and provisional at its tier price until "

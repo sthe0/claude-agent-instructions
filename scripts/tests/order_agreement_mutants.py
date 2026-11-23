@@ -517,7 +517,46 @@ def _user_line_on_corrected_estimate(mp):
                lambda state, stage_index: sub_plan.agreed_figure(state, stage_index), raising=True)
 
 
+def _method_review_unbound(mp):
+    """A passing method review counts whatever record it was given for."""
+    from agentctl import sub_plan
+
+    def recorded(record):
+        return record is not None and any(
+            r.get("kind") == sub_plan.METHOD_REVIEW_KIND and r.get("verdict") in ("pass", "override")
+            for r in record.reviews)
+    mp.setattr("agentctl.sub_plan.method_review_recorded", recorded, raising=True)
+
+
+def _composition_writes_no_method_review(mp):
+    """The composition of pair reviews into a whole-plan pass writes no method review."""
+    from agentctl import cli_review, sub_plan
+    real = sub_plan.record_method_review
+    mp.setattr("agentctl.sub_plan.record_method_review",
+               lambda *a, **k: False if k.get("reviewer") == cli_review.TOPOLOGICAL_COMPOSITION_REVIEWER
+               else real(*a, **k), raising=True)
+
+
+def _non_customer_approves_as_user(mp):
+    """`approve` carries the user's authority for any approver but the agent."""
+    from agentctl import cli_approval
+    real = cli_approval._write_stage_approvals
+    mp.setattr("agentctl.cli_approval._write_stage_approvals",
+               lambda state, store, *, by_agent, by_user=None: real(state, store, by_agent=by_agent),
+               raising=True)
+
+
+def _first_figure_refusal_one_text(mp):
+    """A first figure refused for a changed estimate always names the same way on."""
+    mp.setattr("agentctl.cli_approval._estimate_changed_text",
+               lambda state, stage, act: "the estimate changed", raising=True)
+
+
 MUTANTS = {
+    "method_review_unbound": _method_review_unbound,
+    "composition_writes_no_method_review": _composition_writes_no_method_review,
+    "non_customer_approves_as_user": _non_customer_approves_as_user,
+    "first_figure_refusal_one_text": _first_figure_refusal_one_text,
     "stage_budget_tier_only": _stage_budget_tier_only,
     "user_line_on_corrected_estimate": _user_line_on_corrected_estimate,
     "decided_later_dispatched": _decided_later_dispatched,

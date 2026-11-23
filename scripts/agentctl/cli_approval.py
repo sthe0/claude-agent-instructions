@@ -779,11 +779,14 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # a non-empty customer_id: an order-less plan (customer_id == "") can
     # never casefold-match any --by, so this is a no-op for every plan
     # authored before [meta.order] existed.
+    by_customer = False
+    customer_id = ""
     if _approved_doc is not None:
         order = _approved_doc.meta.order
         customer_id = order.customer_id if order is not None else ""
-        if (customer_id and not mandate_basis
-                and args.by.strip().casefold() == customer_id.casefold()):
+        by_customer = bool(customer_id and not mandate_basis
+                           and args.by.strip().casefold() == customer_id.casefold())
+        if by_customer:
             order_key = order_digest(_approved_doc)
             view = plan_resources.compute_boundary_view(
                 _approved_doc, order_key,
@@ -826,7 +829,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # A mandate approval is the user's standing authority for the item its cycle took (the
     # mandate checks above bound the plan), so it records the approved set a child of the
     # stage is later checked against, as the user's own approval does; the agent's does not.
-    _write_stage_approvals(state, store, by_agent=by_agent)
+    _write_stage_approvals(
+        state, store, by_agent=by_agent,
+        by_user=by_customer or bool(mandate_basis) or (not customer_id and not by_agent))
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -1106,8 +1111,25 @@ def _first_figure_line(stage: Stage, figure: dict, thr: Thresholds) -> dict:
             "usd": provisional[effort_segments.SCALE_USD]}
 
 
+def _estimate_changed_text(state: SessionState, stage: Stage, act: str) -> str:
+    """Why an agreement of the stage's first figure is refused because its estimate is not the one
+    the user was shown, and the way on from the node this session is in: a decided-later stage was
+    shown inside its sub-plan, any other stage inside the plan's essence, and a linked child runs
+    neither presentation. `act` is the refused verb to run again, when it is not `approve`."""
+    head = f"stage {stage.index}'s estimate changed since "
+    if state.parent_link:
+        return (f"{head}the estimate the user approved: "
+                f"{gates.CHILD_ESCALATES_THE_ESTIMATE}")
+    if sub_plan.is_decided_later(stage):
+        return (f"{head}the sub-plan the user approved: present it again (present-plan --kind "
+                f"subplan --stage {stage.index}) and have the user approve-subplan")
+    again = f", then run `{act}` again" if act else ""
+    return (f"{head}the plan the user was shown: present the plan again (present-plan --kind "
+            f"essence) and have the user approve it ({gates.user_plan_approval_way(state)}){again}")
+
+
 def _agree_first_figure(state: SessionState, stage: Stage, record, *, authority: str,
-                        approved_digest: str | None = None) -> tuple[str, str]:
+                        approved_digest: str | None = None, act: str = "") -> tuple[str, str]:
     """Agree the figure of the stage's record as it stands, as the stage's first figure.
     Returns `(outcome, text)`: `agreed`, `kept` (a figure is already agreed: the record guard keeps
     the record equal to it), `held` (past the allowed overrun, kept unapplied for the user),
@@ -1127,9 +1149,7 @@ def _agree_first_figure(state: SessionState, stage: Stage, record, *, authority:
     if sub_plan.estimate_copy(state, stage.index).get("agreed"):
         return "kept", ""
     if approved_digest is not None and approved_digest != sub_plan.estimate_digest(estimate):
-        return "refused", (f"stage {stage.index}'s estimate changed since the sub-plan the user "
-                           f"approved: present it again (present-plan --kind subplan --stage "
-                           f"{stage.index}) and have the user approve-subplan")
+        return "refused", _estimate_changed_text(state, stage, act)
     thr = Thresholds()
     figure = sub_plan.figure_of(estimate.minutes, estimate.usd)
     decided_later = sub_plan.is_decided_later(stage)
@@ -1164,15 +1184,23 @@ def _agree_tier_price(state: SessionState, stage: Stage) -> None:
                         user_approved=price)
 
 
-def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: bool) -> None:
+def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: bool,
+                           by_user: bool | None = None) -> None:
     """The parent's approval of the resources and permissions of each stage above the size line,
     written by `approve`: the user's approval writes it for every such stage and sets the
     approved set; the agent's writes it only for a stage whose request lies inside the bound
     (`_agent_approval_outside`), so where no set is on record at the root it writes it only for a
     request that names nothing. A decided-later stage is approved through its sub-plan
-    (approve-subplan), not here."""
+    (approve-subplan), not here.
+
+    The figures it agrees carry the authority of whoever acts. `by_user` says the act is the
+    user's own (the customer's `approve`, the mandate path, or any non-agent `approve` of an order
+    that names no customer, which has nobody else to tell the user from); it defaults to every
+    approver but the agent, and `approve` passes it explicitly so a non-customer `--by` of an
+    order that names a customer agrees as the agent (or the parent) does, inside the allowed
+    overrun."""
     thr = Thresholds()
-    authority = _acting_authority(state, by_user=not by_agent)
+    authority = _acting_authority(state, by_user=(not by_agent) if by_user is None else by_user)
     for stage in state.stages:
         if stage.place is None:
             continue
@@ -1309,7 +1337,8 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
                          + "; ".join(outside) + f" -- {way}", data={"outside": outside})
     outcome, text = _agree_first_figure(
         state, stage, record, authority=_acting_authority(state, by_user=False),
-        approved_digest=sub_plan.shown_estimate(state, stage))
+        approved_digest=sub_plan.shown_estimate(state, stage),
+        act=f"approve-stage-resources --stage {stage.index}")
     if outcome != "refused":
         sub_plan.write_parent_approval(state, stage.index, record.resource_request, widens_set=False)
     if outcome in ("held", "escalate", "refused"):
@@ -1362,7 +1391,8 @@ def cmd_approve_resources(args, *, store: StateStore, runner: Runner | None = No
                          f"shown: the plan's own approval ({gates.user_plan_approval_way(state)}) is the "
                          f"other way on")
     outcome, text = _agree_first_figure(state, stage, record, authority=sub_plan.AUTHORITY_USER,
-                                        approved_digest=sub_plan.shown_estimate(state, stage))
+                                        approved_digest=sub_plan.shown_estimate(state, stage),
+                                        act=f"approve-resources --stage {stage.index} --by {by}")
     if outcome != "refused":
         sub_plan.write_parent_approval(state, stage.index, record.resource_request)
     if outcome in ("held", "escalate", "refused"):
@@ -1460,6 +1490,7 @@ def cmd_estimate_correct(args, *, store: StateStore, runner: Runner | None = Non
         store.save(state)
         return Directive(False, state.node, "await_user_approval", text, data={"estimate": "held"})
     authority = _acting_authority(state, by_user=by_user)
+    author = state.session_id
     if copy.get("agreed"):
         sub_plan.add_correction(state, stage.index, {
             "from": sub_plan.figure_of(copy.get("minutes"), copy.get("usd")), "to": figure,
@@ -1469,8 +1500,10 @@ def cmd_estimate_correct(args, *, store: StateStore, runner: Runner | None = Non
     else:
         first_line = _first_figure_line(stage, figure, thr)
         user_line = figure if by_user else first_line
+        author = (record.estimate.author if record is not None and record.estimate is not None
+                  else "") or state.session_id
     sub_plan.agree_copy(
-        state, stage.index, **figure, basis=basis, author=state.session_id,
+        state, stage.index, **figure, basis=basis, author=author,
         agreer=state.session_id, authority=authority, user_approved=user_line)
     if answered_at is not None:
         sub_plan.consume_answer(state, stage.index, answered_at)
