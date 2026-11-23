@@ -1,0 +1,523 @@
+# Hook parity table of the Core layer: one row per hook that scripts/install-reminder-hooks.sh wires.
+#
+# Difficulty removed: on OpenCode a gate is lost silently unless something says, per wired hook, which
+# OpenCode mechanism takes it over and on which execution paths that mechanism was seen to refuse.
+# Class is computed, not declared: only PreToolUse and PermissionRequest can refuse a tool call.
+# Rules, row format and refresh: integrations/opencode/README.md; checker: scripts/hook-parity.py.
+#
+# The probe_paths / probe_mechanisms blocks below are the output of `hook-parity.py probe-header`
+# on the mechanisms record pin.toml names (run 20261123T144516Z, OpenCode 2.3.2); a test pins them
+# equal to that record. The record names mechanisms by Claude-style labels (PreToolUse = tool.execute.before,
+# PostToolUse = tool.execute.after, UserPromptSubmit = session.prompt, SessionStart = session.created,
+# SessionEnd = session.deleted, Stop = experimental.idle).
+
+[[probe_paths]]
+id = "root:shell"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:write"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:edit"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:read"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:glob"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:grep"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:webfetch"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "subagent:task"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:execute"
+refused_by = ["PreToolUse"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:execute-inner"
+refused_by = ["PreToolUse"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:skill"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "mcp:probesrv:touch"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "plugin-tool:probe_tool"
+refused_by = ["PreToolUse"]
+fired_by = ["PreToolUse", "PostToolUse"]
+
+[[probe_paths]]
+id = "child-run"
+refused_by = ["PreToolUse", "permission.evaluate"]
+
+[[probe_paths]]
+id = "root:question"
+refused_by = ["PreToolUse", "permission.evaluate"]
+fired_by = ["PreToolUse", "PostToolUse", "permission.evaluate"]
+
+[[probe_mechanisms]]
+mechanism = "PreToolUse"
+fired = true
+can_refuse = true
+
+[[probe_mechanisms]]
+mechanism = "PostToolUse"
+fired = true
+can_refuse = false
+
+[[probe_mechanisms]]
+mechanism = "UserPromptSubmit"
+fired = true
+can_refuse = true
+
+[[probe_mechanisms]]
+mechanism = "SessionStart"
+fired = true
+can_refuse = false
+
+[[probe_mechanisms]]
+mechanism = "SessionEnd"
+fired = true
+can_refuse = false
+
+[[probe_mechanisms]]
+mechanism = "Stop"
+fired = true
+can_refuse = false
+
+[[probe_mechanisms]]
+mechanism = "SubagentStop"
+fired = true
+can_refuse = false
+
+[[probe_mechanisms]]
+mechanism = "permission.evaluate"
+fired = true
+can_refuse = true
+
+# ---- UserPromptSubmit (advisory: session.prompt) ----
+
+[[row]]
+script = "hook-prompt-reminders.py"
+event = "UserPromptSubmit"
+timeout_s = 10
+opencode = "session.prompt"
+paths = []
+difficulty = "Reminders (feedback, language, instructions refresh) the agent would otherwise forget at the start of a turn."
+
+[[row]]
+script = "hook-burn-rate-guard.py"
+event = "UserPromptSubmit"
+timeout_s = 5
+opencode = "session.prompt"
+paths = []
+difficulty = "A fast spend burst is only visible after the window that would report it has closed; this warns while it runs."
+
+[[row]]
+script = "hook-engine-start.py"
+event = "UserPromptSubmit"
+timeout_s = 5
+opencode = "session.prompt"
+paths = []
+difficulty = "A substantive task starts without the coordination engine being engaged; this starts it from the first prompt."
+
+[[row]]
+script = "hook-resolution-reminder.py"
+event = "UserPromptSubmit"
+timeout_s = 22
+opencode = "session.prompt"
+paths = []
+difficulty = "A finished task is left unresolved, or lands by a review path where direct push is held; this reminds at the prompt."
+
+[[row]]
+script = "hook-memory-retrieval.py"
+event = "UserPromptSubmit"
+timeout_s = 5
+opencode = "session.prompt"
+paths = []
+difficulty = "Memory leaves relevant to the prompt are not read; this prints lexical pointers and the model decides relevance."
+
+# ---- PreToolUse (denying: tool.execute.before, every probe path) ----
+
+[[row]]
+script = "hook-memory-consistency.py"
+event = "PreToolUse"
+matcher = "Edit|Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A memory write contradicts or duplicates an existing leaf; the write is refused before it lands."
+
+[[row]]
+script = "hook-state-gate.py"
+event = "PreToolUse"
+matcher = "Edit|Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "Production edits start before the engine reached an execution node (no classification, no approved plan); the edit is refused."
+
+[[row]]
+script = "hook-term-neutrality.py"
+event = "PreToolUse"
+matcher = "Edit|Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "An organisation-specific term enters org-neutral Core; the hook warns and never blocks, and its event can refuse a call."
+
+[[row]]
+script = "hook-plan-delivery-gate.py"
+event = "PreToolUse"
+matcher = "AskUserQuestion"
+timeout_s = 35
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A plan-approval question is asked in the turn the plan was submitted, before its text can render; the question is refused."
+
+[[row]]
+script = "hook-escalation-diagnosis-gate.py"
+event = "PreToolUse"
+matcher = "AskUserQuestion"
+timeout_s = 65
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "An external-service failure is escalated to the user with no recorded diagnosis; the question is refused."
+
+[[row]]
+script = "hook-deferring-disposition-gate.py"
+event = "PreToolUse"
+matcher = "AskUserQuestion"
+timeout_s = 305
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A question whose every option defers work the agent can do now offloads it to the user; the question is refused."
+
+[[row]]
+script = "hook-resolution-reminder.py"
+event = "PreToolUse"
+matcher = "AskUserQuestion"
+timeout_s = 27
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A resolution question proposes a review path in a repo with direct push rights; the question is refused."
+
+[[row]]
+script = "hook-scope-conflict.py"
+event = "PreToolUse"
+matcher = "Edit|Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "Two live sessions edit the same gated path in one working tree; the second edit is refused."
+
+[[row]]
+script = "hook-retry-detector.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "The same failing command is retried without analysis; the hook nudges, and its event can refuse a call."
+
+[[row]]
+script = "hook-long-job-arm.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A long job is started with no monitor armed; the hook nudges, and its event can refuse a call."
+
+[[row]]
+script = "hook-skill-first.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A domain operation is hand-rolled over the CLI where a skill covers it; the hook nudges, and its event can refuse a call."
+
+[[row]]
+script = "hook-multi-mount-search-guard.py"
+event = "PreToolUse"
+matcher = "Bash|Grep|Glob"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A recursive traversal rooted at or above a network mount hangs the session; the call is refused."
+
+[[row]]
+script = "hook-guard-destructive-rm.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A recursive rm built with an empty variable wipes the agent's own memory and config; the command is refused."
+
+[[row]]
+script = "hook-guard-subagent-destructive-action.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A subagent authorises its own destructive delete outside the coordination spine; the command is refused."
+
+[[row]]
+script = "hook-guard-agent-specialist-stand-in.py"
+event = "PreToolUse"
+matcher = "Agent|Task"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A general agent stands in for a specialist and skips spawn costs, marker validation and the permission digest; the call is refused."
+
+[[row]]
+script = "hook-guard-permission-surface.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A shell command widens the live permission surface outside the plan-stage grant channel; a human is asked first."
+
+[[row]]
+script = "hook-guard-permission-surface.py"
+event = "PreToolUse"
+matcher = "Edit|Write|MultiEdit|NotebookEdit"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A file write widens the live permission surface outside the plan-stage grant channel; a human is asked first."
+
+[[row]]
+script = "hook-guard-canon-readonly.py"
+event = "PreToolUse"
+matcher = "Edit|Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "An edit in the canonical Core checkout makes the live hooks nondeterministic; the edit is refused."
+
+[[row]]
+script = "hook-guard-canon-readonly.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A git commit in the canonical Core checkout makes the live hooks nondeterministic; the command is refused."
+
+[[row]]
+script = "hook-guard-bash-source-edit.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A shell write of literal text into a source tree bypasses the state and scope gates that see only Edit and Write; the command is refused."
+
+[[row]]
+script = "hook-published-text-writer-gate.py"
+event = "PreToolUse"
+matcher = "Bash"
+timeout_s = 190
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A comment, PR or issue text is published with no preceding tech-writer pass over those exact bytes; the call is refused."
+
+[[row]]
+script = "verify-leaf-structure.py"
+args = "--hook"
+event = "PreToolUse"
+matcher = "Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A memory leaf is written without the required structure, in any repo; the write is refused."
+
+[[row]]
+script = "verify-experience-leaf.py"
+args = "--hook"
+event = "PreToolUse"
+matcher = "Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "An experience leaf is written without the user's confirmation quote; the write is refused."
+
+[[row]]
+script = "verify-no-conflict-markers.py"
+args = "--hook"
+event = "PreToolUse"
+matcher = "Write"
+timeout_s = 5
+opencode = "tool.execute.before"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "child-run", "root:question"]
+difficulty = "A write carries a git conflict marker into a file; the write is refused."
+
+# ---- PostToolUse (non-denying: tool.execute.after, every executed probe path) ----
+
+[[row]]
+script = "hook-self-critique-reminder.py"
+event = "PostToolUse"
+matcher = "Write"
+timeout_s = 5
+opencode = "tool.execute.after"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "mcp:probesrv:touch", "plugin-tool:probe_tool", "root:question"]
+difficulty = "An experience leaf with a self-critique section is written and the self-improvement pass it calls for is skipped."
+
+[[row]]
+script = "hook-si-freetext-answer.py"
+event = "PostToolUse"
+matcher = "AskUserQuestion"
+timeout_s = 5
+opencode = "tool.execute.after"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "root:question"]
+difficulty = "A correction typed as a free-text answer bypasses the prompt-time self-improvement reminder, which sees only prompts."
+
+[[row]]
+script = "hook-ask-answer-record.py"
+event = "PostToolUse"
+matcher = "AskUserQuestion"
+timeout_s = 5
+opencode = "tool.execute.after"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "root:question"]
+difficulty = "An answered question leaves no evidence for order-agree and order-challenge-dismiss; the answer is appended to the ledger."
+
+[[row]]
+script = "hook-scope-track.py"
+event = "PostToolUse"
+matcher = "Edit|Write"
+timeout_s = 5
+opencode = "tool.execute.after"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "root:question"]
+difficulty = "The paths a session edits are unknown to its sibling sessions; the touched paths and a heartbeat are recorded."
+
+[[row]]
+script = "hook-scope-track.py"
+event = "PostToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.after"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "root:question"]
+difficulty = "The paths a shell command touches are unknown to its sibling sessions; the touched paths and a heartbeat are recorded."
+
+[[row]]
+script = "hook-review-monitor-arm.py"
+event = "PostToolUse"
+matcher = "Bash"
+timeout_s = 5
+opencode = "tool.execute.after"
+paths = ["root:shell", "root:write", "root:edit", "root:read", "root:glob", "root:grep", "root:webfetch", "subagent:task", "root:execute", "root:execute-inner", "root:skill", "mcp:probesrv:touch", "plugin-tool:probe_tool", "root:question"]
+difficulty = "A newly opened review has no poller driving it to mergeable; the detached poller is armed the moment its URL is printed."
+
+# ---- SessionStart (non-denying: session.created) ----
+
+[[row]]
+script = "hook-session-due.py"
+event = "SessionStart"
+timeout_s = 25
+opencode = "session.created"
+paths = []
+difficulty = "Periodic due checks (diagnosis, scorecard, calibration, grooming) run only when somebody remembers them; they run at session start."
+
+[[row]]
+script = "hook-canon-guard-wired-check.py"
+event = "SessionStart"
+timeout_s = 5
+opencode = "session.created"
+paths = []
+difficulty = "The gate-bearing hooks exist in the repo but are not wired into the root the session loads, so gates are silently off; this reports it."
+
+[[row]]
+script = "hook-reaper.py"
+event = "SessionStart"
+timeout_s = 60
+opencode = "session.created"
+paths = []
+difficulty = "Stale residue (worktrees, scratch) piles up and each cleanup hand-rolls its own throttle and ownership rules; one runner applies them."
+
+[[row]]
+script = "hook-branch-backup.py"
+event = "SessionStart"
+timeout_s = 5
+opencode = "session.created"
+paths = []
+difficulty = "Unpushed worktree branches are lost with the machine; the backup upkeep starts detached at session start."
+
+# ---- Stop (non-denying: experimental.idle; the shim stage sets the bound on forced continues) ----
+
+[[row]]
+script = "hook-branch-backup.py"
+event = "Stop"
+timeout_s = 5
+opencode = "experimental.idle"
+paths = []
+difficulty = "Unpushed worktree branches are lost with the machine; the backup upkeep starts detached at turn end."
+
+[[row]]
+script = "hook-turn-end-gate.py"
+event = "Stop"
+timeout_s = 305
+opencode = "experimental.idle"
+paths = []
+difficulty = "A turn ends with an unmet obligation, such as feedback without self-improvement; the stop is blocked, and the bound on how many continues it may force is set by the shim stage, because the host has no guard against an unbounded idle loop."
+
+[[row]]
+script = "hook-run-url-surfaced-reminder.py"
+event = "Stop"
+timeout_s = 5
+opencode = "experimental.idle"
+paths = []
+difficulty = "A launched run URL appears in tool output but never reaches the user in a message; this nudges at turn end."
+
+[[row]]
+script = "hook-review-mergeable-guardian.py"
+event = "Stop"
+timeout_s = 5
+opencode = "experimental.idle"
+paths = []
+difficulty = "A review this session authored has no monitor armed to drive it to mergeable; this nudges at turn end."
+
+# ---- SessionEnd (non-denying: session.deleted) ----
+
+[[row]]
+script = "hook-telemetry-session-end.py"
+event = "SessionEnd"
+timeout_s = 5
+opencode = "session.deleted"
+paths = []
+difficulty = "A session's events sit in its spool until somebody replays them; the end marker is written and the sync starts detached."
