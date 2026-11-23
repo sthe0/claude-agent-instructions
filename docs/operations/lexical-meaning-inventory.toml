@@ -2456,6 +2456,18 @@ ground = "CONFIG_ROW.match reads a config.md table row and the key is then compa
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/opencode_probe/mechanisms/e13_combined_credential_deny.py::_gate_checks::re.findall"]
+class = "structural"
+ground = "Counts the fixed `  Line N: ` match lines of the built-in grep's output text to compare with its recomputed `Found N matches` header; an output format, not a meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/mechanisms/e13_combined_credential_deny.py::_gate_checks::re.match"]
+class = "structural"
+ground = "Reads the `Found N matches` header of the built-in grep's output text that the gate recomputes; a fixed output format, not a meaning."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/opencode_probe/record.py::latest_record::re.match"]
 class = "structural"
 ground = "Selects run directories whose name has the fixed UTC timestamp format YYYYMMDDTHHMMSSZ that the probe itself writes; a name format, not a meaning."

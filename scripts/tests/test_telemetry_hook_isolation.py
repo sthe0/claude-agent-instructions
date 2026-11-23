@@ -11,7 +11,7 @@ RESULT_STORE_MODULES = {"lib/result_store.py"}
 # Opens OpenCode's own session database read-only to observe what a probe run wrote; it
 # never touches the telemetry record (no `telemetry_db` call, so ALLOWED_RECORD_PATH_USERS
 # is unaffected).
-HOST_DB_READERS = {"opencode_probe/mechanisms/c_p6.py"}
+HOST_DB_READERS = {"opencode_probe/mechanisms/c_p6.py", "opencode_probe/mechanisms/shared_e.py"}
 ALLOWED_RECORD_PATH_USERS = {
     "lib/telemetry/store.py", "telemetry.py", "lib/config_root.py"}
 

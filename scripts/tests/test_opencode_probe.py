@@ -1041,7 +1041,11 @@ E_GOOD = {
             "real_model": shared_e.unobservable(e10_auto_flag.REAL_MODEL_REASON)},
     "E11": {"resume_works": True},
     "E12": {"user_config_touched": False, "port_clash": False},
-    "E13": {"combined_shape_reached": {}, "all_refused": True},
+    "E13": {"combined_shape_reached": {}, "all_refused": True, "permission_deny_refused": {"root:grep": False},
+            "grep_resource_is_pattern": True, "gate_refuses_grep_on_credential_path": True,
+            "gate_filters_ancestor_grep": True, "after_mutable_field": e13_combined_credential_deny.MUTABLE_FIELD,
+            "unfiltered_not_persisted": True, "control_unreached": ["root:webfetch"], "not_applicable": {},
+            "secret_seen": False, "unobserved_parts": []},
     "E14": {"carries_session_id": True, "shell_event": {}},
 }
 
@@ -1137,6 +1141,51 @@ def test_e13_reached_path_fails_require_pass(tmp_path):
     other = {"P1": {"paths": [{"id": "root:read"}, {"id": "root:edit"}]}}
     problems = e13_combined_credential_deny.check_record(entry, other)
     assert len(problems) == 1 and "missing ['root:edit']" in problems[0] and "extra ['root:shell']" in problems[0]
+
+
+def test_e13_grep_gate_fields_and_verdict(tmp_path):
+    case = e13_combined_credential_deny
+    good = E_GOOD["E13"]
+    assert case.verdict(good) == record.PASS
+    for broken in ({"secret_seen": True}, {"gate_refuses_grep_on_credential_path": False},
+                   {"gate_filters_ancestor_grep": False}, {"after_mutable_field": "result.output"},
+                   {"after_mutable_field": None}):
+        assert case.verdict({**good, **broken}) == record.FAIL, broken
+    half = {**good, "all_refused": False, "unfiltered_not_persisted": False}
+    assert case.verdict({**half, "unobserved_parts": ["export"]}) == record.UNOBSERVED
+    assert case.verdict(half) == record.FAIL
+    assert case.verdict({**half, "secret_seen": True, "unobserved_parts": ["export"]}) == record.FAIL
+    for part in ("export", "truncation_spill"):
+        entry = e_entry("E13", **{part: shared_e.unobservable("r")})
+        assert case.check_record(entry, {}) == [f"E13.{part} is unobservable, the case cannot be recorded pass"]
+    assert {"permission_deny_refused", "grep_resource_is_pattern", "gate_refuses_grep_on_credential_path",
+            "gate_filters_ancestor_grep", "after_mutable_field", "unfiltered_not_persisted", "control_unreached",
+            "not_applicable", "combined_shape_reached", "all_refused"} == set(case.FIELDS)
+    probe = [{"at": "permission.evaluate", "input": {"source": {"id": "c1"}, "resources": ["PAT"]}},
+             {"at": "permission.evaluate", "input": {"source": {"id": "c2"}, "resources": ["/r/home/.ssh/id"]}}]
+    assert case.grep_resource_is_pattern(probe, "c1", "PAT", "/r/home/.ssh/id") is True
+    assert case.grep_resource_is_pattern(probe, "c2", "PAT", "/r/home/.ssh/id") is False
+    assert case.grep_resource_is_pattern(probe, "c3", "PAT", "/r") is False
+    requests = [{"messages": [{"role": "tool", "tool_call_id": "c1", "content": "first"}]},
+                {"messages": [{"role": "tool", "tool_call_id": "c1", "content": [{"type": "text", "text": "last"}]}]}]
+    assert case.model_view(requests, "c1") == "last" and case.model_view(requests, "c9") is None
+
+
+def test_e13_gate_checks_read_the_model_view():
+    case = e13_combined_credential_deny
+    refused = case.GATE_MESSAGE
+    main = {"errors": {"root:grep": refused, "gate:dir": refused}, "views": {"root:grep": refused, "gate:dir": refused,
+            "gate:ancestor": "Found 1 matches\n/r/home/small/ordinary.txt:\n  Line 1: SECRET-E13-plain"},
+            "bulk_text": "Found 0 matches\n(Results are truncated: showing first 100 results.)"}
+    leaks = {"content": False, "output": True, "metadata": True}
+    assert case._gate_checks(main, leaks) == (True, True, case.MUTABLE_FIELD)
+    leaky = {**main, "views": {**main["views"], "gate:ancestor": "Found 2 matches\n/r/home/small/.ssh/id_small:\n  Line 1: SECRET-E13-small"}}
+    assert case._gate_checks(leaky, leaks)[1] is False
+    miscounted = {**main, "bulk_text": "Found 5 matches\n  Line 2: x"}
+    assert case._gate_checks(miscounted, leaks)[1] is False
+    assert case._gate_checks({**main, "errors": {"root:grep": None, "gate:dir": refused}}, leaks)[0] is False
+    assert case._gate_checks(main, {**leaks, "output": False})[2] is None
+    assert case._gate_checks(main, {**leaks, "content": True})[2] is None
 
 
 def test_e14_missing_session_id_fails_require_pass(tmp_path):
