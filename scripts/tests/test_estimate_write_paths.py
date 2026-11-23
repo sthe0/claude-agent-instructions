@@ -126,6 +126,22 @@ def test_an_old_form_stage_keeps_its_tier_price_and_meets_none_of_the_estimate_c
     assert sub_plan.estimate_copy(store.load(SESSION), 1) == {}
 
 
+def test_a_state_saved_before_the_copy_existed_reads_as_no_figure_agreed(store, venued_fixtures_dir):
+    """An approval entry with no `estimates` key (a state written before the copy) is read as no
+    figure agreed: nothing is priced from it, the estimate condition names the way on and the
+    stage starts after the agreement like any other."""
+    _executing(store, venued_fixtures_dir)
+    _described(store, lazy=True, in_thread=False)
+    _put(store, _rec(1))
+    state = store.load(SESSION)
+    state.stage_approvals[sub_plan.approval_key(state, 1)] = {"subplan_digest": "stale"}
+    store.save(state)
+    state = store.load(SESSION)
+    assert sub_plan.estimate_copy(state, 1) == {}
+    assert sub_plan.agreed_figure(state, 1) is None
+    assert any("estimate" in line for line in _start_blockers(store))
+
+
 # --- what sees an edit of a new field ----------------------------------------------------------------
 
 

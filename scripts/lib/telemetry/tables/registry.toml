@@ -1,4 +1,4 @@
-version = 8
+version = 9
 
 [[members]]
 name = "cli:accept"
@@ -1583,3 +1583,11 @@ kind = "elementary"
 part_of = []
 place = "permission_control"
 source_keys = ["cli:approve-stage-resources"]
+
+[[members]]
+name = "cli:estimate-correct"
+since = 9
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:estimate-correct"]

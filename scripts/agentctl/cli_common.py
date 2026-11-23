@@ -3815,7 +3815,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
-    ("basis", ("ledger-add", "question-dispose", "risk-accept")),
+    ("basis", ("ledger-add", "question-dispose", "risk-accept", "estimate-correct")),
     ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
                 "order-dispose", "reject", "block", "task-reset", "replan")),
     ("element", ("order-raise",)),
@@ -3912,7 +3912,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("mandate_id", ("mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry",
                     "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
-    ("by", ("confirm-delivery", "approve", "approve-subplan", "approve-resources", "resolve", "fire-acknowledge", "resolve-permission",
+    ("by", ("confirm-delivery", "approve", "approve-subplan", "approve-resources", "estimate-correct", "resolve", "fire-acknowledge", "resolve-permission",
             "task-reset", "mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume",
             "mandate-retry", "order-executor-revise"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
