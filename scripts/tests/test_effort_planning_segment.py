@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_common, cli_dispatch, config, cost, effort, gates
+from agentctl import cli, cli_common, cli_dispatch, config, cost, effort, gates, sub_plan
 from agentctl import effort_segments as seg
 from agentctl.config import Thresholds
 from agentctl.plan import load_order_draft, understanding_digest, understanding_parts
@@ -274,6 +274,21 @@ def test_planning_overspend_fires_at_a_pre_approval_engine_act(eng):
         [fire] = fires_of(state)
         assert fire["scales"] == [scale] and fire["arming_id"] == planning_of(state)["arming_id"], refused
         assert gates.open_fire_record(state) is not None
+
+
+def test_a_linked_childs_own_planning_past_its_allowance_fires_before_any_figure_is_agreed(eng):
+    """A child's own planning is judged on the planning allowance like any session's: the
+    estimate of the stage it executes is agreed by its parent only at the parent's approval of the
+    stage's resources, and until then the allowance is the one that binds."""
+    eng.child("kid", "parent")
+    eng.run("classify", session="kid", architectural=True, changed_lines=200, wall_clock_min=60)
+    eng.run("plan", session="kid")
+    assert sub_plan.agreed_figure(eng.state("kid"), 1) is None
+    eng.book(sid="kid", usd=OVERSPENT_USD)
+    eng.run("submit_plan", session="kid", plan=eng.write())
+    state = eng.state("kid")
+    [fire] = fires_of(state)
+    assert fire["scales"] == [seg.SCALE_USD] and fire["arming_id"] == planning_of(state)["arming_id"]
 
 
 def test_planning_carries_spend_and_wall_clock_fires_only(eng):
