@@ -543,6 +543,19 @@ def subplan_approval_problem(entry: dict, record: SubPlanRecord | None, *,
 METHOD_REVIEW_KIND = "method"
 _METHOD_REVIEW_PASSING = ("pass", "override")
 
+#: The engine writes a stage's method review (`record_method_review`) only from a whole-plan
+#: `plan-review` whose reviewer attests `--plan-digest`, the sha256 of the sub-plan file's bytes
+#: they read (checked against the live bytes, which include `meta.sub_plan`). The pairwise route
+#: (`plan-review-compose`) writes none: its pair bundles never show the method.
+METHOD_REVIEW_WAY = (
+    "the thinker reads the sub-plan file itself, method included, and records `plan-review "
+    "--verdict pass --reviewer thinker --plan-digest <sha256 of the sub-plan file they read> "
+    "--target <sub-plan file>`; the user's override gives it the same way, with `--plan-digest` "
+    "(an override without it clears the plan-review gate and writes no method review); the "
+    "review is for the sub-plan as it stands, so it is asked again after the method, procedure, "
+    "means or conditions change; a pair-by-pair composition (`plan-review-compose`) does not "
+    "give it, because no pair shows the method")
+
 
 def method_review_recorded(record: SubPlanRecord | None) -> bool:
     """Whether the record carries a method review that did not ask for a revision and was given
@@ -627,8 +640,7 @@ def record_carried_by(state, doc, store_=None) -> None:
     if any(r.get("kind") == METHOD_REVIEW_KIND for r in record.reviews):
         raise SubPlanError(
             f"stage {record.stage}'s record carries a `{METHOD_REVIEW_KIND}` review: that review is "
-            f"written by the engine when a thinker's whole-plan pass of this sub-plan is recorded "
-            f"(plan-review), never by the record it judges")
+            f"written by the engine, never by the record it judges; {METHOD_REVIEW_WAY}")
     confirm_estimate(record, state.session_id, _parent_copy(state, record.stage, level, store_))
     previous_reviews = (state.sub_plan_records.get(record_key(record.stage, level)) or {}).get(
         "reviews") or []

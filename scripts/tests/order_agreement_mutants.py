@@ -528,13 +528,27 @@ def _method_review_unbound(mp):
     mp.setattr("agentctl.sub_plan.method_review_recorded", recorded, raising=True)
 
 
-def _composition_writes_no_method_review(mp):
-    """The composition of pair reviews into a whole-plan pass writes no method review."""
-    from agentctl import cli_review, sub_plan
-    real = sub_plan.record_method_review
-    mp.setattr("agentctl.sub_plan.record_method_review",
-               lambda *a, **k: False if k.get("reviewer") == cli_review.TOPOLOGICAL_COMPOSITION_REVIEWER
-               else real(*a, **k), raising=True)
+def _composition_writes_method_review(mp):
+    """The composition of pair reviews into a whole-plan pass stamps a method review, though no
+    pair shows the method."""
+    import time
+    from agentctl import cli, cli_review, sub_plan
+    from agentctl.plan import load_plan_with_digest
+    real = cli_review.cmd_plan_review_compose
+
+    def compose(args, *, store, runner=None):
+        directive = real(args, store=store, runner=runner)
+        if directive.ok:
+            state = cli_review._require(store, args.session)
+            doc, _, live = load_plan_with_digest(cli_review._walk_target(args, state))
+            sub_plan.record_method_review(
+                state, store, doc, verdict="pass",
+                reviewer=cli_review.TOPOLOGICAL_COMPOSITION_REVIEWER, plan_sha256=live,
+                at=time.time())
+            store.save(state)
+        return directive
+    mp.setattr("agentctl.cli_review.cmd_plan_review_compose", compose, raising=True)
+    mp.setitem(cli.COMMANDS, "plan-review-compose", compose)
 
 
 def _non_customer_approves_as_user(mp):
@@ -554,7 +568,7 @@ def _first_figure_refusal_one_text(mp):
 
 MUTANTS = {
     "method_review_unbound": _method_review_unbound,
-    "composition_writes_no_method_review": _composition_writes_no_method_review,
+    "composition_writes_method_review": _composition_writes_method_review,
     "non_customer_approves_as_user": _non_customer_approves_as_user,
     "first_figure_refusal_one_text": _first_figure_refusal_one_text,
     "stage_budget_tier_only": _stage_budget_tier_only,

@@ -969,9 +969,24 @@ def test_a_plan_presented_again_after_its_first_approval_shows_the_frozen_total_
                                 "usd": composed[effort_segments.SCALE_USD]}) in shown
 
 
-def _plan_naming_customer(base_dir, tmp_path, customer, *, lazy=(1,)) -> str:
+_CUSTOMER_SIDE = """
+[meta.order.customer_side]
+step = "cutting a release"
+missing = "a command that tags it"
+product = "the release command"
+criterion_type = "measurable"
+
+[[meta.order.customer_side.checks]]
+id = "A1"
+kind = "direct"
+text = "the command tags a release"
+"""
+
+
+def _plan_naming_customer(base_dir, tmp_path, customer, *, lazy=(1,), two_sided=False) -> str:
     """The new-form two-stage plan (stage 1 decided later unless `lazy` says otherwise) with an
-    order naming `customer`; `customer=None` leaves the plan without an order."""
+    order naming `customer` (`""` names none); `customer=None` leaves the plan without an order;
+    `two_sided` gives the order its customer side, the mark of the order the user agrees."""
     from conftest import SUBSTANTIVE_ORDER
 
     path = base._new_form_plan(base_dir, tmp_path, in_thread=(1, 2), lazy=lazy)
@@ -979,16 +994,20 @@ def _plan_naming_customer(base_dir, tmp_path, customer, *, lazy=(1,)) -> str:
         return path
     text = Path(path).read_text(encoding="utf-8")
     order = SUBSTANTIVE_ORDER.replace('customer_id = "user"', f'customer_id = "{customer}"')
+    if two_sided:
+        order = order.replace('R1 = ["stage 1 verify_command"]',
+                              'R1 = ["stage 1 verify_command"]\nA1 = ["stage 1 verify_command"]')
+        order += _CUSTOMER_SIDE
     head, sep, tail = text.partition("\n[[stage]]")
     Path(path).write_text(head + "\n" + order + sep + tail, encoding="utf-8")
     return path
 
 
-def _approve_past_the_margin(store, base_dir, tmp_path, customer, by, *, monkeypatch=None):
+def _approve_past_the_margin(store, base_dir, tmp_path, customer, by, *, two_sided=False):
     """Approve a plan whose decided-later stage 1 carries a figure far past its tier price
     (the allowed overrun the agent's agreement is measured against), as `by`."""
     base._planning(store)
-    plan = _plan_naming_customer(base_dir, tmp_path, customer)
+    plan = _plan_naming_customer(base_dir, tmp_path, customer, two_sided=two_sided)
     assert cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store).ok
     state = store.load(SESSION)
     sub_plan.store(state, _record(400, 1.0, "the whole module is rewritten"), level=0)
@@ -1008,20 +1027,41 @@ def test_the_customers_approval_agrees_a_figure_past_the_margin_as_the_users_own
 
 def test_a_reviewers_approval_of_an_order_naming_another_customer_agrees_as_the_agent_does(
         store, venued_fixtures_dir, tmp_path):
-    """`approve --by <reviewer>` of a plan whose order names a customer is not the customer's act:
-    its figure past the allowed overrun is held for the user, the user line stays unset, and
-    nothing is agreed with the user's authority."""
-    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", "reviewer")
+    """`approve --by <reviewer>` of a plan whose two-sided order names a customer is not the
+    customer's act: its figure past the allowed overrun is held for the user, the user line stays
+    unset, and nothing is agreed with the user's authority."""
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", "reviewer",
+                                     two_sided=True)
     copy = sub_plan.estimate_copy(state, 1)
     assert not copy.get("agreed") and copy["held"]["minutes"] == 400.0
     assert sub_plan.user_figure(state, 1) is None
     assert copy.get("authority") != sub_plan.AUTHORITY_USER
 
 
+def test_a_two_sided_order_naming_no_customer_gives_a_non_customer_approver_no_user_authority(
+        store, venued_fixtures_dir, tmp_path):
+    """The exemption of a plan with no customer to match is keyed on there being no two-sided
+    order, not on an empty `customer_id`: an order with a customer side and no customer named
+    still has the user's side, and a `--by` that is not the user does not stand in for it."""
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "", "fedor",
+                                     two_sided=True)
+    copy = sub_plan.estimate_copy(state, 1)
+    assert not copy.get("agreed") and copy["held"]["minutes"] == 400.0
+    assert sub_plan.user_figure(state, 1) is None
+
+
+def test_the_customers_own_approval_of_a_two_sided_order_is_still_the_users_act(
+        store, venued_fixtures_dir, tmp_path):
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", "user",
+                                     two_sided=True)
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
+
+
 def test_a_reviewers_approval_inside_the_margin_is_agreed_with_the_agents_authority(
         store, venued_fixtures_dir, tmp_path):
     base._planning(store)
-    plan = _plan_naming_customer(venued_fixtures_dir, tmp_path, "user")
+    plan = _plan_naming_customer(venued_fixtures_dir, tmp_path, "user", two_sided=True)
     assert cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store).ok
     state = store.load(SESSION)
     sub_plan.store(state, _record(12, 1.0, "a small module"), level=0)
@@ -1031,11 +1071,13 @@ def test_a_reviewers_approval_inside_the_margin_is_agreed_with_the_agents_author
     assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_AGENT
 
 
-def test_the_approval_of_an_order_that_names_no_customer_keeps_agreeing_as_the_user(
-        store, venued_fixtures_dir, tmp_path):
-    """A plan authored without `[meta.order]` has no customer to tell the user from: any
-    non-agent approver is the user, as before the order existed."""
-    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, None, "fedor")
+@pytest.mark.parametrize("customer", [None, "user"], ids=["no-order", "old-form-order"])
+def test_the_approval_of_a_plan_with_no_two_sided_order_keeps_agreeing_as_the_user(
+        store, venued_fixtures_dir, tmp_path, customer):
+    """A plan authored without `[meta.order]`, or on an old-form order (no customer side), has no
+    user's side to tell the approver from: any non-agent approver is the user, as before the
+    two-sided order existed."""
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, customer, "fedor")
     copy = sub_plan.estimate_copy(state, 1)
     assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
 
@@ -1046,7 +1088,8 @@ def test_a_mandate_approval_agrees_as_the_users_standing_authority(
 
     monkeypatch.setattr(cli_approval, "_mandate_basis_problems", lambda *a, **k: [])
     by = mandate_rules.mandate_approver("cycle-1")
-    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", by)
+    state = _approve_past_the_margin(store, venued_fixtures_dir, tmp_path, "user", by,
+                                     two_sided=True)
     copy = sub_plan.estimate_copy(state, 1)
     assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER
 
@@ -1060,11 +1103,14 @@ def test_a_mandate_approval_agrees_as_the_users_standing_authority(
     (True, None, True, sub_plan.AUTHORITY_PARENT),
 ], ids=["default-user", "explicit-user", "non-customer", "non-customer-in-a-child",
         "agent", "agent-in-a-child"])
-def test_the_stage_approvals_carry_the_authority_of_who_acts(
+def test_the_stage_approval_writer_gives_the_authority_it_is_told_the_actor_has(
         store, venued_fixtures_dir, by_agent, by_user, linked, expected):
-    """`_write_stage_approvals` (`approve`, `approve-stage-resources`, `approve-resources`) writes
-    the first figure of a decided-later stage with the acting party's authority; only the user's
-    own act (explicit or by default for a non-agent) reaches `AUTHORITY_USER`."""
+    """The writer `_write_stage_approvals` records the first figure of a decided-later stage with
+    the authority its arguments name; only an explicit or defaulted user act reaches
+    `AUTHORITY_USER`. This is the writer alone: who `cmd_approve` decides is the user is walked
+    through the verb by the `test_a_reviewers_approval_*`, `test_a_two_sided_order_naming_no_customer_*`,
+    `test_the_customers_own_approval_*` and `test_the_approval_of_a_plan_with_no_two_sided_order_*`
+    tests above."""
     _stage_one(store, venued_fixtures_dir, lazy=True)
     state = store.load(SESSION)
     if linked:

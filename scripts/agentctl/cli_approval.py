@@ -30,6 +30,7 @@ from .dispatch import Runner
 from .machine import transition
 from .plan import (
     PlanError,
+    is_two_sided,
     load_plan_with_digest,
     materialized_grant_entries,
     order_digest,
@@ -780,10 +781,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # never casefold-match any --by, so this is a no-op for every plan
     # authored before [meta.order] existed.
     by_customer = False
-    customer_id = ""
+    no_customer_to_match = True
     if _approved_doc is not None:
         order = _approved_doc.meta.order
         customer_id = order.customer_id if order is not None else ""
+        no_customer_to_match = not is_two_sided(order)
         by_customer = bool(customer_id and not mandate_basis
                            and args.by.strip().casefold() == customer_id.casefold())
         if by_customer:
@@ -831,7 +833,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # stage is later checked against, as the user's own approval does; the agent's does not.
     _write_stage_approvals(
         state, store, by_agent=by_agent,
-        by_user=by_customer or bool(mandate_basis) or (not customer_id and not by_agent))
+        by_user=by_customer or bool(mandate_basis) or (no_customer_to_match and not by_agent))
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -1194,11 +1196,11 @@ def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: 
     (approve-subplan), not here.
 
     The figures it agrees carry the authority of whoever acts. `by_user` says the act is the
-    user's own (the customer's `approve`, the mandate path, or any non-agent `approve` of an order
-    that names no customer, which has nobody else to tell the user from); it defaults to every
-    approver but the agent, and `approve` passes it explicitly so a non-customer `--by` of an
-    order that names a customer agrees as the agent (or the parent) does, inside the allowed
-    overrun."""
+    user's own (the customer's `approve`, the mandate path, or any non-agent `approve` of a plan
+    with no two-sided order, old-form or none, which has no customer side to tell the user
+    from); it defaults to every approver but the agent, and `approve` passes it explicitly so a
+    non-customer `--by` of a two-sided order agrees as the agent (or the parent) does, inside the
+    allowed overrun, even where that order names no customer."""
     thr = Thresholds()
     authority = _acting_authority(state, by_user=(not by_agent) if by_user is None else by_user)
     for stage in state.stages:

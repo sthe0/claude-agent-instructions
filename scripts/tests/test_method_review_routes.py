@@ -94,8 +94,7 @@ def test_a_verdict_asking_for_a_revision_writes_no_method_review(contour):
 
 def test_a_stage_scoped_pass_and_one_pairs_pass_leave_the_method_review_owed(contour):
     """A stage-scoped review and a single pair's review judge a part of the sub-plan; only a pass
-    of the whole sub-plan (the whole-plan verb, or the composition of every pair) is the method
-    review."""
+    of the whole sub-plan file (the whole-plan verb with `--plan-digest`) is the method review."""
     _submitted_unreviewed(contour)
     doc = load_plan(contour.plan)
     _review(contour, "pass", scope="stage:1")
@@ -108,28 +107,124 @@ def test_a_stage_scoped_pass_and_one_pairs_pass_leave_the_method_review_owed(con
     assert not _method_reviewed(contour) and _blocked(contour)
 
 
-def test_the_pairwise_route_the_refusal_names_writes_the_method_review_at_the_composition(contour):
-    """`plan-review-topological.py --plan <file>` records each unit and pair as a pass; the
-    composition (`plan-review-compose`) of them is the whole sub-plan's pass, and is the act that
-    writes the method review. Before every pair is recorded the composition is refused and writes
-    none."""
-    _submitted_unreviewed(contour)
+def _review_every_pair(contour):
     ids = review_ids(load_plan(contour.plan))
     assert ids, "the walk of a sub-plan with stages is never empty"
+    for rid in ids:
+        code, body, err = _review(contour, "pass", scope=f"topo:{rid}")
+        assert body.get("ok") is True, (rid, body, err)
 
-    code, body, err = contour.own("plan-review-compose", "--target", contour.plan)
-    assert body.get("ok") is False and not _method_reviewed(contour) and _blocked(contour)
 
+def _composed_by_verb(contour):
+    return contour.own("plan-review-compose", "--target", contour.plan)[1]
+
+
+def _composed_by_driver(contour):
+    """The composition the driver `plan-review-topological.py` runs at the end of its walk
+    (`Driver.compose`), reaching the engine through the child's channel as `--own` does."""
+    import importlib.util as util
+    import sys
+
+    spec = util.spec_from_file_location("plan_review_topological_under_test",
+                                        base.SCRIPTS / "plan-review-topological.py")
+    driver_module = util.module_from_spec(spec)
+    sys.modules[spec.name] = driver_module
+    spec.loader.exec_module(driver_module)
+    driver_module.run_agentctl = lambda argv, env, script=None: contour.own(*argv)[1]
+    driver = driver_module.Driver(Namespace(pairs=None, view_root=None), contour.plan, {}, own=True)
+    verdict = driver.compose()
+    return {"ok": verdict == "pass"}
+
+
+def test_the_pairwise_route_writes_no_method_review_and_the_whole_plan_review_it_names_lifts_the_blocker(
+        contour):
+    """No pair or unit bundle shows `meta.sub_plan`, so the composition of the pairs (the verb or
+    the driver's own) records a pass of the plan-review gate and writes no method review; the
+    refusal then still names the way on, the thinker's whole-plan review of the file, and that
+    verb lifts it. Before every pair is recorded the composition is refused."""
+    _submitted_unreviewed(contour)
+    ids = review_ids(load_plan(contour.plan))
+
+    assert _composed_by_verb(contour).get("ok") is False and _blocked(contour)
     for rid in ids:
         _review(contour, "pass", scope=f"topo:{rid}")
-        if rid != ids[-1]:
-            assert not _method_reviewed(contour) and _blocked(contour)
+    assert _composed_by_verb(contour).get("ok") is True
+    assert not _method_reviewed(contour) and _blocked(contour)
+    assert sub_plan.read(contour.store.load(PARENT), 1, contour.store).reviews == []
 
-    code, body, err = contour.own("plan-review-compose", "--target", contour.plan)
-    assert code == 0 and body.get("ok") is True, (body, err)
+    code, body, err = _review(contour, "pass")
+    assert body.get("ok") is True, (body, err)
+    assert _method_reviewed(contour) and not _blocked(contour)
+
+
+@pytest.mark.parametrize("compose", [_composed_by_verb, _composed_by_driver],
+                         ids=["the-verb", "the-drivers-own-composition"])
+def test_a_method_rewritten_in_place_is_not_reviewed_by_a_composition(contour, compose):
+    """The executor rewrites only the method of the file the reviewers read, at the same path, and
+    resubmits it. The pair and unit digests do not cover `meta.sub_plan`, so every pair is still
+    current and the composition succeeds; it must not stamp a method review bound to a method no
+    reviewer was shown."""
+    _submitted_unreviewed(contour)
+    _review_every_pair(contour)
+    assert compose(contour)["ok"] is True
+    code, body, err = _review(contour, "pass")
+    assert body.get("ok") is True and _method_reviewed(contour)
+
+    path = Path(contour.plan)
+    path.write_text(path.read_text(encoding="utf-8").replace(
+        "split the module", "another way of splitting the module"), encoding="utf-8")
+    with contour.as_child():
+        assert contour.child.submit(contour.plan).get("ok") is True
+    record = sub_plan.read(contour.store.load(PARENT), 1, contour.store)
+    assert record.method == "another way of splitting the module"
+    assert not _method_reviewed(contour) and _blocked(contour)
+
+    _review_every_pair(contour)
+    composed = compose(contour)
+    assert composed["ok"] is True, composed
+    assert not _method_reviewed(contour) and _blocked(contour)
+    record = sub_plan.read(contour.store.load(PARENT), 1, contour.store)
+    assert [r for r in record.reviews if r["by"] == cli.TOPOLOGICAL_COMPOSITION_REVIEWER] == []
+
+
+def test_the_users_override_with_a_digest_writes_the_method_review_and_one_without_writes_none(contour):
+    """The way on names the user's override with `--plan-digest`. Without the digest nothing says
+    which bytes were read, so the override clears the plan-review gate and writes no method
+    review, and the way on says so."""
+    assert "writes no method review" in gates.METHOD_REVIEW_WAY
+    _submitted_unreviewed(contour)
+
+    def override(digest):
+        return cli.cmd_plan_review(
+            Namespace(session=PARENT, target=contour.plan, scope=None, verdict="override",
+                      reviewer="user", concerns=None, note="the user accepts the method",
+                      plan_digest=digest, regression_command=None),
+            store=contour.store)
+
+    result = override("")
+    assert result.ok, result.detail
+    assert not _method_reviewed(contour) and _blocked(contour)
+
+    result = override(_sha(contour.plan))
+    assert result.ok, result.detail
     assert _method_reviewed(contour) and not _blocked(contour)
     [review] = sub_plan.read(contour.store.load(PARENT), 1, contour.store).reviews
-    assert review["by"] == cli.TOPOLOGICAL_COMPOSITION_REVIEWER
+    assert review["verdict"] == "override" and review["by"] == "user"
+    assert review["bound_to"] == sub_plan.approval_digest(
+        sub_plan.read(contour.store.load(PARENT), 1, contour.store))
+
+
+def test_a_record_carrying_the_method_review_is_refused_with_the_way_the_reviewer_has(contour):
+    """The refusal of a record that carries its own method review names the one way the engine
+    writes it, not a verb that does not."""
+    text = contour.text()
+    carried = text.replace(
+        "[meta.sub_plan]",
+        "[meta.sub_plan]\nreviews = [{kind = \"method\", verdict = \"pass\", by = \"self\"}]", 1)
+    assert carried != text, "the fixture's sub-plan table is the one the replacement names"
+    result = contour.submit(carried, reviewed=False)
+    assert result.get("ok") is False
+    assert gates.METHOD_REVIEW_WAY in str(result)
 
 
 def test_a_review_the_parent_records_for_its_childs_sub_plan_is_written_into_the_childs_record(contour):

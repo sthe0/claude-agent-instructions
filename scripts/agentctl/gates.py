@@ -3420,16 +3420,7 @@ def subplan_presentation_blockers(state: SessionState, stage: int, live_digest: 
     return []
 
 
-#: The engine writes a stage's method review (`sub_plan.record_method_review`) when a thinker's
-#: pass of the sub-plan file is recorded as a whole-plan pass: `plan-review` of the file, or, for
-#: a sub-plan whose shape is reviewed pair by pair, `plan-review-compose` over its pairs. A
-#: linked child's channel runs both verbs.
-METHOD_REVIEW_WAY = (
-    "the thinker's pass of the sub-plan file gives it: `plan-review --verdict pass --reviewer "
-    "thinker --target <sub-plan file>`, or for a sub-plan reviewed pair by pair "
-    "`plan-review-topological.py --plan <sub-plan file>` then `plan-review-compose --target "
-    "<sub-plan file>` (the review is given for the sub-plan as it stands, so it is asked again "
-    "after the method, procedure, means or conditions change)")
+METHOD_REVIEW_WAY = sub_plan.METHOD_REVIEW_WAY
 
 
 def unplanned_stage_blockers(state: SessionState, target_plan: str | None, *, store=None) -> list[str]:

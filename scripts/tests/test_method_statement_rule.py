@@ -956,7 +956,12 @@ SMALL_ARGS = ("--config-root", _fx("config-root"), "--min-share", "0.90", "--min
 
 
 def _edited(tmp_path, name, change) -> str:
+    """A copy of fixture `name` with `change` applied. A recorded `config_root` is made the absolute
+    fixture root first: the checker resolves a recorded root against the process's directory, so the
+    committed relative value only matches when the tests run from the repository root."""
     data = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+    if "config_root" in data:
+        data["config_root"] = _fx("config-root")
     change(data)
     out = tmp_path / name
     out.write_text(json.dumps(data), encoding="utf-8")
@@ -982,8 +987,8 @@ def _labelled(counts: dict[str, tuple[int, int]], *, runs=3, kind="orders") -> d
     ("link-reading", "passing-link-reading.json", ()),
     ("length", "passing-length.json", LENGTH_ARGS),
 ])
-def test_check_passes_each_fixture(ev, kind, results, args):
-    assert _check(ev, kind, _fx(results), *args) == 0
+def test_check_passes_each_fixture(ev, tmp_path, kind, results, args):
+    assert _check(ev, kind, _edited(tmp_path, results, lambda data: None), *args) == 0
 
 
 def test_check_fails_the_failing_fixture(ev):
@@ -1081,7 +1086,10 @@ def test_check_refuses_other_config_root(ev, tmp_path):
     shutil.copytree(FIXTURES / "config-root", other)
     args = ("--config-root", str(other), "--min-share", "0.90", "--min-items", "10")
 
-    assert _check(ev, "small-tasks", _fx("passing-small-tasks.json"), *args) == 1
+    results = _edited(tmp_path, "passing-small-tasks.json", lambda data: None)
+    assert _check(ev, "small-tasks", results, "--config-root", _fx("config-root"),
+                  "--min-share", "0.90", "--min-items", "10") == 0
+    assert _check(ev, "small-tasks", results, *args) == 1
 
 
 def test_check_refuses_changed_instruction_digests(ev, tmp_path):
@@ -1159,8 +1167,18 @@ def test_check_accepts_excess_read_irreducible(ev):
     assert _check(ev, "length", _fx("passing-length.json"), *_length_args(_fx("excess-readings.json"))) == 0
 
 
-def test_check_refuses_short_set(ev):
-    assert _check(ev, "small-tasks", _fx("passing-small-tasks.json"), "--config-root", _fx("config-root"),
+def test_the_small_tasks_fixture_passes_from_any_working_directory(ev, tmp_path, monkeypatch):
+    results = _edited(tmp_path, "passing-small-tasks.json", lambda data: None)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert _check(ev, "small-tasks", results, *SMALL_ARGS) == 0
+
+
+def test_check_refuses_short_set(ev, tmp_path):
+    results = _edited(tmp_path, "passing-small-tasks.json", lambda data: None)
+    assert _check(ev, "small-tasks", results, "--config-root", _fx("config-root"),
                   "--min-share", "0.90", "--min-items", "11") == 1
     assert _check(ev, "orders", _fx("passing-results.json"), "--min-found", "0.9", "--max-flagged", "0.05",
                   "--min-runs", "4") == 1

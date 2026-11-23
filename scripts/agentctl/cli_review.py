@@ -1988,9 +1988,6 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
         each.plan_review_passes[""] = review
     if not overridden:
         _record_first_thinker_verdict(state, doc, review, "")
-    sub_plan.record_method_review(
-        state, store, doc, verdict="override" if overridden else gates._PLAN_REVIEW_PASS,
-        reviewer=TOPOLOGICAL_COMPOSITION_REVIEWER, plan_sha256=live, at=time.time())
     for each in written:
         _count_plan_review_round(each, target)
     blockers = gates.plan_review_blockers(view, target)
