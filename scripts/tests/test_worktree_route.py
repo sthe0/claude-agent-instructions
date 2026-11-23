@@ -89,6 +89,9 @@ class Canon:
         shutil.copy(SCRIPTS_DIR / "lib" / "hermetic_run.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "test_slots.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "principle_provenance.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "difficulty_phase.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "understanding_effort.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "markdown_sections.py", scripts / "lib")
         (scripts / "lib" / "__init__.py").write_text("")
         (scripts / "lib" / "semantic_join.py").write_text(
             "tokenize = term_score = None\n")

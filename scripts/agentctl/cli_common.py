@@ -1671,7 +1671,8 @@ def _open_difficulty(state: SessionState, origin: str | None = None, *,
     undeclared record is the placeholder the new one takes the slot of, and an absent one
     leaves the session's root slot. `origin` is None for a root record and then follows
     the slot (`child` inside a spawned session, else `stage`). `met_in` is the phase of the
-    work the difficulty was met in; an unknown name is stored as None."""
+    work the difficulty was met in; an unknown name raises ValueError (a stored record that
+    names an unknown phase still loads, as None)."""
     cur = state.difficulty
     root_level, root_parent_uid, root_origin = _root_difficulty_slot(state)
     push = cur is not None and (nested or cur.declaration is not None)
@@ -1688,11 +1689,14 @@ def _open_difficulty(state: SessionState, origin: str | None = None, *,
         return None
     if origin is None:
         origin = root_origin if level == root_level else "stage"
+    if met_in is not None and difficulty_phase.phase_of(met_in) is None:
+        raise ValueError(f"met_in {met_in!r} is not a phase; a phase is one of "
+                         f"{', '.join(difficulty_phase.PHASES)}")
     if push:
         state.difficulty_stack.append(cur)
     state.difficulty = Difficulty(
         declaration=declaration, level=level, parent_uid=parent_uid, origin=origin,
-        met_in=difficulty_phase.phase_of(met_in))
+        met_in=met_in)
     return state.difficulty
 
 

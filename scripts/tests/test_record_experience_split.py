@@ -246,6 +246,18 @@ def test_split_apply_moves_leave_source_front_matter_carried_to_clusters(env, tm
         assert f"created: {DATE}" in text
 
 
+def test_split_apply_carries_the_phase_the_source_was_met_in(env, tmp_path):
+    root, manifest_path, _ = fresh_work(tmp_path)
+    source = root / SOURCE
+    text = source.read_text(encoding="utf-8")
+    source.write_text(text.replace("generality: 0\n", "generality: 0\nmet_in: [understanding, planning]\n", 1),
+                      encoding="utf-8")
+    run(env, "split-apply", "--manifest", manifest_path, "--date", DATE)
+    for leaf in (DRIFT, HANG):
+        assert re.search(r"^met_in: \[understanding, planning\]$",
+                         (root / leaf).read_text(encoding="utf-8"), re.MULTILINE)
+
+
 def test_split_apply_moves_indexes_the_new_leaves(env, tmp_path):
     root, manifest_path, _ = fresh_work(tmp_path)
     run(env, "split-apply", "--manifest", manifest_path, "--date", DATE)
@@ -781,4 +793,5 @@ def test_split_commands_not_in_write_commands_so_nothing_is_auto_landed():
 
 
 def test_split_commands_not_in_write_commands_keeps_the_existing_set():
-    assert set(re_mod.WRITE_COMMANDS) == {"new", "extend", "ticket", "set-last-verified"}
+    assert set(re_mod.WRITE_COMMANDS) == {
+        "new", "extend", "ticket", "set-last-verified", "understanding-effort"}

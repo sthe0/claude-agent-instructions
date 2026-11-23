@@ -572,7 +572,7 @@ def _met_in_dropped(mp):
     `met_in` loads as None."""
     mp.setattr("lib.difficulty_phase.format_met_in", lambda phases: "", raising=True)
     mp.setattr("lib.difficulty_phase.matches", lambda value, wanted: True, raising=True)
-    mp.setattr("lib.difficulty_phase.names", lambda value, wanted: False, raising=True)
+    mp.setattr("lib.difficulty_phase.names_phase", lambda value, wanted: False, raising=True)
     mp.setattr("lib.difficulty_phase.phase_of", lambda value: None, raising=True)
 
 

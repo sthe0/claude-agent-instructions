@@ -27,6 +27,14 @@ Subcommands:
                       holds >=2 contexts, scaffold `## Common core & variations`.
   ticket              Write a THIN pointer leaf (record lives in the ticket)
                       and print the structured body to stdout for posting.
+  understanding-effort
+                      Record on a difficulty/v1 leaf the estimate (--kind
+                      estimate; --author, and --confirmer once someone agreed)
+                      or one actual (--kind actual; --actual-session) of
+                      understanding an order of its type, in --minutes, --usd
+                      or both. Refuses, writing nothing, a figure that is not
+                      a finite non-negative number and a leaf whose block is
+                      malformed already.
   split-contexts      Read-only: list `<id> <heading>` per `### ` context of a
                       leaf — the ids a split manifest names.
   split-apply         Execute a split manifest the memory curator wrote: move
@@ -65,7 +73,7 @@ Subcommands:
 Scope: --scope global (default; this repo's memory-global/leaves/experience)
 or --scope project --project-dir <dir> (<dir>/.claude/agent-memory/experience).
 
-Routing: the write subcommands (new, extend, ticket, set-last-verified) on the
+Routing: the write subcommands (new, extend, ticket, set-last-verified, understanding-effort) on the
 global scope never edit the canonical checkout in place. Run from the main
 checkout they write through a fresh worktree cut from origin/main, commit,
 land on origin/main, fast-forward the canonical checkout and remove the
@@ -97,6 +105,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
 from lib import difficulty_phase  # noqa: E402
 from lib import leaf_forms  # noqa: E402
+from lib import markdown_sections  # noqa: E402
 from lib import memory_retrieval_ledger  # noqa: E402
 from lib import principle_provenance as pp  # noqa: E402
 from lib import semantic_join  # noqa: E402
@@ -155,14 +164,7 @@ def search_root(scope: str, project_dir: str | None, tier: str) -> Path:
 # --------------------------------------------------------------------------
 # section helpers
 # --------------------------------------------------------------------------
-def section_span(text: str, heading: str) -> tuple[int, int] | None:
-    """Return (start, end) byte span of a `## <heading>` section, end being the
-    start of the next `## ` heading or EOF. None if the heading is absent."""
-    m = re.search(rf"^##\s+{re.escape(heading)}\b.*$", text, re.MULTILINE)
-    if not m:
-        return None
-    nxt = H2.search(text, m.end())
-    return m.start(), (nxt.start() if nxt else len(text))
+section_span = markdown_sections.section_span
 
 
 def set_fm_field(text: str, key: str, value: str) -> str:
@@ -391,8 +393,11 @@ def cmd_search(a) -> int:
     if not terms:
         sys.exit("search needs keywords")
     met_in = getattr(a, "met_in", None)
+    if met_in and tier != "experience":
+        print(f"record-experience: --met-in narrows the experience tier only; "
+              f"the {tier} tier is searched without it", file=sys.stderr)
     scored: list[tuple[int, Path, str]] = []
-    names_phase: dict[Path, bool] = {}
+    names_wanted: dict[Path, bool] = {}
     if tier in leaf_forms.TIER_AREAS:
         candidates = leaf_forms.tier_leaves(REPO_ROOT / "memory-global/leaves", tier)
     else:
@@ -420,8 +425,8 @@ def cmd_search(a) -> int:
         score = term_score(desc + " " + sec, terms)
         if score:
             scored.append((score, leaf, desc.strip()))
-            names_phase[leaf] = difficulty_phase.names(leaf_met_in, met_in)
-    scored.sort(key=lambda x: (not names_phase[x[1]], -x[0]))
+            names_wanted[leaf] = difficulty_phase.names_phase(leaf_met_in, met_in)
+    scored.sort(key=lambda x: (not names_wanted[x[1]], -x[0]))
     noun = {"regularities": "regularity", "principles": "principle",
             "system-knowledge": "system-knowledge leaf"}.get(tier, "experience leaf")
     ledger_record("search", a, a.keywords, [leaf.resolve() for _, leaf, _ in scored[:3]])
@@ -645,14 +650,23 @@ def cmd_understanding_effort(a) -> int:
     if not path.exists():
         sys.exit(f"leaf not found: {path} — --leaf takes a path to the leaf file")
     text = path.read_text(encoding="utf-8")
+    if a.minutes is None and a.usd is None:
+        sys.exit("give the effort in minutes (--minutes), dollars (--usd) or both")
+    held = understanding_effort.problems(text)
+    if held:
+        sys.exit("refusing to write: the leaf's block is malformed already — "
+                 + "; ".join(held) + " — repair it by hand first")
     if a.kind == "estimate":
-        if not (a.author and a.confirmer):
-            sys.exit("an estimate names who authored it (--author) and who confirmed it (--confirmer)")
-        new_text = understanding_effort.set_estimate(text, a.minutes, a.usd, a.author, a.confirmer)
+        if not a.author:
+            sys.exit("an estimate names who authored it (--author); --confirmer names who agreed to "
+                     "it and is left out while nobody has")
+        new_text = understanding_effort.set_estimate(
+            text, author=a.author, minutes=a.minutes, usd=a.usd, confirmer=a.confirmer)
     else:
         if not a.actual_session:
             sys.exit("an actual names the session it was met in (--actual-session)")
-        new_text = understanding_effort.add_actual(text, a.minutes, a.usd, a.actual_session, a.date)
+        new_text = understanding_effort.add_actual(
+            text, session=a.actual_session, date=a.date, minutes=a.minutes, usd=a.usd)
     found = understanding_effort.problems(new_text)
     if found:
         sys.exit("refusing to write: " + "; ".join(found))
@@ -701,7 +715,7 @@ SPLIT_MARKER_LINE = re.compile(rf"{SPLIT_MARKER} \d{{4}}-\d{{2}}-\d{{2}}:")
 CLUSTER_TEXT_KEYS = ("slug", "name", "description", "functional_ground", "difficulty")
 CLUSTER_OPTIONAL_KEYS = ("existing_regularity", "existing_principle", "no_principle_reason")
 PROMOTED_KEYS = (("regularities", "regularity"), ("principles", "principle"))
-CARRIED_KEYS = ("type", "schema", "generality", "tier")
+CARRIED_KEYS = ("type", "schema", "generality", "tier", difficulty_phase.FIELD)
 LEVEL_LABELS = {1: "sibling-context rules", 2: "task-class rules", 3: "cross-domain invariants"}
 SUBPROCESS_TIMEOUT_S = 120
 
@@ -1848,10 +1862,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "of this type on a difficulty/v1 leaf")
     ue.add_argument("--leaf", required=True)
     ue.add_argument("--kind", choices=["estimate", "actual"], required=True)
-    ue.add_argument("--minutes", type=float, required=True)
-    ue.add_argument("--usd", type=float, required=True)
+    ue.add_argument("--minutes", type=float, default=None, help="effort in minutes (one of --minutes/--usd at least)")
+    ue.add_argument("--usd", type=float, default=None, help="effort in dollars (one of --minutes/--usd at least)")
     ue.add_argument("--author", help="estimate: who authored the figure")
-    ue.add_argument("--confirmer", help="estimate: who confirmed it")
+    ue.add_argument("--confirmer", help="estimate: who confirmed it; omit while nobody has")
     ue.add_argument("--actual-session", dest="actual_session",
                     help="actual: the session the effort was met in")
     ue.add_argument("--date", default=today())

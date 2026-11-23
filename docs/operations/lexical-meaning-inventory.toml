@@ -2186,15 +2186,45 @@ ground = "Recognises the `## Contexts` heading line (with an optional suffix) to
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/record-experience.py::section_span::pattern.search"]
+[sites."scripts/lib/markdown_sections.py::<module>::re.compile"]
 class = "structural"
-ground = "H2 pattern finds the next `## ` heading to bound a markdown section."
+ground = "Compiles _H2, the markdown `## ` heading syntax that bounds a section."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/record-experience.py::section_span::re.search"]
+[sites."scripts/lib/markdown_sections.py::section_span::pattern.search"]
 class = "structural"
-ground = "Finds the `## <heading>` line of a named markdown section."
+ground = "_H2 pattern finds the next `## ` heading to bound a markdown section."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/markdown_sections.py::section_span::re.search"]
+class = "structural"
+ground = "Finds the `## <heading>` line of a named markdown section; the heading is a literal name the caller passes, not text read for meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/difficulty_phase.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles _LINE, the frontmatter syntax `met_in: <value>`; the value is then compared with the three phase names, a closed set."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/difficulty_phase.py::in_frontmatter::pattern.search"]
+class = "structural"
+ground = "Finds the `met_in:` line in a leaf's frontmatter text; frontmatter key syntax, no reading of free text."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/understanding_effort.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles _FENCE, the markdown ```toml fence that holds the effort block; the fence content is parsed by tomllib."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/understanding_effort.py::parse::pattern.search"]
+class = "structural"
+ground = "Finds the ```toml fence inside the `## Understanding effort` section; the block is then read by a TOML parser, not by pattern."
 hits = 1
 reviewed_by = "developer"
 

@@ -91,7 +91,8 @@ def _supersede_for_release(state: SessionState) -> None:
                        and old.critique is None and old.normalization is None):
         return
     state.log("difficulty_superseded", uid=old.uid, record=asdict(old))
-    state.difficulty = Difficulty(level=old.level, parent_uid=old.parent_uid, origin=old.origin)
+    state.difficulty = Difficulty(level=old.level, parent_uid=old.parent_uid, origin=old.origin,
+                                  met_in=old.met_in)
 
 
 # Test seam for `--norm-target` classification, mirroring exempt_paths.SCRATCH_ROOTS_ENV:

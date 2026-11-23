@@ -55,7 +55,7 @@ def matches(frontmatter_value: str | None, wanted: str | None) -> bool:
     return not names or wanted in names
 
 
-def names(frontmatter_value: str | None, wanted: str | None) -> bool:
+def names_phase(frontmatter_value: str | None, wanted: str | None) -> bool:
     return bool(wanted) and wanted in met_in_of(frontmatter_value)
 
 

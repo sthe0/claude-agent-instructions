@@ -17,8 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from agentctl.state import Difficulty
-from lib import difficulty_phase, understanding_effort
+from agentctl import cli_common, cli_difficulty
+from agentctl.state import Declaration, Difficulty, Node, SessionState
+from lib import difficulty_phase, markdown_sections, understanding_effort
 from order_agreement_mutants import mutant, script_module  # noqa: F401  (autouse fixture)
 
 RE = script_module("record-experience.py")
@@ -68,10 +69,6 @@ def _errors(leaf: Path) -> str | None:
     return VEL.check_content(leaf.read_text(encoding="utf-8"))
 
 
-def test_phases_are_understanding_planning_stage():
-    assert difficulty_phase.PHASES == ("understanding", "planning", "stage")
-
-
 def test_difficulty_met_in_round_trip():
     record = Difficulty(met_in="planning")
     loaded = Difficulty.from_dict(dataclasses.asdict(record))
@@ -81,6 +78,38 @@ def test_difficulty_met_in_round_trip():
 @pytest.mark.parametrize("phase", difficulty_phase.PHASES)
 def test_every_phase_survives_a_load(phase):
     assert Difficulty.from_dict(dataclasses.asdict(Difficulty(met_in=phase))).met_in == phase
+
+
+def _diagnosing() -> SessionState:
+    return SessionState(session_id="s", task_id="t", node=Node.DIAGNOSING.value)
+
+
+def test_open_difficulty_records_the_phase_through_save_and_load():
+    state = _diagnosing()
+    cli_common._open_difficulty(state, met_in="planning")
+    assert state.difficulty.met_in == "planning"
+    assert SessionState.from_json(state.to_json()).difficulty.met_in == "planning"
+
+
+def test_open_difficulty_without_a_phase_records_none():
+    state = _diagnosing()
+    cli_common._open_difficulty(state)
+    assert state.difficulty.met_in is None
+
+
+def test_open_difficulty_refuses_an_unknown_phase_and_opens_nothing():
+    state = _diagnosing()
+    with pytest.raises(ValueError, match="understanding, planning, stage"):
+        cli_common._open_difficulty(state, met_in="brainstorming")
+    assert state.difficulty is None
+
+
+def test_a_release_supersede_keeps_the_phase_of_the_replaced_record():
+    state = _diagnosing()
+    cli_common._open_difficulty(state, declaration=Declaration("e", "a", "m"), met_in="understanding")
+    cli_difficulty._supersede_for_release(state)
+    assert state.difficulty.declaration is None
+    assert state.difficulty.met_in == "understanding"
 
 
 def test_difficulty_unknown_met_in_loads_as_none():
@@ -119,6 +148,23 @@ def test_extend_adds_a_phase_to_an_untagged_leaf(tmp_path):
     assert RE.main(["extend", "--leaf", str(leaf), "--date", DATE, "--context-label", "second",
                     "--context-where", "W", "--plan", "P", "--met-in", "planning"]) == 0
     assert _met_in_line(leaf) == "met_in: [planning]"
+
+
+def test_ticket_leaf_writes_met_in(tmp_path):
+    assert RE.main(["ticket", "--scope", "project", "--project-dir", str(tmp_path), "--date", DATE,
+                    "--slug", "thin", "--title", "thin", "--description", "a thin pointer",
+                    "--confirmed-by", "user", "--difficulty", "d", "--order", "o", "--criterion", "c",
+                    "--context-where", "W", "--plan", "P", "--ticket", "ABC-1",
+                    "--met-in", "planning"]) == 0
+    leaf = _experience_dir(tmp_path) / f"{DATE}-thin.md"
+    assert _met_in_line(leaf) == "met_in: [planning]"
+    assert _errors(leaf) is None
+
+
+def test_search_names_the_tiers_that_ignore_met_in(capsys):
+    capsys.readouterr()
+    assert RE.main(["search", "--tier", "regularities", "--met-in", "planning", "overrun"]) == 0
+    assert "--met-in narrows the experience tier only" in capsys.readouterr().err
 
 
 def test_search_filters_by_phase(tmp_path, capsys):
@@ -181,6 +227,20 @@ def test_met_in_helpers_treat_an_untagged_value_as_matching_every_phase():
     assert difficulty_phase.matches("[stage, planning]", "planning")
 
 
+def test_section_span_ends_at_the_next_heading_and_matches_a_whole_word():
+    text = "# t\n\n## Costs\nx\n\n## Cost\nbody\n\n## Plan\nc\n"
+    start, end = markdown_sections.section_span(text, "Cost")
+    assert text[start:end] == "## Cost\nbody\n\n"
+    assert markdown_sections.section_span(text, "Absent") is None
+    assert markdown_sections.section_span(text, "Plan") == (text.index("## Plan"), len(text))
+
+
+def test_the_leaf_command_and_the_effort_block_find_a_section_with_one_helper():
+    text = "# t\n\n## Understanding effort (draft)\nx\n\n## Cost\nc\n"
+    assert RE.section_span(text, "Understanding effort") == understanding_effort.section_span(text)
+    assert understanding_effort.section_span(text) == (text.index("## Understanding"), text.index("## Cost"))
+
+
 def test_block_parse_render_round_trip():
     block = {"estimate": {"minutes": 12.0, "usd": 1.5, "author": "agent", "confirmer": "user"},
              "actuals": [{"minutes": 20.0, "usd": 2.0, "session": "s1", "date": DATE}]}
@@ -189,11 +249,18 @@ def test_block_parse_render_round_trip():
     assert understanding_effort.problems(rendered) == []
 
 
-def test_add_actual_appends_and_sets_estimate():
-    text = "# leaf\n\n## Cost\n1 USD\n"
-    text = understanding_effort.set_estimate(text, 10, 1, "agent", "user")
-    text = understanding_effort.add_actual(text, 14, 1.2, "s1", DATE)
-    text = understanding_effort.add_actual(text, 9, 0.8, "s2", DATE)
+def _estimate(text: str, minutes=10, usd=1, **kw) -> str:
+    return understanding_effort.set_estimate(text, author="agent", minutes=minutes, usd=usd, **kw)
+
+
+def _actual(text: str, minutes=14, usd=1.2, session="s1") -> str:
+    return understanding_effort.add_actual(text, session=session, date=DATE, minutes=minutes, usd=usd)
+
+
+def test_add_actual_appends_and_keeps_estimate():
+    text = _estimate("# leaf\n\n## Cost\n1 USD\n", confirmer="user")
+    text = _actual(text, 14, 1.2, "s1")
+    text = _actual(text, 9, 0.8, "s2")
     assert understanding_effort.estimate_of(text) == {
         "minutes": 10, "usd": 1, "author": "agent", "confirmer": "user"}
     assert [row["session"] for row in understanding_effort.parse(text)["actuals"]] == ["s1", "s2"]
@@ -201,10 +268,33 @@ def test_add_actual_appends_and_sets_estimate():
     assert understanding_effort.problems(text) == []
 
 
+@pytest.mark.parametrize("scale", [{"minutes": 12}, {"usd": 1.5}])
+def test_estimate_and_actual_on_one_scale_only_render_parse_and_pass(scale):
+    text = understanding_effort.set_estimate("# leaf\n", author="agent", confirmer="user", **scale)
+    text = understanding_effort.add_actual(text, session="s1", date=DATE, **scale)
+    block = understanding_effort.parse(text)
+    assert set(block["estimate"]) == {*scale, "author", "confirmer"}
+    assert set(block["actuals"][0]) == {*scale, "session", "date"}
+    assert understanding_effort.problems(text) == []
+
+
+def test_estimate_without_confirmer_is_recorded_as_unconfirmed():
+    text = _estimate("# leaf\n")
+    assert "confirmer" not in understanding_effort.estimate_of(text)
+    assert understanding_effort.problems(text) == []
+
+
+def test_confirming_an_estimate_later_replaces_it_in_place():
+    text = _actual(_estimate("# leaf\n"))
+    text = _estimate(text, minutes=12, confirmer="user")
+    assert understanding_effort.estimate_of(text)["confirmer"] == "user"
+    assert len(understanding_effort.parse(text)["actuals"]) == 1
+
+
 def test_set_estimate_replaces_in_place_and_keeps_later_sections():
-    text = understanding_effort.set_estimate("# leaf\n\n## Cost\n1 USD\n", 10, 1, "agent", "user")
+    text = _estimate("# leaf\n\n## Cost\n1 USD\n", confirmer="user")
     text += "\n## Self-critique of the agent system\nlater\n"
-    text = understanding_effort.set_estimate(text, 20, 2, "agent", "user")
+    text = _estimate(text, minutes=20, usd=2, confirmer="user")
     assert understanding_effort.estimate_of(text)["minutes"] == 20
     assert text.count(understanding_effort.SECTION) == 1
     assert "## Self-critique of the agent system\nlater" in text
@@ -219,7 +309,12 @@ def test_estimate_of_a_leaf_without_the_block_is_none():
     "## Understanding effort\n\nno fence here\n",
     "## Understanding effort\n\n```toml\n[estimate]\nminutes = 5\n```\n",
     "## Understanding effort\n\n```toml\n[estimate]\nminutes = -1\nusd = 1\nauthor = \"a\"\nconfirmer = \"b\"\n```\n",
+    "## Understanding effort\n\n```toml\n[estimate]\nminutes = nan\nauthor = \"a\"\n```\n",
+    "## Understanding effort\n\n```toml\n[estimate]\nusd = inf\nauthor = \"a\"\n```\n",
+    "## Understanding effort\n\n```toml\n[estimate]\nauthor = \"a\"\nconfirmer = \"b\"\n```\n",
+    "## Understanding effort\n\n```toml\n[estimate]\nminutes = 5\nauthor = \"a\"\nconfirmer = \"\"\n```\n",
     "## Understanding effort\n\n```toml\n[[actuals]]\nminutes = 1\nusd = 1\nsession = \"\"\ndate = \"d\"\n```\n",
+    "## Understanding effort\n\n```toml\n[[actuals]]\nsession = \"s\"\ndate = \"d\"\n```\n",
     "## Understanding effort\n\n```toml\nnot = = toml\n```\n",
     "## Understanding effort\n\n```toml\n```\n",
 ])
@@ -227,43 +322,90 @@ def test_malformed_block_refused(body):
     assert understanding_effort.problems("# leaf\n\n" + body)
 
 
+def test_a_missing_scale_is_named():
+    out = understanding_effort.problems(
+        "## Understanding effort\n\n```toml\n[estimate]\nauthor = \"a\"\n```\n")
+    assert out == ["estimate holds neither minutes nor usd"]
+
+
 def test_malformed_block_refused_on_a_difficulty_leaf(tmp_path):
     leaf = _new(tmp_path, "alpha", "the order was read twice")
     leaf.write_text(leaf.read_text(encoding="utf-8")
                     + "\n## Understanding effort\n\n```toml\n[estimate]\nminutes = 5\n```\n",
                     encoding="utf-8")
-    assert "Understanding effort" in _errors(leaf) or "estimate" in _errors(leaf)
+    assert "estimate lacks author" in _errors(leaf)
+
+
+def _effort(leaf: Path, *argv: str) -> int:
+    return RE.main(["understanding-effort", "--leaf", str(leaf), "--date", DATE, *argv])
 
 
 def test_understanding_effort_command_records_estimate_then_actual(tmp_path):
     leaf = _new(tmp_path, "alpha", "the order was read twice")
-    base = ["understanding-effort", "--leaf", str(leaf), "--minutes", "10", "--usd", "1", "--date", DATE]
-    assert RE.main([*base, "--kind", "estimate", "--author", "agent", "--confirmer", "user"]) == 0
-    assert RE.main([*base, "--kind", "actual", "--actual-session", "s1"]) == 0
+    scale = ["--minutes", "10", "--usd", "1"]
+    assert _effort(leaf, *scale, "--kind", "estimate", "--author", "agent", "--confirmer", "user") == 0
+    assert _effort(leaf, *scale, "--kind", "actual", "--actual-session", "s1") == 0
     block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
     assert block["estimate"]["author"] == "agent"
     assert block["actuals"][0]["session"] == "s1"
     assert _errors(leaf) is None
 
 
-def test_understanding_effort_estimate_without_author_refused(tmp_path):
+def test_understanding_effort_command_records_one_scale_and_an_unconfirmed_estimate(tmp_path):
     leaf = _new(tmp_path, "alpha", "the order was read twice")
+    assert _effort(leaf, "--minutes", "10", "--kind", "estimate", "--author", "agent") == 0
+    assert _effort(leaf, "--usd", "0.5", "--kind", "actual", "--actual-session", "s1") == 0
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    assert block["estimate"] == {"minutes": 10.0, "author": "agent"}
+    assert block["actuals"] == [{"usd": 0.5, "session": "s1", "date": DATE}]
+    assert _errors(leaf) is None
+
+
+def _refused(leaf: Path, needle: str, *argv: str) -> None:
     before = leaf.read_text(encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
-        RE.main(["understanding-effort", "--leaf", str(leaf), "--kind", "estimate",
-                 "--minutes", "10", "--usd", "1"])
-    assert "--author" in str(exc.value)
+        _effort(leaf, *argv)
+    assert needle in str(exc.value)
     assert leaf.read_text(encoding="utf-8") == before
+
+
+def test_understanding_effort_command_without_either_scale_refused(tmp_path):
+    leaf = _new(tmp_path, "alpha", "the order was read twice")
+    _refused(leaf, "--minutes", "--kind", "estimate", "--author", "agent")
+    assert _effort(leaf, "--minutes", "10", "--kind", "estimate", "--author", "agent") == 0
+    assert _errors(leaf) is None
+
+
+@pytest.mark.parametrize("figure", [["--minutes", "-3"], ["--usd", "nan"], ["--minutes", "inf"]])
+def test_understanding_effort_command_refuses_a_figure_that_is_not_a_finite_non_negative_number(
+        tmp_path, figure):
+    leaf = _new(tmp_path, "alpha", "the order was read twice")
+    _refused(leaf, "refusing to write", "--kind", "estimate", "--author", "agent", *figure)
+
+
+def test_understanding_effort_command_refuses_a_leaf_whose_block_is_malformed_already(tmp_path):
+    leaf = _new(tmp_path, "alpha", "the order was read twice")
+    clean = leaf.read_text(encoding="utf-8")
+    leaf.write_text(clean + "\n## Understanding effort\n\n```toml\nnot = = toml\n```\n", encoding="utf-8")
+    actual = ["--kind", "actual", "--actual-session", "s1", "--minutes", "5"]
+    _refused(leaf, "repair it by hand", *actual)
+    leaf.write_text(clean, encoding="utf-8")
+    assert _effort(leaf, *actual) == 0
+    assert _errors(leaf) is None
+
+
+def test_understanding_effort_estimate_without_author_refused(tmp_path):
+    leaf = _new(tmp_path, "alpha", "the order was read twice")
+    _refused(leaf, "--author", "--kind", "estimate", "--minutes", "10", "--usd", "1")
+    assert _effort(leaf, "--kind", "estimate", "--minutes", "10", "--usd", "1", "--author", "agent") == 0
+    assert _errors(leaf) is None
 
 
 def test_understanding_effort_actual_without_session_refused(tmp_path):
     leaf = _new(tmp_path, "alpha", "the order was read twice")
-    before = leaf.read_text(encoding="utf-8")
-    with pytest.raises(SystemExit) as exc:
-        RE.main(["understanding-effort", "--leaf", str(leaf), "--kind", "actual",
-                 "--minutes", "10", "--usd", "1"])
-    assert "--actual-session" in str(exc.value)
-    assert leaf.read_text(encoding="utf-8") == before
+    _refused(leaf, "--actual-session", "--kind", "actual", "--minutes", "10", "--usd", "1")
+    assert _effort(leaf, "--kind", "actual", "--minutes", "10", "--usd", "1", "--actual-session", "s1") == 0
+    assert _errors(leaf) is None
 
 
 def test_regularity_record_with_block_passes():
@@ -275,7 +417,6 @@ def test_regularity_record_with_block_passes():
         "## Refutation\nAn order of this type read quickly.\n\n"
         "## Induced from\n- [[some-leaf]]\n"
     )
-    with_block = understanding_effort.add_actual(
-        understanding_effort.set_estimate(leaf, 30, 3, "agent", "user"), 41, 4.2, "s1", DATE)
+    with_block = _actual(_estimate(leaf, 30, 3, confirmer="user"), 41, 4.2)
     assert understanding_effort.estimate_of(with_block)["minutes"] == 30
     assert VLS.check_content(with_block, "memory-global/leaves/regularities/reg.md") is None
