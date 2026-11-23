@@ -76,6 +76,15 @@ def widens(old_doc: Any, new_doc: Any) -> list[str] | None:
     -- not UNKNOWN -- so introducing permissions where none existed before is
     correctly reported as widening by the entries it adds.
     """
+    parts = widening_parts(old_doc, new_doc)
+    return None if parts is None else parts[0] + parts[1]
+
+
+def widening_parts(old_doc: Any, new_doc: Any) -> tuple[list[str], list[str]] | None:
+    """`widens`, split: `(allow_added, deny_removed)`, each in first-seen order
+    without duplicates, or None when `old_doc` is not a JSON object. A caller
+    that has to name the two kinds separately reads them here, so its wording
+    can never drift from what `widens` reports."""
     if not isinstance(old_doc, dict):
         return None
 
@@ -84,11 +93,8 @@ def widens(old_doc: Any, new_doc: Any) -> list[str] | None:
         return _string_list(perms.get(key)) if isinstance(perms, dict) else []
 
     old_allow = set(field_of(old_doc, "allow"))
-    old_deny = set(field_of(old_doc, "deny"))
-    new_allow = field_of(new_doc, "allow")
-    new_deny = field_of(new_doc, "deny")
+    new_deny = set(field_of(new_doc, "deny"))
 
-    allow_added = list(dict.fromkeys(e for e in new_allow if e not in old_allow))
-    deny_removed = list(dict.fromkeys(e for e in old_deny if e not in set(new_deny)))
-
-    return allow_added + deny_removed
+    allow_added = list(dict.fromkeys(e for e in field_of(new_doc, "allow") if e not in old_allow))
+    deny_removed = list(dict.fromkeys(e for e in field_of(old_doc, "deny") if e not in new_deny))
+    return allow_added, deny_removed

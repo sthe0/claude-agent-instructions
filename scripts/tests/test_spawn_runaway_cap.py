@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+import spawner_launcher
+
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 
 
@@ -100,7 +102,7 @@ def _dry_run(tmp_path: Path, home: Path, tier: str) -> subprocess.CompletedProce
     plan = tmp_path / "plan.md"
     plan.write_text("# Plan\n\n**<<this step>>** do the thing.\n")
     cmd = [
-        "python3", str(SCRIPT),
+        "python3", spawner_launcher.launcher(),
         "--kind", "developer",
         "--plan", str(plan),
         "--done-criterion", "stub does nothing",
@@ -159,7 +161,7 @@ def _run_spawn(tmp_path: Path, home: Path, bin_dir: Path, tier: str) -> subproce
     plan = tmp_path / "plan.md"
     plan.write_text("# Plan\n\n**<<this step>>** do the thing.\n")
     cmd = [
-        "python3", str(SCRIPT),
+        "python3", spawner_launcher.launcher(),
         "--kind", "developer",
         "--plan", str(plan),
         "--done-criterion", "stub does nothing",

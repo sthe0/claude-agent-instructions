@@ -19,7 +19,7 @@ from . import (
 )
 from .partition import render_section, render_units, verdict
 from .directive import Directive
-from .dispatch import Runner
+from .dispatch import Runner, venue_settings_digests
 from .machine import transition
 from .plan import (
     PlanError,
@@ -30,6 +30,7 @@ from .plan import (
 )
 from .state import (
     AGENT_ACTOR,
+    CheckVenue,
     is_skipped,
     Partition,
     GateRecord,
@@ -710,6 +711,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # a plan that failed to load or grants nothing, matching grants_approval_
     # blockers' own fail-open reading of the same two conditions.
     _bind_approved_grants(state, _approved_doc, _approved_entries)
+    state.venue_settings_at_approve = venue_settings_digests(state.resolve_check_venue(CheckVenue.DELIVERY.value))
     if _approved_doc is not None:
         _rekey_runtime_grants(state, _approved_doc)
     # Terminal-pass custody: a fresh approval cycle starts with no pass on

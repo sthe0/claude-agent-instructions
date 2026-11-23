@@ -154,6 +154,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/cli_review.py`:`_record_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
 | `scripts/agentctl/cli_dispatch.py`:`_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
 | `scripts/agentctl/cli_dispatch.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |
+| `scripts/agentctl/dispatch.py`:`venue_settings_digests` | not a binding | Hashes the venue's project settings documents, not a plan, to compare with the digests recorded at approve. |
 | `scripts/agentctl/gates.py`:`_file_sha256` | not a binding | The hashing helper itself. |
 | `scripts/agentctl/gates.py`:`file_norm_digest` | not a binding | Hashes a norm file, not a plan. |
 | `scripts/agentctl/delivery.py`:`has_answered_channel_delivery` | not a binding | Compares the plan digest a channel stamp was written for with the one in the engine's own recorded channel-delivery event; both are recorded, neither is a plan file's current digest. |

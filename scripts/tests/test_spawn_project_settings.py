@@ -16,7 +16,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from argparse import Namespace
 from pathlib import Path
+
+from agentctl import cli
+from agentctl.dispatch import venue_settings_digests
+from agentctl.store import FileStateStore
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 
@@ -119,3 +124,194 @@ def test_build_child_settings_merges_project_deny_alongside_plans_deny(tmp_path)
         "developer", plans_directory=plans_directory, project_settings_file=project_path,
     )
     assert "Bash(curl:*)" in settings["permissions"]["deny"]
+
+
+# --- dispatched_venue / project_settings_refusal: only dispatch's venue, on the default store ---
+
+SESSION = "project-settings-venue"
+
+
+def _default_store(tmp_path: Path, monkeypatch) -> FileStateStore:
+    """The default engine store under `tmp_path`, with no scratch roots so a venue there counts."""
+    monkeypatch.setattr("agentctl.store.DEFAULT_ROOT", tmp_path / "state")
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [])
+    return FileStateStore()
+
+
+def _session_at_venue(store: FileStateStore, venue: Path) -> None:
+    """A session whose delivery venue is `venue`, approved with its settings as they are now."""
+    cli.cmd_start(Namespace(session=SESSION, task="t", goal="g", done_criterion="dc",
+                            criterion_type="measurable", recursion_depth=0), store=store)
+    state = store.load(SESSION)
+    state.delivery_worktree = str(venue)
+    state.repo_root = str(venue)
+    state.venue_settings_at_approve = venue_settings_digests(str(venue))
+    store.save(state)
+
+
+def _checkout(directory: Path) -> Path:
+    (directory / ".git").mkdir(parents=True)
+    (directory / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    return directory
+
+
+def _venue_with_settings(tmp_path: Path, monkeypatch) -> Path:
+    venue = _checkout(tmp_path / "proj")
+    _write_settings(venue, {"permissions": {"allow": ["Bash(make test:*)"]}})
+    _session_at_venue(_default_store(tmp_path, monkeypatch), venue)
+    return venue
+
+
+def _settings_of(directory: Path) -> Path:
+    return directory / ".claude" / "settings.local.json"
+
+
+def _refusal(project_settings: Path, workdir: Path, session, state_root=None):
+    venue_settings, not_venue = MOD.dispatched_venue(str(workdir), session, state_root)
+    return MOD.project_settings_refusal(project_settings, venue_settings, not_venue)
+
+
+def test_project_settings_refusal_accepts_the_venue_settings_for_a_child_in_the_venue(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    assert _refusal(_settings_of(venue), venue, SESSION) is None
+
+
+def test_project_settings_refusal_compares_by_realpath(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    link = tmp_path / "proj-link"
+    link.symlink_to(venue)
+    assert _refusal(_settings_of(link), link, SESSION) is None
+
+
+def test_project_settings_refusal_refuses_without_a_session(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    assert "--session" in _refusal(_settings_of(venue), venue, None)
+
+
+def test_project_settings_refusal_refuses_an_explicit_state_root(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    refusal = _refusal(_settings_of(venue), venue, SESSION, tmp_path / "state")
+    assert "--state-root" in refusal
+
+
+def test_project_settings_refusal_refuses_an_unknown_session(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    assert "no engine session no-such-session" in _refusal(_settings_of(venue), venue, "no-such-session")
+
+
+def test_project_settings_refusal_refuses_an_unreadable_session_state(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    (tmp_path / "state" / f"{SESSION}.json").write_text("{not json", encoding="utf-8")
+    assert "unreadable" in _refusal(_settings_of(venue), venue, SESSION)
+
+
+def test_project_settings_refusal_refuses_a_forged_file_outside_the_venue(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    forged = _write_settings(tmp_path / "scratch" / "x", {"permissions": {"allow": ["Bash(git push:*)"]}})
+    assert "is not the delivery venue's settings file" in _refusal(forged, venue, SESSION)
+
+
+def test_project_settings_refusal_refuses_when_the_venue_has_no_settings_file(tmp_path, monkeypatch):
+    venue = _checkout(tmp_path / "proj")
+    _session_at_venue(_default_store(tmp_path, monkeypatch), venue)
+    assert "(none)" in _refusal(_settings_of(venue), venue, SESSION)
+
+
+def test_project_settings_refusal_refuses_a_child_started_outside_the_venue(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    elsewhere = tmp_path / "scratch"
+    elsewhere.mkdir()
+    assert "not in the delivery venue" in _refusal(_settings_of(venue), elsewhere, SESSION)
+
+
+def test_project_settings_refusal_refuses_a_venue_whose_git_file_gitdir_dangles(tmp_path, monkeypatch):
+    venue = tmp_path / "proj"
+    venue.mkdir()
+    (venue / ".git").write_text("gitdir: /elsewhere/.git/worktrees/proj\n")
+    _write_settings(venue, {"permissions": {"allow": ["Bash(git push:*)"]}})
+    _session_at_venue(_default_store(tmp_path, monkeypatch), venue)
+    assert "is no repository checkout" in _refusal(_settings_of(venue), venue, SESSION)
+
+
+def test_project_settings_refusal_refuses_an_unmarked_venue_outside_scratch(tmp_path, monkeypatch):
+    venue = tmp_path / "proj"
+    venue.mkdir()
+    _write_settings(venue, {"permissions": {"allow": ["Bash(git push:*)"]}})
+    _session_at_venue(_default_store(tmp_path, monkeypatch), venue)
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [])
+    assert "is no repository checkout" in _refusal(_settings_of(venue), venue, SESSION)
+
+
+def test_venue_settings_changed_after_approve_leave_the_child_user_only(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    _write_settings(venue, {"permissions": {"allow": ["Bash(git push:*)"]}})
+    venue_settings, not_venue = MOD.dispatched_venue(str(venue), SESSION, None)
+    assert venue_settings is None
+    assert f"{_settings_of(venue)} changed since `agentctl approve`" in not_venue
+
+
+def test_venue_under_a_scratch_root_leaves_the_child_user_only(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [str(tmp_path)])
+    venue_settings, not_venue = MOD.dispatched_venue(str(venue), SESSION, None)
+    assert venue_settings is None
+    assert "is under a scratch root" in not_venue
+
+
+_BUILTIN_SCRATCH_ROOTS = MOD.exempt_paths.builtin_scratch_roots
+
+
+def test_an_env_scratch_root_list_does_not_move_the_scratch_decision(tmp_path, monkeypatch):
+    venue = _venue_with_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", _BUILTIN_SCRATCH_ROOTS)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(unrelated))
+    venue_settings, not_venue = MOD.dispatched_venue(str(venue), SESSION, None)
+    assert venue_settings is None
+    assert "is under a scratch root" in not_venue
+
+
+# --- config_root_refusal / starts_in_parent_project: the parent found under the login home ---
+
+PARENT_SESSION = "parent-under-login-home"
+
+
+def _login_home_with_transcript(tmp_path: Path, monkeypatch, cwd: Path) -> Path:
+    home = tmp_path / "home"
+    folder = home / ".claude-agent" / "projects" / MOD._project_dir_name(str(cwd))
+    folder.mkdir(parents=True)
+    (folder / f"{PARENT_SESSION}.jsonl").write_text(json.dumps({"type": "user", "cwd": str(cwd)}) + "\n")
+    monkeypatch.setattr(MOD, "_login_home", lambda: str(home))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PARENT_SESSION)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    return home
+
+
+def test_config_root_refusal_refuses_a_config_dir_other_than_the_parents(tmp_path, monkeypatch, config_root_check_armed):
+    _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "forged"))
+    refusal = MOD.config_root_refusal()
+    assert refusal is not None and str(tmp_path / "forged") in refusal
+
+
+def test_config_root_refusal_refuses_a_config_dir_when_the_session_is_unknown(tmp_path, monkeypatch, config_root_check_armed):
+    _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "no-such-session")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "forged"))
+    refusal = MOD.config_root_refusal()
+    assert refusal is not None and "the child's config root" in refusal
+
+
+def test_config_root_refusal_passes_the_parents_own_config_root(tmp_path, monkeypatch, config_root_check_armed):
+    home = _login_home_with_transcript(tmp_path, monkeypatch, tmp_path / "proj")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-agent"))
+    assert MOD.config_root_refusal() is None
+
+
+def test_child_started_in_the_parents_project_root_loads_project_sources(tmp_path, monkeypatch):
+    project = _checkout(tmp_path / "proj")
+    _login_home_with_transcript(tmp_path, monkeypatch, project)
+    monkeypatch.setattr(MOD.exempt_paths, "builtin_scratch_roots", lambda: [])
+    assert MOD.user_only_reason(str(project), "not the delivery venue", PARENT_SESSION) is None

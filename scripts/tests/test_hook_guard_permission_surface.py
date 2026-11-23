@@ -38,6 +38,7 @@ _SPEC.loader.exec_module(guard)
 
 decide = guard.decide
 decide_detailed = guard.decide_detailed
+make_probe = guard.project_root.make_probe
 
 
 def _read_file_map(mapping: dict[str, str]):
@@ -322,10 +323,435 @@ def test_g1_write_allows_on_narrowing(tmp_path):
     assert decide("Write", tool_input, str(tmp_path), "default", read_file) == "allow"
 
 
+def _unreadable(path: str) -> str:
+    raise PermissionError(path)
+
+
 def test_g1_write_allows_when_base_file_is_unreadable(tmp_path):
     target = tmp_path / ".claude-agent" / "settings.json"
     tool_input = {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
-    assert decide("Write", tool_input, str(tmp_path), "default", _read_file_map({})) == "allow"
+    assert decide("Write", tool_input, str(tmp_path), "default", _unreadable) == "allow"
+
+
+def test_g1_write_creating_a_settings_document_lists_the_added_allow_rules(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    tool_input = {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(rm:*)", "Edit(//etc/**)"]}}'}
+    decision, branch, message = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert (decision, branch) == ("ask", "G1-edit")
+    assert message.startswith("The agent is granting itself permissions")
+    assert "2 added permissions.allow rule(s): 'Bash(rm:*)', 'Edit(//etc/**)'" in message
+
+
+def test_g1_edit_creating_a_settings_document_widens_from_empty(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    tool_input = {"file_path": str(target), "old_string": "", "new_string": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
+    decision, branch, message = decide_detailed("Edit", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert (decision, branch) == ("ask", "G1-edit")
+    assert "1 added permissions.allow rule(s): 'Bash(rm:*)'" in message
+
+
+def test_g1_multi_edit_creating_a_settings_document_widens_from_empty(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    edits = [{"old_string": "", "new_string": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}]
+    tool_input = {"file_path": str(target), "edits": edits}
+    decision, branch, message = decide_detailed("MultiEdit", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert (decision, branch) == ("ask", "G1-edit")
+    assert "1 added permissions.allow rule(s): 'Bash(rm:*)'" in message
+
+
+def test_g1_edit_allows_when_the_existing_base_file_is_unreadable(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    tool_input = {"file_path": str(target), "old_string": "", "new_string": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
+    assert decide("Edit", tool_input, str(tmp_path), "default", _unreadable) == "allow"
+
+
+def test_g1_bash_cp_lists_the_allow_rules_read_from_the_source(tmp_path):
+    source = tmp_path / "mine.json"
+    target = tmp_path / ".claude-agent" / "settings.json"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(git push:*)"]}}'})
+    command = f"cp {source} {target}"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file)
+    assert (decision, branch) == ("ask", "G1-bash")
+    assert message.startswith("The agent is granting itself permissions")
+    assert "1 added permissions.allow rule(s): 'Bash(git push:*)'" in message
+
+
+def test_g1_bash_states_a_zero_deny_count(tmp_path):
+    source = tmp_path / "mine.json"
+    target = tmp_path / ".claude-agent" / "settings.json"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(git push:*)"]}}'})
+    _, _, message = decide_detailed("Bash", {"command": f"cp {source} {target}"}, str(tmp_path), "default", read_file)
+    assert "0 removed permissions.deny rule(s)" in message
+
+
+def test_g1_bash_cp_into_a_directory_lists_the_rules_for_the_derived_target(tmp_path):
+    source = tmp_path / "settings.json"
+    target_dir = tmp_path / ".claude-agent"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(git push:*)"]}}'})
+    _, _, message = decide_detailed("Bash", {"command": f"cp {source} {target_dir}"}, str(tmp_path), "default", read_file)
+    assert f"{target_dir / 'settings.json'}: 1 added permissions.allow rule(s): 'Bash(git push:*)'" in message
+
+
+def test_g1_bash_names_every_settings_document_the_command_writes(tmp_path):
+    source = tmp_path / "mine.json"
+    first = tmp_path / ".claude-agent" / "settings.json"
+    second = tmp_path / ".claude-agent" / "settings.local.json"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(rm:*)"]}}'})
+    command = f"cp {source} {first} && cp {source} {second}"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file)
+    assert (decision, branch) == ("ask", "G1-bash")
+    assert "writing 2 settings documents" in message
+    assert f"(1) {first}: rules unknown" in message
+    assert f"(2) {second}: rules unknown" in message
+
+
+def test_g1_bash_denies_when_one_of_several_targets_is_in_a_non_project(tmp_path):
+    (tmp_path / "real" / ".git").mkdir(parents=True)
+    (tmp_path / "real" / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    source = tmp_path / "mine.json"
+    real = tmp_path / "real" / ".claude" / "settings.local.json"
+    fake = tmp_path / "fake" / ".claude" / "settings.local.json"
+    command = f"cp {source} {real} && cp {source} {fake}"
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", _read_file_map({}), probe)
+    assert (decision, branch) == ("deny", "G1-nonproject")
+    assert f"{tmp_path / 'fake'} is in a scratch/temp directory" in message
+
+
+def test_g1_bash_rules_are_unknown_when_an_earlier_segment_writes_the_source(tmp_path):
+    source = tmp_path / "mine.json"
+    target = tmp_path / ".claude-agent" / "settings.json"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(ls:*)"]}}'})
+    command = f"echo '{{}}' > {source} && cp {source} {target}"
+    _, _, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file)
+    assert "rules unknown" in message
+    assert "Bash(ls:*)" not in message
+
+
+def test_g1_bash_rules_are_unknown_when_another_segment_runs_a_non_inert_program(tmp_path):
+    source = tmp_path / "mine.json"
+    target = tmp_path / ".claude-agent" / "settings.json"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(ls:*)"]}}'})
+    command = f"python3 gen.py && cp {source} {target}"
+    _, _, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file)
+    assert "rules unknown" in message
+
+
+def test_g1_bash_rules_are_unknown_under_a_command_substitution(tmp_path):
+    source = tmp_path / "mine.json"
+    target = tmp_path / ".claude-agent" / "settings.json"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(ls:*)"]}}'})
+    command = f"cp {source} {target} && echo $(date)"
+    _, _, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file)
+    assert "rules unknown" in message
+
+
+def test_g1_bash_rules_are_unknown_for_a_variable_source_even_when_a_file_bears_its_literal_name(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    read_file = _read_file_map({str(tmp_path / "$SRC"): '{"permissions": {"allow": ["Bash(ls:*)"]}}'})
+    command = f"cp $SRC {target}"
+    _, _, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file)
+    assert "rules unknown" in message
+
+
+def test_g1_bash_cat_redirect_lists_rules_not_already_in_the_target(tmp_path):
+    source = tmp_path / "mine.json"
+    target = tmp_path / ".claude-agent" / "settings.json"
+    read_file = _read_file_map({
+        str(source): '{"permissions": {"allow": ["Bash(ls:*)", "Bash(curl:*)"], "defaultMode": "auto"}}',
+        str(target): '{"permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(curl:*)"]}}',
+    })
+    command = f"cat {source} > {target}"
+    _, _, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file)
+    assert "1 added permissions.allow rule(s): 'Bash(curl:*)'" in message
+    assert "1 removed permissions.deny rule(s): 'Bash(curl:*)'" in message
+    assert "permissions.defaultMode raised from unset to auto" in message
+
+
+def test_g1_bash_with_unknown_content_says_the_rules_are_unknown(tmp_path):
+    command = f"echo \"$RULES\" > {tmp_path}/.claude-agent/settings.json"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", _read_file_map({}))
+    assert (decision, branch) == ("ask", "G1-bash")
+    assert message.startswith("The agent is granting itself permissions")
+    assert "rules unknown — the written content cannot be read off the command" in message
+
+
+def test_g1_message_counts_rules_beyond_the_listed_ones(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    rules = [f"Bash(tool{i:02}:x)" for i in range(25)]
+    tool_input = {"file_path": str(target), "content": json.dumps({"permissions": {"allow": rules}})}
+    _, _, message = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert "25 added permissions.allow rule(s)" in message
+    assert "'Bash(tool19:x)', ... and 5 more" in message
+    assert "Bash(tool20:x)" not in message
+
+
+def test_g1_message_lists_a_bare_tool_name_before_narrower_rules(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    rules = [f"Bash(tool{i:02}:x)" for i in range(25)] + ["Bash"]
+    tool_input = {"file_path": str(target), "content": json.dumps({"permissions": {"allow": rules}})}
+    _, _, message = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert "26 added permissions.allow rule(s): 'Bash', 'Bash(tool00:x)'" in message
+
+
+def test_g1_message_lists_wildcard_rules_before_exact_ones(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    rules = ["Bash(git status)", "Bash(git push:*)"]
+    tool_input = {"file_path": str(target), "content": json.dumps({"permissions": {"allow": rules}})}
+    _, _, message = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert "2 added permissions.allow rule(s): 'Bash(git push:*)', 'Bash(git status)'" in message
+
+
+def test_g1_message_quotes_a_rule_so_a_newline_cannot_hide_its_end(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    tool_input = {"file_path": str(target), "content": json.dumps({"permissions": {"allow": ["Bash(ls)\nBash(rm:*)"]}})}
+    _, _, message = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert "'Bash(ls)\\nBash(rm:*)'" in message
+
+
+def test_g1_message_cuts_an_overlong_rule_and_says_how_much(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    rule = "Bash(" + "x" * 200 + ")"
+    tool_input = {"file_path": str(target), "content": json.dumps({"permissions": {"allow": [rule]}})}
+    _, _, message = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}))
+    assert f"(+{len(rule) - 120} chars)" in message
+    assert rule not in message
+
+
+# --- G1-nonproject: a settings document in a directory that is no project ---
+
+def _fake_project_settings_write(tmp_path):
+    target = tmp_path / "fake" / ".claude" / "settings.local.json"
+    return {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(git push:*)"]}}'}
+
+
+def test_g1_nonproject_denies_a_write_into_an_unmarked_scratch_directory(tmp_path):
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, message = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("deny", "G1-nonproject")
+    assert message.startswith("The agent is granting itself permissions")
+    assert "'Bash(git push:*)'" in message
+    assert f"{tmp_path / 'fake'} is in a scratch/temp directory" in message
+
+
+def test_g1_nonproject_keeps_ask_for_an_unmarked_directory_outside_scratch(tmp_path):
+    (tmp_path / "fake").mkdir()
+    probe = make_probe(scratch_roots=(), home=str(tmp_path))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def _git_dir(directory):
+    (directory / ".git").mkdir(parents=True)
+    (directory / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+
+
+def test_g1_nonproject_keeps_ask_when_the_parent_holds_a_git_dir(tmp_path):
+    _git_dir(tmp_path / "fake")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def test_g1_nonproject_denies_when_the_parent_holds_only_an_empty_git_dir(tmp_path):
+    (tmp_path / "fake" / ".git").mkdir(parents=True)
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("deny", "G1-nonproject")
+
+
+def test_g1_nonproject_keeps_ask_for_a_linked_worktree_git_file(tmp_path):
+    _git_dir(tmp_path / "main")
+    (tmp_path / "main" / ".git" / "worktrees" / "fake").mkdir(parents=True)
+    (tmp_path / "main" / ".git" / "worktrees" / "fake" / "HEAD").write_text("ref: refs/heads/topic\n")
+    (tmp_path / "fake").mkdir()
+    (tmp_path / "fake" / ".git").write_text(f"gitdir: {tmp_path}/main/.git/worktrees/fake\n")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def test_g1_nonproject_denies_a_git_file_whose_gitdir_dangles(tmp_path):
+    (tmp_path / "fake").mkdir()
+    (tmp_path / "fake" / ".git").write_text("gitdir: /elsewhere/.git/worktrees/fake\n")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("deny", "G1-nonproject")
+
+
+def test_project_root_probe_takes_a_relative_gitdir_from_the_git_files_directory(tmp_path):
+    (tmp_path / "wt").mkdir()
+    (tmp_path / "admin").mkdir()
+    (tmp_path / "admin" / "HEAD").write_text("ref: refs/heads/topic\n")
+    (tmp_path / "wt" / ".git").write_text("gitdir: ../admin\n")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    assert probe(str(tmp_path / "wt")) is True
+
+
+def test_g1_nonproject_denies_when_the_parent_holds_a_stray_git_file(tmp_path):
+    (tmp_path / "fake").mkdir()
+    (tmp_path / "fake" / ".git").write_text("not a worktree pointer\n")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, _, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert decision == "deny"
+
+
+def test_g1_nonproject_denies_when_only_an_arcignore_marks_the_parent(tmp_path):
+    (tmp_path / "fake").mkdir()
+    (tmp_path / "fake" / ".arcignore").write_text("")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, _, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert decision == "deny"
+
+
+def test_project_root_probe_stops_at_home_before_a_home_level_marker(tmp_path):
+    (tmp_path / ".arc").mkdir()
+    (tmp_path / "fake").mkdir()
+    probe = make_probe(scratch_roots=(), home=str(tmp_path))
+    assert probe(str(tmp_path / "fake")) is None
+
+
+def test_project_root_probe_answers_none_on_reaching_the_filesystem_root(tmp_path):
+    (tmp_path / "fake").mkdir()
+    probe = make_probe(scratch_roots=(), home="/nonexistent-home")
+    assert probe(str(tmp_path / "fake")) is None
+
+
+def test_project_root_probe_compares_home_by_realpath(tmp_path):
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / ".arc").mkdir()
+    (tmp_path / "home" / "fake").mkdir()
+    (tmp_path / "home-link").symlink_to(tmp_path / "home")
+    probe = make_probe(scratch_roots=(), home=str(tmp_path / "home-link"))
+    assert probe(str(tmp_path / "home" / "fake")) is None
+
+
+def test_project_root_probe_finds_the_arc_mount_root_through_a_symlinked_mount(tmp_path):
+    (tmp_path / "store" / ".arc").mkdir(parents=True)
+    (tmp_path / "store" / "sub").mkdir()
+    (tmp_path / "mount").symlink_to(tmp_path / "store")
+    probe = make_probe(scratch_roots=())
+    assert probe(str(tmp_path / "mount" / "sub")) is True
+
+
+def test_session_scratch_probe_reads_the_configured_scratch_roots(tmp_path, monkeypatch):
+    _git_dir(tmp_path)
+    scratch = tmp_path / "scratch"
+    (scratch / "fake").mkdir(parents=True)
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(scratch))
+    assert guard._session_scratch_probe()(str(scratch / "fake")) is False
+
+
+def test_g1_nonproject_keeps_ask_for_a_subproject_inside_a_checkout(tmp_path):
+    (tmp_path / "repo" / ".arc").mkdir(parents=True)
+    (tmp_path / "repo" / "fake").mkdir()
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, _, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path / "repo"), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert decision == "ask"
+
+
+def test_g1_nonproject_denies_below_a_scratch_root_even_when_the_root_holds_a_marker(tmp_path):
+    _git_dir(tmp_path)
+    (tmp_path / "fake").mkdir()
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("deny", "G1-nonproject")
+
+
+def test_g1_nonproject_keeps_ask_for_a_real_checkout_inside_a_scratch_directory(tmp_path):
+    _git_dir(tmp_path / "fake")
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}), probe,
+    )
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def test_g1_nonproject_keeps_ask_when_the_probe_cannot_inspect_the_parent(tmp_path):
+    decision, branch, _ = decide_detailed(
+        "Write", _fake_project_settings_write(tmp_path), str(tmp_path), "default", _read_file_map({}),
+        lambda directory: None,
+    )
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def test_g1_nonproject_denies_a_bash_copy_into_a_fake_project(tmp_path):
+    source = tmp_path / "mine.json"
+    command = f"mkdir -p {tmp_path}/fake/.claude && cp {source} {tmp_path}/fake/.claude/settings.local.json"
+    read_file = _read_file_map({str(source): '{"permissions": {"allow": ["Bash(rm:*)"]}}'})
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, message = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", read_file, probe)
+    assert (decision, branch) == ("deny", "G1-nonproject")
+    assert "'Bash(rm:*)'" in message
+
+
+def test_g1_nonproject_leaves_the_personal_claude_dir_to_plain_g1(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / ".claude" / "settings.json"
+    tool_input = {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
+    probe = make_probe(scratch_roots=(str(tmp_path),))
+    decision, branch, _ = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}), probe)
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def test_g1_nonproject_leaves_a_symlink_to_the_personal_claude_dir_to_plain_g1(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / "fake").mkdir()
+    (tmp_path / "fake" / ".claude").symlink_to(tmp_path / ".claude")
+    target = tmp_path / "fake" / ".claude" / "settings.json"
+    tool_input = {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
+    probe = make_probe(scratch_roots=(str(tmp_path),), home="/nonexistent-home")
+    decision, branch, _ = decide_detailed("Write", tool_input, str(tmp_path), "default", _read_file_map({}), probe)
+    assert (decision, branch) == ("ask", "G1-edit")
+
+
+def _main_payload_for_fake_project_write(tmp_path, permission_mode):
+    return {
+        "session_id": "sess-1",
+        "tool_name": "Write",
+        "tool_input": _fake_project_settings_write(tmp_path),
+        "cwd": str(tmp_path),
+        "permission_mode": permission_mode,
+    }
+
+
+def test_main_denies_a_fake_project_settings_write_at_depth_zero_in_default_mode(tmp_path):
+    result = _run_hook(
+        _main_payload_for_fake_project_write(tmp_path, "default"),
+        {"AGENT_RECURSION_DEPTH": "0", "TMPDIR": str(tmp_path), "CLAUDE_PERMISSION_GUARD_LOG": str(tmp_path / "log")},
+    )
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert out["permissionDecisionReason"].startswith("The agent is granting itself permissions")
+
+
+def test_main_denies_a_fake_project_settings_write_at_depth_zero_in_auto_mode(tmp_path):
+    result = _run_hook(
+        _main_payload_for_fake_project_write(tmp_path, "auto"),
+        {"AGENT_RECURSION_DEPTH": "0", "TMPDIR": str(tmp_path), "CLAUDE_PERMISSION_GUARD_LOG": str(tmp_path / "log")},
+    )
+    assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_g1_multi_edit_fires_on_permissions_widening(tmp_path):
@@ -594,6 +1020,54 @@ def test_g2_fires_through_a_leading_bare_env_assignment():
     decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
     assert decision == "ask"
     assert branch == "G2"
+
+
+# --- G2-env ---
+
+def test_g2_env_denies_a_config_dir_prefix_on_the_spawner():
+    command = "CLAUDE_CONFIG_DIR=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "CLAUDE_CONFIG_DIR" in message
+
+
+def test_g2_env_denies_an_exported_home_before_a_claude_launch():
+    command = "export HOME=/tmp/h; claude -p hi"
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+
+
+def test_g2_env_denies_a_pythonpath_prefix_on_the_spawner():
+    command = "PYTHONPATH=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONPATH" in message
+
+
+def test_g2_env_denies_a_pythonstartup_prefix_on_the_spawner():
+    command = "PYTHONSTARTUP=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONSTARTUP" in message
+
+
+def test_g2_env_denies_a_pythonhome_prefix_on_the_spawner():
+    command = "PYTHONHOME=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONHOME" in message
+
+
+def test_g2_env_denies_a_pythonuserbase_prefix_on_the_spawner():
+    command = "PYTHONUSERBASE=/x python3 /a/scripts/spawn-specialist.py --kind developer"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("deny", "G2-env")
+    assert "PYTHONUSERBASE" in message
+
+
+def test_g2_env_allows_a_config_dir_prefix_on_a_program_that_launches_no_child():
+    command = "CLAUDE_CONFIG_DIR=/x python3 scripts/agent-report.py"
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "allow"
 
 
 # --- G3 ---
@@ -1122,13 +1596,13 @@ def test_internal_exception_during_a_benign_bash_command_fails_open_not_closed(m
     docstring: "any unexpected shape or internal exception allows") is a
     design choice, not just prose -- if a future edit flipped that fallback
     to "ask", this test (which forces a real internal failure on an
-    otherwise-benign command) would go red. `_g1_bash` is patched to raise
-    so the exception path is genuinely exercised, not just assumed
+    otherwise-benign command) would go red. `_g1_bash_targets` is patched to
+    raise so the exception path is genuinely exercised, not just assumed
     unreachable."""
     def _boom(command, cwd):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(guard, "_g1_bash", _boom)
+    monkeypatch.setattr(guard, "_g1_bash_targets", _boom)
     decision, branch, _ = decide_detailed("Bash", {"command": "git status"}, "/tmp", "default", None)
     assert decision == "allow"
     assert branch is None

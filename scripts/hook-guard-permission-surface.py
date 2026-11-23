@@ -16,13 +16,65 @@ replacement the abandonment leaf calls for: NO cross-invocation state, NO
 UNKNOWN=>deny — every branch fires only on POSITIVE identification, and
 anything ambiguous, unreadable or unparsable ALLOWS.
 
-`decide(tool_name, tool_input, cwd, permission_mode, read_file)` and
-`decide_detailed` read no transcript, no session state, no environment
-variable, and no filesystem beyond the injected `read_file` — both return
-only `"allow"` or `"ask"`, never `"deny"`. `permission_mode` does not change
-the returned decision — it is accepted for interface parity with that
-decision table, not consulted, since the guard's own answer to "is this a
-G-target" never depends on which mode the session is in.
+`decide(tool_name, tool_input, cwd, permission_mode, read_file,
+project_root_probe=None)` and `decide_detailed` read no transcript, no session
+state, and no filesystem beyond the injected `read_file` and
+`project_root_probe`. Without a probe both return only `"allow"` or `"ask"`;
+with one they may also return `"deny"` on the G1-nonproject branch below.
+`permission_mode` does not change the returned decision — it is accepted for
+interface parity with that decision table, not consulted, since the guard's
+own answer to "is this a G-target" never depends on which mode the session is
+in.
+
+Difficulty removed (G1-nonproject, informative G1 reasons): an agent wrote
+allow rules into a settings document under a scratch directory to forge a
+`spawn-specialist.py --project-settings` file, and the G1 dialog named only
+the path, so a human approved a grant without seeing it. Every G1 reason
+now opens with "The agent is granting itself permissions", names each
+written settings document with its added allow rules (broadest first —
+a bare tool name, then wildcard rules — each `repr`-quoted and cut at
+`_MAX_ENTRY_CHARS`), removed deny rules (both counts always stated, zero
+included), a raised `defaultMode` and other changed security keys — or says
+the rules are unknown; and a settings document in a scratch directory is
+denied outright.
+
+G1-nonproject and G2-env (below) are the branches that deny at every depth
+and in every mode. G1-nonproject does not break the "never deny on ambiguity" rule above: it
+fires only when the shared probe (`lib/project_root.make_probe`) POSITIVELY
+places the parent of `.claude` under a session scratch root
+(`agentctl.exempt_paths.scratch_roots()`: `AGENTCTL_SCRATCH_ROOTS`, else
+`/tmp`, `$TMPDIR` and the system temp dir) with no repository root between
+them. A real checkout or worktree inside scratch counts as a project and
+keeps the `"ask"`; so does an unmarked directory elsewhere, which may be a
+project kept outside version control, and a directory the probe cannot
+inspect. The agent home and the harness config roots stay governed by
+plain G1.
+
+Residuals — writes no branch sees: `lib/bash_write_targets` reads only
+redirections and the destinations of `cp`/`mv`/`install`, and
+`is_live_settings` needs a lexical `.claude/settings*.json` path. Unseen:
+moving or copying a whole directory into place (`mv d x/.claude`,
+`cp -r`), a symlink alias of a `.claude` directory, other writers (`ln`,
+`rsync`, `tar -x`, `unzip`, `git clone`/`checkout` of a tree holding the
+file), an interpreter's inline code (`python3 -c`, `perl -e`, `node -e`) or
+a script file the command runs, and a target spelled through a variable or
+substitution (`> "$F"`). For `cp SRC DST` the dialog lists the rules SRC
+holds when the hook runs; SRC can change before the human answers. The
+harness's own permission prompt is the only gate on these writes for the
+current session. A child `spawn-specialist.py` starts loads such a document
+only in one of two places, where it enables project settings: the delivery
+venue its engine session records, and only while the venue's
+`.claude/settings.json` and `.claude/settings.local.json` still hash to what
+`agentctl approve` recorded (a write after approval is not loaded; one
+before approval is, and the user approved that venue); and the parent
+session's own project root, whose settings the parent already loads.
+Neither place counts under a scratch root; a `git init` outside scratch
+still makes a directory a checkout the plan may name as its venue. The
+venue's `settings.local.json` at the main checkout's root, which a linked
+worktree loads, is not hashed. Other `claude` launchers
+(`claude-recover.py`, `telemetry-synthetic-task.py`,
+`probe-hook-decision-semantics.py`, `lib/host_llm.py`) pass no
+`--setting-sources` and are out of this scope.
 
 Turning a G-branch `"ask"` into `"deny"` is `main()`'s concern, not the
 decision functions' — applied once, right before a fire is logged and
@@ -54,7 +106,7 @@ The branches — G1 (three sub-forms: G1-edit, G1-bash, G1-state), G2, G3, G4:
              (`widening_targets.is_live_settings`, never a repo template such
              as this repo's own `settings/base.json`) whose diff touches a
              security-relevant key. `permissions.allow`/`permissions.deny` via
-             `lib/permission_surface.widens`, `permissions.defaultMode` moving
+             `lib/permission_surface.widening_parts`, `permissions.defaultMode` moving
              to a higher `_DEFAULT_MODE_RANK`, and
              `permissions.disableBypassPermissionsMode` on removal each fire
              only on an actual WIDENING — the corresponding narrowing edit
@@ -81,7 +133,19 @@ The branches — G1 (three sub-forms: G1-edit, G1-bash, G1-state), G2, G3, G4:
              targets`) that is a live-loaded settings document. No diff check:
              a shell write into a live settings document has no readable
              "before" the way an Edit's `old_string` does, so any such write
-             fires.
+             fires, naming every live settings target the command writes
+             (`cp A B DIR/` derives `DIR/A`, `DIR/B`). When the written bytes
+             come from one literal readable file (`cp SRC DST`,
+             `cat SRC > DST`), that file is read through `read_file` only to
+             name the granted rules in the reason; the rules are reported
+             unknown instead when the command holds a substitution, the
+             source is a variable, or any other segment runs a program
+             outside `_INERT_PROGRAMS` or writes the source or the target.
+  G1-nonproject — a G1-edit or G1-bash fire with any target
+             `<dir>/.claude/settings*.json` whose `<dir>` the probe places in
+             scratch (see above): `"deny"`, not `"ask"`. An Edit, Write
+             or MultiEdit that creates a settings document counts as
+             widening from `{}`.
   G1-state — an Edit, Write, MultiEdit, NotebookEdit or Bash write target
              under agentctl's own state directory
              (`widening_targets.is_agentctl_state_path`) — writing there could
@@ -106,7 +170,13 @@ The branches — G1 (three sub-forms: G1-edit, G1-bash, G1-state), G2, G3, G4:
              inspected — except for `--permission-mode`, whose `default`/
              `plan` values NARROW rather than widen and so are exempt
              (`_G2_PERMISSION_MODE_EXEMPT_VALUES`).
-  G3       — an Edit, Write, MultiEdit or NotebookEdit onto, or a Bash write
+  G2-env   — `"deny"`: a Bash command that assigns `CLAUDE_CONFIG_DIR`,
+             `CLAUDE_AGENT_HOME`, `HOME`, `CLAUDE_CODE_SESSION_ID` or
+             `AGENTCTL_SCRATCH_ROOTS` (prefix, `env`, `export`) while one of
+             its segments, recursed as for G2, launches `claude` or
+             `spawn-specialist.py` (`_g2_env_bash`). Best-effort; the
+             spawner's `config_root_refusal` is the defence.
+  G3      — an Edit, Write, MultiEdit or NotebookEdit onto, or a Bash write
              target under, a persistent-launch-registration surface
              (`widening_targets.is_launch_surface`), or a Bash command
              invoking `crontab` (`widening_targets.is_crontab_target`) —
@@ -157,10 +227,12 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, permission_surface, widening_targets  # noqa: E402
+from agentctl import exempt_paths  # noqa: E402
+from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, permission_surface, project_root, widening_targets  # noqa: E402
 
 # Security-relevant settings keys other than `permissions` itself (handled
 # separately via `permission_surface.widens`, which fires only on a WIDENING
@@ -176,7 +248,7 @@ from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, permis
 # should-fix S2: a calibration run measured 8 of the 9 `G1-keys-calibration`
 # fires were autocompact-window, AFK-timeout or output-length env edits, none
 # of them security-relevant. `env` is handled separately below by
-# `_env_security_relevant_diff`, an allow-list of credential/routing key
+# `_changed_security_keys`, an allow-list of credential/routing key
 # PATTERNS rather than "any change to any key" — the same over-report-not-
 # under-report posture applied per-key instead of to the whole dict.
 _OTHER_SECURITY_KEYS = (
@@ -281,19 +353,6 @@ def _is_security_relevant_env_key(key: str) -> bool:
     )
 
 
-def _env_security_relevant_diff(old_env, new_env) -> bool:
-    """S2: unlike `_OTHER_SECURITY_KEYS`, `env` fires only on a change to a
-    key matching `_is_security_relevant_env_key` -- an allow-list of
-    credential/routing patterns, not "any key changed"."""
-    old_env = old_env if isinstance(old_env, dict) else {}
-    new_env = new_env if isinstance(new_env, dict) else {}
-    keys = set(old_env) | set(new_env)
-    return any(
-        _is_security_relevant_env_key(key) and old_env.get(key) != new_env.get(key)
-        for key in keys
-    )
-
-
 def _default_mode_widens(old_mode, new_mode) -> bool:
     """S2: `permissions.defaultMode` widens only when it moves to a HIGHER
     `_DEFAULT_MODE_RANK`; an unranked mode on either side fires
@@ -327,39 +386,46 @@ def _enabled_mcp_servers_widens(old_value, new_value) -> bool:
     return any(entry not in old_list for entry in new_list)
 
 
-def _security_relevant_diff(old_text: str, new_text: str) -> bool:
-    """True iff the parsed old/new JSON documents differ on a security-
-    relevant key. Any parse failure, or either side not being a JSON object,
-    allows (False) — the UNKNOWN/unparsable=>allow rule applied at this
-    narrower scope."""
+def _parse_settings(text: str) -> dict | None:
+    """`text` as a settings object; a blank text (a document not created yet)
+    is the empty object; None when it is not a JSON object."""
+    if not text.strip():
+        return {}
     try:
-        old_doc = json.loads(old_text)
-        new_doc = json.loads(new_text)
+        doc = json.loads(text)
     except (json.JSONDecodeError, TypeError, ValueError):
-        return False
-    if not isinstance(old_doc, dict) or not isinstance(new_doc, dict):
-        return False
-    if permission_surface.widens(old_doc, new_doc):
-        return True
-    if any(old_doc.get(key) != new_doc.get(key) for key in _OTHER_SECURITY_KEYS):
-        return True
-    if _env_security_relevant_diff(old_doc.get("env"), new_doc.get("env")):
-        return True
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+class _Grant(NamedTuple):
+    """What going from one settings document to another grants. Both the G1
+    fire predicate (`bool(grant)`) and the dialog text are read off this one
+    value, so the dialog can never name less than what made the guard fire.
+    (A NamedTuple, not a dataclass: tests and the replay tool load this file
+    by path without registering it in `sys.modules`, which a dataclass needs.)"""
+
+    allow_added: list[str]
+    deny_removed: list[str]
+    mode_raised: tuple[str | None, str | None] | None
+    changed_keys: list[str]
+
+    def __bool__(self) -> bool:
+        return bool(self.allow_added or self.deny_removed or self.mode_raised or self.changed_keys)
+
+
+def _settings_grant(old_text: str, new_text: str) -> _Grant | None:
+    """The `_Grant` of going from `old_text` to `new_text`; None when either
+    side is not a JSON object — the caller's unparsable=>allow case."""
+    old_doc, new_doc = _parse_settings(old_text), _parse_settings(new_text)
+    if old_doc is None or new_doc is None:
+        return None
+    allow_added, deny_removed = permission_surface.widening_parts(old_doc, new_doc)
     old_perms = old_doc.get("permissions") if isinstance(old_doc.get("permissions"), dict) else {}
     new_perms = new_doc.get("permissions") if isinstance(new_doc.get("permissions"), dict) else {}
-    if _default_mode_widens(old_perms.get("defaultMode"), new_perms.get("defaultMode")):
-        return True
-    if _bypass_permissions_widens(
-        old_perms.get("disableBypassPermissionsMode"), new_perms.get("disableBypassPermissionsMode")
-    ):
-        return True
-    if _enable_all_mcp_widens(
-        old_doc.get("enableAllProjectMcpServers"), new_doc.get("enableAllProjectMcpServers")
-    ):
-        return True
-    if _enabled_mcp_servers_widens(old_doc.get("enabledMcpjsonServers"), new_doc.get("enabledMcpjsonServers")):
-        return True
-    return False
+    old_mode, new_mode = old_perms.get("defaultMode"), new_perms.get("defaultMode")
+    mode_raised = (old_mode, new_mode) if _default_mode_widens(old_mode, new_mode) else None
+    return _Grant(allow_added, deny_removed, mode_raised, _changed_security_keys(old_doc, new_doc, old_perms, new_perms))
 
 
 def _bash_write_targets(command: str, cwd: str) -> list[str]:
@@ -367,54 +433,107 @@ def _bash_write_targets(command: str, cwd: str) -> list[str]:
     return bash_write_targets.command_write_targets(command, eff_cwd)
 
 
-def _g1_edit(tool_input: dict, read_file) -> str | None:
-    file_path = tool_input.get("file_path")
+_SettingsChange = tuple[str, "_Grant | None"]
+"""`(target, grant)` of one settings document a G1 fire writes; `grant` is
+None when the written content cannot be read off the tool call."""
+
+
+def _read_baseline(read_file, path: str) -> str | None:
+    """`path`'s current text through `read_file`; `""` when the file does not
+    exist yet (`_parse_settings` reads it as `{}`, so Edit, MultiEdit, Write
+    and a shell write all create a document from the same empty baseline);
+    None when there is no reader or the file cannot be read."""
+    if read_file is None:
+        return None
+    try:
+        text = read_file(path)
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return None
+    return text if isinstance(text, str) else None
+
+
+def _g1_document_change(file_path, read_file, after) -> _SettingsChange | None:
+    """The G1-edit fire of a tool call that turns `file_path`'s current text
+    into `after(old_text)`, when that grants anything; None otherwise."""
     if not isinstance(file_path, str) or not file_path:
         return None
     if not widening_targets.is_live_settings(file_path):
         return None
-    try:
-        old_text = read_file(file_path)
-    except Exception:
+    old_text = _read_baseline(read_file, file_path)
+    if old_text is None:
         return None
-    if not isinstance(old_text, str):
-        return None
-    new_text = _apply_edit(old_text, tool_input)
+    new_text = after(old_text)
     if new_text is None:
         return None
-    if _security_relevant_diff(old_text, new_text):
-        return file_path
-    return None
+    grant = _settings_grant(old_text, new_text)
+    return (file_path, grant) if grant else None
 
 
-def _g1_bash(command: str, cwd: str) -> str | None:
-    for target in _bash_write_targets(command, cwd):
-        if widening_targets.is_live_settings(target):
-            return target
-    return None
+def _g1_edit(tool_input: dict, read_file) -> _SettingsChange | None:
+    return _g1_document_change(
+        tool_input.get("file_path"), read_file, lambda old_text: _apply_edit(old_text, tool_input),
+    )
 
 
-def _g1_write(tool_input: dict, read_file) -> str | None:
-    """Same G1-edit predicate as `_g1_edit`, for a Write tool_use — Write
-    already supplies the whole `after` text directly as `content`, so no
-    old_string/new_string reconstruction is needed."""
-    file_path = tool_input.get("file_path")
-    if not isinstance(file_path, str) or not file_path:
+def _g1_write(tool_input: dict, read_file) -> _SettingsChange | None:
+    content = tool_input.get("content")
+    return _g1_document_change(
+        tool_input.get("file_path"), read_file, lambda _old: content if isinstance(content, str) else None,
+    )
+
+
+def _g1_bash_targets(command: str, cwd: str) -> list[str]:
+    return list(dict.fromkeys(
+        target for target in _bash_write_targets(command, cwd) if widening_targets.is_live_settings(target)
+    ))
+
+
+# Programs whose segment can neither write a file's bytes except through a
+# redirect (caught by `segment_write_target`) nor change what another segment
+# reads.
+_INERT_PROGRAMS = frozenset({"mkdir", "echo", "printf", "true", ":", "ls", "test", "[", "pwd"})
+_SUBSTITUTIONS = ("$(", "`", "<(", ">(")
+
+
+def _g1_bash_written_text(command: str, cwd: str, target: str, read_file) -> str | None:
+    """The text `command` leaves in `target`, when it can be read off the
+    command alone: one segment writes `target`, copying one readable file
+    there (`cp SRC DST`, `cat SRC > DST`) whose path holds no `$`; every other
+    segment runs an `_INERT_PROGRAMS` program writing neither that source nor
+    `target`; the command has no command/process substitution. Otherwise
+    None — naming the source's current rules would then be a guess."""
+    if read_file is None or any(marker in command for marker in _SUBSTITUTIONS):
         return None
-    if not widening_targets.is_live_settings(file_path):
+    eff_cwd = git_cwd.effective_git_cwd(command, cwd)
+    segs = bash_write_targets.segments(command)
+    writer = next((seg for seg in segs if target in bash_write_targets.segment_write_target(seg, eff_cwd)), None)
+    if writer is None:
         return None
-    new_text = tool_input.get("content")
-    if not isinstance(new_text, str):
+    source = bash_write_targets.single_content_source(writer, eff_cwd)
+    if source is None or "$" in source:
         return None
+    for seg in segs:
+        if seg is writer:
+            continue
+        if not seg or os.path.basename(seg[0]) not in _INERT_PROGRAMS:
+            return None
+        if {source, target} & set(bash_write_targets.segment_write_target(seg, eff_cwd)):
+            return None
     try:
-        old_text = read_file(file_path)
+        text = read_file(source)
     except Exception:
         return None
-    if not isinstance(old_text, str):
+    return text if isinstance(text, str) else None
+
+
+def _g1_bash_grant(command: str, cwd: str, target: str, read_file) -> _Grant | None:
+    written = _g1_bash_written_text(command, cwd, target, read_file)
+    if written is None:
         return None
-    if _security_relevant_diff(old_text, new_text):
-        return file_path
-    return None
+    baseline = _read_baseline(read_file, target)
+    return None if baseline is None else _settings_grant(baseline, written)
 
 
 def _apply_multi_edit(old_text: str, edits: list) -> str | None:
@@ -429,30 +548,16 @@ def _apply_multi_edit(old_text: str, edits: list) -> str | None:
     return text
 
 
-def _g1_multi_edit(tool_input: dict, read_file) -> str | None:
+def _g1_multi_edit(tool_input: dict, read_file) -> _SettingsChange | None:
     """Same G1-edit predicate, for a MultiEdit tool_use — its `edits` array
     is applied in order to reconstruct the after-text `_apply_edit` would
     otherwise produce from a single old_string/new_string pair."""
-    file_path = tool_input.get("file_path")
-    if not isinstance(file_path, str) or not file_path:
-        return None
-    if not widening_targets.is_live_settings(file_path):
-        return None
     edits = tool_input.get("edits")
     if not isinstance(edits, list) or not edits:
         return None
-    try:
-        old_text = read_file(file_path)
-    except Exception:
-        return None
-    if not isinstance(old_text, str):
-        return None
-    new_text = _apply_multi_edit(old_text, edits)
-    if new_text is None:
-        return None
-    if _security_relevant_diff(old_text, new_text):
-        return file_path
-    return None
+    return _g1_document_change(
+        tool_input.get("file_path"), read_file, lambda old_text: _apply_multi_edit(old_text, edits),
+    )
 
 
 def _g1_state_edit(tool_input: dict) -> str | None:
@@ -567,6 +672,41 @@ def _g2_bash(command: str) -> str | None:
     return None
 
 
+_CONFIG_REDIRECTING_ENV = frozenset({
+    "CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_HOME", "HOME", "CLAUDE_CODE_SESSION_ID", "AGENTCTL_SCRATCH_ROOTS",
+    "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE",
+})
+_EXPORTING_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
+_SPAWNER_SCRIPT = "spawn-specialist.py"
+
+
+def _assigned_env_names(seg: list[str]) -> set[str]:
+    names: list[str] = []
+    stripped = widening_targets.strip_wrappers(seg, assignment_names=names)
+    if stripped and widening_targets.program_name(stripped[0]) in _EXPORTING_BUILTINS:
+        names += [tok.split("=", 1)[0] for tok in stripped[1:] if "=" in tok and not tok.startswith("-")]
+    return set(names)
+
+
+def _launches_child(seg: list[str]) -> bool:
+    return widening_targets.is_claude_program(seg) or any(
+        widening_targets.program_name(tok) == _SPAWNER_SCRIPT for tok in seg
+    )
+
+
+def _g2_env_bash(command: str) -> list[str] | None:
+    """The config-redirecting variables a command assigns (`VAR=… prog`, `env VAR=…`,
+    `export VAR=…`) when any of its segments, through the same shell -c/eval recursion
+    as G2, launches `claude` or `spawn-specialist.py`. Best-effort: a variable set in an
+    earlier Bash call, in a script file, or by an interpreter is not seen;
+    `spawn-specialist.py`'s own `config_root_refusal` is the defence."""
+    segs = _g2_segments(command)
+    if not any(_launches_child(seg) for seg in segs):
+        return None
+    assigned = set().union(*(_assigned_env_names(seg) for seg in segs)) & _CONFIG_REDIRECTING_ENV
+    return sorted(assigned) or None
+
+
 def _g3_edit(tool_input: dict) -> str | None:
     file_path = tool_input.get("file_path")
     if isinstance(file_path, str) and widening_targets.is_launch_surface(file_path):
@@ -667,28 +807,144 @@ def _g4_pending_action(session: str | None, read_file) -> str | None:
     return None
 
 
-def _g1_edit_message(target: str) -> str:
-    keys = (
-        "permissions/"
-        + "/".join(_OTHER_SECURITY_KEYS)
-        + "/env(credential|base-url|proxy)/permissions.defaultMode/"
-        "permissions.disableBypassPermissionsMode/enableAllProjectMcpServers/"
-        "enabledMcpjsonServers"
-    )
-    return (
-        f"Edit widens the live-loaded settings document {target} on a "
-        f"security-relevant key ({keys}; {_SETTINGS_REFERENCE_URL}). Route "
-        f"this through the plan's own grant channel (agentctl dispatch) "
-        f"instead of editing the document directly."
-    )
+_MAX_LISTED_ENTRIES = 20
+_MAX_ENTRY_CHARS = 120
 
 
-def _g1_bash_message(target: str) -> str:
-    return (
-        f"Bash command writes into the live-loaded settings document "
-        f"{target}. Route this through the plan's own grant channel "
-        f"(agentctl dispatch) instead of writing the document directly."
+def _rule_breadth(entry: str) -> tuple[int, int]:
+    """Sort key putting the rules that grant most first, so a list cut at
+    `_MAX_LISTED_ENTRIES` never hides them: a bare tool name (`Bash`) grants
+    the whole tool, then wildcard rules (shorter pattern = broader), then the
+    rest in their own order."""
+    if "(" not in entry:
+        return 0, 0
+    if "*" in entry:
+        return 1, len(entry)
+    return 2, 0
+
+
+def _shown_entry(entry: str) -> str:
+    """`repr`, so a newline or a lookalike quote inside a rule cannot pass
+    for the end of it in the dialog."""
+    if len(entry) <= _MAX_ENTRY_CHARS:
+        return repr(entry)
+    return f"{entry[:_MAX_ENTRY_CHARS]!r} (+{len(entry) - _MAX_ENTRY_CHARS} chars)"
+
+
+def _listed(entries: list[str]) -> str:
+    ordered = sorted(entries, key=_rule_breadth)
+    shown = ", ".join(_shown_entry(e) for e in ordered[:_MAX_LISTED_ENTRIES])
+    hidden = len(ordered) - _MAX_LISTED_ENTRIES
+    return f"{shown}, ... and {hidden} more" if hidden > 0 else shown
+
+
+def _counted(entries: list[str], label: str) -> str:
+    return f"{len(entries)} {label}" + (f": {_listed(entries)}" if entries else "")
+
+
+def _changed_security_keys(old_doc: dict, new_doc: dict, old_perms: dict, new_perms: dict) -> list[str]:
+    changed = [key for key in _OTHER_SECURITY_KEYS if old_doc.get(key) != new_doc.get(key)]
+    old_env = old_doc.get("env") if isinstance(old_doc.get("env"), dict) else {}
+    new_env = new_doc.get("env") if isinstance(new_doc.get("env"), dict) else {}
+    changed += sorted(
+        f"env.{key}" for key in set(old_env) | set(new_env)
+        if _is_security_relevant_env_key(key) and old_env.get(key) != new_env.get(key)
     )
+    if _bypass_permissions_widens(
+        old_perms.get("disableBypassPermissionsMode"), new_perms.get("disableBypassPermissionsMode")
+    ):
+        changed.append("permissions.disableBypassPermissionsMode")
+    if _enable_all_mcp_widens(old_doc.get("enableAllProjectMcpServers"), new_doc.get("enableAllProjectMcpServers")):
+        changed.append("enableAllProjectMcpServers")
+    if _enabled_mcp_servers_widens(old_doc.get("enabledMcpjsonServers"), new_doc.get("enabledMcpjsonServers")):
+        changed.append("enabledMcpjsonServers")
+    return changed
+
+
+def _grant_summary(grant: _Grant | None) -> str:
+    """What a write grants, in words a human approving the dialog can check.
+    Both rule counts are always stated, zero included, so a silent part never
+    reads as "nothing there"."""
+    if grant is None:
+        return "rules unknown — the written content cannot be read off the command"
+    parts = [
+        _counted(grant.allow_added, "added permissions.allow rule(s)"),
+        _counted(grant.deny_removed, "removed permissions.deny rule(s)"),
+    ]
+    if grant.mode_raised:
+        old_mode, new_mode = grant.mode_raised
+        parts.append(f"permissions.defaultMode raised from {old_mode or 'unset'} to {new_mode or 'unset'}")
+    if grant.changed_keys:
+        parts.append(f"changed security-relevant key(s): {', '.join(grant.changed_keys)}")
+    return "; ".join(parts)
+
+
+_G1_EDIT_KEYS = (
+    "permissions/" + "/".join(_OTHER_SECURITY_KEYS)
+    + "/env(credential|base-url|proxy)/permissions.defaultMode/"
+    "permissions.disableBypassPermissionsMode/enableAllProjectMcpServers/enabledMcpjsonServers"
+)
+
+_G1_REASONS = {
+    "G1-edit": (
+        f"The edit widens this live-loaded settings document on a security-relevant key "
+        f"({_G1_EDIT_KEYS}; {_SETTINGS_REFERENCE_URL}). Route this through the plan's own "
+        f"grant channel (agentctl dispatch) instead of editing the document directly."
+    ),
+    "G1-bash": (
+        "The Bash command writes into live-loaded settings. Route this through the plan's "
+        "own grant channel (agentctl dispatch) instead of writing the document directly."
+    ),
+    "G1-nonproject": (
+        "Refused: {parents} in a scratch/temp directory with no repository checkout inside "
+        "it (a `.git` directory with HEAD, a `.git` worktree file whose gitdir holds HEAD, "
+        "or a `.arc` directory), so a settings document there is no project's own grant — "
+        "writing permission rules there only forges one. Ask for the permission through the "
+        "plan's own grant channel (agentctl dispatch) instead."
+    ),
+}
+
+
+def _g1_message(branch: str, changes: list[_SettingsChange], nonproject_parents: list[str]) -> str:
+    if len(changes) == 1:
+        target, grant = changes[0]
+        head = f"The agent is granting itself permissions by writing the settings document {target}: {_grant_summary(grant)}."
+    else:
+        listed = "; ".join(f"({n}) {target}: {_grant_summary(grant)}" for n, (target, grant) in enumerate(changes, 1))
+        head = f"The agent is granting itself permissions by writing {len(changes)} settings documents: {listed}."
+    parents = ", ".join(nonproject_parents) + (" is" if len(nonproject_parents) == 1 else " are")
+    return f"{head} {_G1_REASONS[branch].format(parents=parents)}"
+
+
+def _non_project_parent(target: str, project_root_probe) -> str | None:
+    """The directory holding `target`'s `.claude` directory when
+    `project_root_probe` places it in scratch (answers False); None
+    otherwise — no probe, `target` not shaped `<dir>/.claude/settings*.json`,
+    its `.claude` resolving to the agent home or a harness config root
+    (governed by plain G1), or a probe that cannot tell."""
+    if project_root_probe is None:
+        return None
+    path = PurePosixPath(os.path.normpath(os.path.expanduser(target)))
+    if path.parent.name.casefold() != ".claude":
+        return None
+    governed = (config_root.agent_home(), config_root.harness_config_root(), Path.home() / ".claude")
+    if os.path.realpath(str(path.parent)) in {os.path.realpath(str(root)) for root in governed}:
+        return None
+    parent = str(path.parent.parent)
+    return parent if project_root_probe(parent) is False else None
+
+
+def _g1_settings_verdict(branch: str, changes: list[_SettingsChange], project_root_probe) -> tuple[str, str, str]:
+    """`"deny"` when any written document sits in a scratch directory —
+    one forged file is enough, whatever else the command writes; `"ask"`
+    otherwise, naming every document and what each grants."""
+    parents = list(dict.fromkeys(
+        parent for parent in (_non_project_parent(target, project_root_probe) for target, _ in changes)
+        if parent is not None
+    ))
+    if parents:
+        return "deny", "G1-nonproject", _g1_message("G1-nonproject", changes, parents)
+    return "ask", branch, _g1_message(branch, changes, [])
 
 
 def _g1_state_message(target: str) -> str:
@@ -704,6 +960,14 @@ def _g2_message(seg_text: str) -> str:
         f"Bash invokes `claude` with a widening flag outside the plan's own "
         f"grant channel: {seg_text}. Route this through agentctl dispatch "
         f"instead of an ad-hoc claude invocation."
+    )
+
+
+def _g2_env_message(names: list[str]) -> str:
+    return (
+        f"Bash sets {', '.join(names)} around a `claude` or `spawn-specialist.py` launch: "
+        f"that moves the child's user settings or the engine store to a directory no guard "
+        f"checks. Launch the child with the session's own environment."
     )
 
 
@@ -755,12 +1019,14 @@ def decide_detailed(
     cwd: str,
     permission_mode: str | None,
     read_file,
+    project_root_probe=None,
 ) -> tuple[str, str | None, str | None]:
     """`(decision, branch, message)` at the G-branch level — `decision` is
-    always `"allow"` or `"ask"`, never `"deny"` (see module docstring: turning
-    an `"ask"` into a `"deny"` at depth >= 1 is `main()`'s concern, not this
-    function's). `permission_mode` is accepted, never consulted (see module
-    docstring). Any unexpected shape or internal exception allows.
+    `"allow"` or `"ask"`, and `"deny"` only on G2-env and on G1-nonproject, which needs a
+    `project_root_probe` (see module docstring: turning an `"ask"` into a
+    `"deny"` at depth >= 1 is `main()`'s concern, not this function's).
+    `permission_mode` is accepted, never consulted (see module docstring).
+    Any unexpected shape or internal exception allows.
 
     `decide()` is the thin single-value wrapper `main()` and every test that
     only needs the verdict use; `replay-permission-guard.py` imports THIS
@@ -771,34 +1037,10 @@ def decide_detailed(
     depth-based rule `main()` does."""
     del permission_mode
     try:
-        if tool_name == "Edit":
-            target = _g1_edit(tool_input, read_file)
-            if target:
-                return "ask", "G1-edit", _g1_edit_message(target)
-            target = _g1_state_edit(tool_input)
-            if target:
-                return "ask", "G1-state", _g1_state_message(target)
-            target = _g3_edit(tool_input)
-            if target:
-                return "ask", "G3", _g3_message(target)
-            return "allow", None, None
-
-        if tool_name == "Write":
-            target = _g1_write(tool_input, read_file)
-            if target:
-                return "ask", "G1-edit", _g1_edit_message(target)
-            target = _g1_state_edit(tool_input)
-            if target:
-                return "ask", "G1-state", _g1_state_message(target)
-            target = _g3_edit(tool_input)
-            if target:
-                return "ask", "G3", _g3_message(target)
-            return "allow", None, None
-
-        if tool_name == "MultiEdit":
-            target = _g1_multi_edit(tool_input, read_file)
-            if target:
-                return "ask", "G1-edit", _g1_edit_message(target)
+        if tool_name in _G1_EDIT_DETECTORS:
+            change = _G1_EDIT_DETECTORS[tool_name](tool_input, read_file)
+            if change:
+                return _g1_settings_verdict("G1-edit", [change], project_root_probe)
             target = _g1_state_edit(tool_input)
             if target:
                 return "ask", "G1-state", _g1_state_message(target)
@@ -820,12 +1062,16 @@ def decide_detailed(
             command = tool_input.get("command")
             if not isinstance(command, str) or not command.strip():
                 return "allow", None, None
-            target = _g1_bash(command, cwd)
-            if target:
-                return "ask", "G1-bash", _g1_bash_message(target)
+            targets = _g1_bash_targets(command, cwd)
+            if targets:
+                changes = [(target, _g1_bash_grant(command, cwd, target, read_file)) for target in targets]
+                return _g1_settings_verdict("G1-bash", changes, project_root_probe)
             target = _g1_state_bash(command, cwd)
             if target:
                 return "ask", "G1-state", _g1_state_message(target)
+            redirected = _g2_env_bash(command)
+            if redirected:
+                return "deny", "G2-env", _g2_env_message(redirected)
             g4_hit = _g4_bash(command)
             if g4_hit:
                 rules, stage, session, scope, _g4_seg_text = g4_hit
@@ -843,16 +1089,23 @@ def decide_detailed(
         return "allow", None, None
 
 
+_G1_EDIT_DETECTORS = {"Edit": _g1_edit, "Write": _g1_write, "MultiEdit": _g1_multi_edit}
+
+
 def decide(
     tool_name: str,
     tool_input: dict,
     cwd: str,
     permission_mode: str | None,
     read_file,
+    project_root_probe=None,
 ) -> str:
-    """`"allow"` or `"ask"` — see module docstring; `main()` is the only place
-    a `"deny"` is produced."""
-    return decide_detailed(tool_name, tool_input, cwd, permission_mode, read_file)[0]
+    """`decide_detailed`'s decision alone — see module docstring."""
+    return decide_detailed(tool_name, tool_input, cwd, permission_mode, read_file, project_root_probe)[0]
+
+
+def _session_scratch_probe():
+    return project_root.make_probe(exempt_paths.scratch_roots())
 
 
 def _log_target(tool_input: dict) -> str | None:
@@ -907,12 +1160,12 @@ def main() -> int:
 
     try:
         decision, branch, message = decide_detailed(
-            tool_name, tool_input, cwd, permission_mode, _real_read_file,
+            tool_name, tool_input, cwd, permission_mode, _real_read_file, _session_scratch_probe(),
         )
     except Exception:
         return 0
 
-    if decision == "ask" and _recursion_depth() >= 1:
+    if decision in ("ask", "deny") and _recursion_depth() >= 1:
         decision = "deny"
         message = _with_permission_request_hint(message or f"{branch} widening detected")
 

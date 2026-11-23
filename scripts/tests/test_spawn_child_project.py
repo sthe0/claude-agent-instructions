@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+import spawner_launcher
 from test_spawn_runaway_cap import _read_cost_rows, _setup_fake_home, _stub_claude, _write_exec
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -309,7 +310,7 @@ def _spawn(tmp_path, home, extra, *, project_dir=None, session=None, dry_run=Tru
         env["CLAUDE_CODE_SESSION_ID"] = session
     if bin_dir is not None:
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    argv = ["python3", str(SCRIPT), *BASE_ARGV, "--plan", str(plan), *extra]
+    argv = ["python3", spawner_launcher.launcher(), *BASE_ARGV, "--plan", str(plan), *extra]
     if dry_run:
         argv.append("--dry-run")
     return subprocess.run(argv, env=env, cwd=cwd or tmp_path, capture_output=True, text=True, timeout=60)
@@ -329,9 +330,21 @@ def test_non_project_child_of_a_project_parent_is_refused(tmp_path, home, world)
     assert refused[0]["workdir"] == str(world.outside)
 
 
-def test_child_in_the_parents_own_project_passes(tmp_path, home, world):
+def test_child_in_the_parents_own_project_outside_a_dispatched_venue_is_refused(tmp_path, home, world):
     result = _spawn(tmp_path, home, ["--workdir", str(world.project)], project_dir=world.project)
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 2
+    assert result.stdout.splitlines()[0] == "Refusal: child-outside-project"
+    assert f"child in {world.project} would load user settings only (--setting-sources user)" in result.stderr
+    assert "approved delivery venue (`agentctl dispatch`" in result.stderr
+    assert f"--workdir {world.project} (" not in result.stderr
+
+
+def test_child_in_the_dispatched_venue_of_the_parents_project_passes(world, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(world.project))
+    gate = MOD._child_project_gate(
+        Namespace(allow_child_outside_project=None, kind="developer"), str(world.project), None
+    )
+    assert gate == (None, None)
 
 
 def test_subdirectory_of_a_project_with_only_a_start_directory_settings_json_is_refused(tmp_path, home, world):
@@ -340,9 +353,14 @@ def test_subdirectory_of_a_project_with_only_a_start_directory_settings_json_is_
     assert result.stdout.splitlines()[0] == "Refusal: child-outside-project"
 
 
-def test_subdirectory_of_a_repository_with_a_root_settings_local_json_passes(tmp_path, home, world):
-    result = _spawn(tmp_path, home, ["--workdir", str(world.local / "sub")], project_dir=world.project)
-    assert result.returncode == 0, result.stderr
+def test_gate_alone_passes_a_subdirectory_of_a_repository_with_a_root_settings_local_json(world, monkeypatch):
+    """`_child_project_gate` given `user_only=None`; through `_main` such a child, being
+    neither the delivery venue nor the parent's project root, loads user settings only."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(world.project))
+    gate = MOD._child_project_gate(
+        Namespace(allow_child_outside_project=None, kind="developer"), str(world.local / "sub"), None
+    )
+    assert gate == (None, None)
 
 
 def test_parent_in_no_project_passes_any_child(tmp_path, home, world):
@@ -366,8 +384,6 @@ def test_unresolved_parent_session_refuses_a_non_project_child_and_names_the_id(
     refused = _spawn(tmp_path, home, ["--workdir", str(world.outside)], session="sess-gone", cwd=world.outside)
     assert refused.returncode == 2
     assert "sess-gone" in refused.stderr
-    passed = _spawn(tmp_path, home, ["--workdir", str(world.project)], session="sess-gone", cwd=world.outside)
-    assert passed.returncode == 0, passed.stderr
 
 
 def test_parent_root_from_the_transcript_decides_the_cli(tmp_path, home, world):
@@ -385,7 +401,7 @@ def test_git_timeout_refuses_a_non_project_child_of_a_project_parent(world, monk
     monkeypatch.setattr(MOD, "GIT_PROBE_TIMEOUT_S", 0.3)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(world.project))
     stop, override = MOD._child_project_gate(
-        Namespace(allow_child_outside_project=None, kind="developer"), str(world.outside)
+        Namespace(allow_child_outside_project=None, kind="developer"), str(world.outside), None
     )
     assert (stop, override) == (2, None)
     assert capsys.readouterr().out.splitlines()[0] == "Refusal: child-outside-project"
@@ -432,7 +448,7 @@ def test_a_passing_spawn_carries_no_override_field(tmp_path, home, world):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _stub_claude(bin_dir, home, "sess-plain", cost_usd=0.01)
-    result = _spawn(tmp_path, home, ["--workdir", str(world.project)], project_dir=world.project,
+    result = _spawn(tmp_path, home, ["--workdir", str(world.outside)], project_dir=world.outside,
                     dry_run=False, bin_dir=bin_dir)
     assert result.returncode == 0, result.stderr
     assert "child_outside_project_override" not in _read_cost_rows(home)[0]

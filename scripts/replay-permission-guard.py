@@ -24,7 +24,7 @@ guard have fired on" two ways without ever installing it live:
     actually touched a security-relevant key.
   git-history mode — every commit touching a settings-shaped file
     (`*settings*.json`) anywhere in this checkout, running the guard's own
-    `_security_relevant_diff` predicate on the parent/child blob pair via
+    `_settings_grant` predicate on the parent/child blob pair via
     `git show`, reported under the synthetic branch **G1-keys-calibration**.
     This calibrates the SAME predicate G1-edit uses against real historical
     settings edits (mostly the repo's own template, which G1-edit itself
@@ -81,7 +81,7 @@ way (exit non-zero, ids named). On full coverage, `--check-classified` prints
 the count per class, resolved per would-fire after group expansion and
 id-row overrides, and exits 0.
 
-This module imports `decide_detailed` and `_security_relevant_diff` from the
+This module imports `decide_detailed` and `_settings_grant` from the
 guard module — the SAME two functions the shipped hook's own `main()` (for
 the former) and this tool's git-history mode (for the latter) rely on — plus
 `_g2_bash`/`_g4_bash` (round-3 nit 1: `_group_for` calls these, via
@@ -381,7 +381,7 @@ def _git_history_rows(repo_root: Path, until_ts: float | None) -> list[dict]:
             new_text = _git_show(repo_root, sha, relpath)
             if old_text is None or new_text is None:
                 continue
-            if _guard._security_relevant_diff(old_text, new_text):
+            if _guard._settings_grant(old_text, new_text):
                 rows.append(_make_row(
                     "G1-keys-calibration", f"{relpath}@{sha}", relpath, source="git", commit=sha,
                     group=_group_for("G1-keys-calibration", None, {}, relpath),

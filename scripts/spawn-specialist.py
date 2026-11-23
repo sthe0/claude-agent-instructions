@@ -29,6 +29,7 @@ import hashlib
 import json
 import math
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -79,6 +80,8 @@ from lib import engine_session_binding, host_stamp  # host stamp of a cost row
 from lib import fix_firings  # firing log of flagged fixes (child-noanswer-recovery writes fix A rows)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
+from lib import project_root
+from agentctl import exempt_paths
 try:
     from lib.telemetry import live  # the spawn event; fail-open, a no-op under AGENTCTL_TELEMETRY=off
 except Exception:  # telemetry must never stop a spawn
@@ -795,6 +798,149 @@ def project_settings_sources(directory: str) -> "tuple[tuple[str, ...], str]":
     return tuple(files), note
 
 
+SETTING_SOURCES_USER_ONLY = "user"
+SETTING_SOURCES_WITH_PROJECT = "user,project,local"
+
+
+def dispatched_venue(
+    workdir: str, session_id: "str | None", state_root: "Path | None" = None,
+) -> "tuple[str | None, str | None]":
+    """`(venue_settings, None)` when `workdir` is the delivery venue `agentctl dispatch`
+    starts a child of `session_id` in; `(None, reason)` otherwise. `venue_settings` is
+    that venue's `.claude/settings.local.json` when the file exists
+    (`agentctl.dispatch.venue_project_settings`, the function dispatch forwards it
+    with), else None.
+
+    The venue counts only when all hold: the session state comes from the default
+    engine store, whose writes the permission-surface guard's G1-state branch gates
+    (a `--state-root` store is unguarded, so its venue can be forged); `workdir` is
+    that venue by realpath; the venue is a repository checkout
+    (`lib/project_root.make_probe` answers True) outside every scratch root; and its
+    project settings documents still hash to what `agentctl approve` recorded
+    (`agentctl.dispatch.changed_venue_settings`), so a document planted there after
+    approval by a write the guard never saw is not loaded."""
+    if not session_id:
+        return None, "no --session names the engine session whose delivery venue it would be"
+    if state_root is not None:
+        return None, "--state-root names an engine store other than the default, guarded one"
+    from agentctl.dispatch import changed_venue_settings, venue_project_settings
+    from agentctl.store import FileStateStore
+
+    try:
+        state = FileStateStore().load(session_id)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return None, f"the engine state of session {session_id} is unreadable ({exc})"
+    if state is None:
+        return None, f"there is no engine session {session_id}"
+    venue, venue_settings = venue_project_settings(state)
+    if venue is None:
+        return None, f"session {session_id} records no delivery venue"
+    if os.path.realpath(workdir) != os.path.realpath(venue):
+        return None, f"the child starts in {workdir}, not in the delivery venue {venue} session {session_id} records"
+    if project_root.make_probe(exempt_paths.builtin_scratch_roots())(venue) is not True:
+        return None, (
+            f"the delivery venue {venue} is no repository checkout (no `.git` directory with "
+            f"HEAD, worktree `.git` file whose gitdir holds HEAD, or `.arc` directory)"
+        )
+    if _under_scratch(venue):
+        return None, f"the delivery venue {venue} is under a scratch root"
+    changed = changed_venue_settings(state.venue_settings_at_approve, venue)
+    if changed:
+        return None, f"{', '.join(changed)} changed since `agentctl approve` recorded the venue's settings"
+    return venue_settings, None
+
+
+def _under_scratch(directory: str) -> bool:
+    real = os.path.realpath(directory)
+    return any(
+        os.path.commonpath([real, os.path.realpath(root)]) == os.path.realpath(root)
+        for root in exempt_paths.builtin_scratch_roots()
+    )
+
+
+def _login_home() -> str:
+    """The home directory the password database names for this user: an env prefix
+    (`HOME=…`) does not move it."""
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+CONFIG_ROOT_NAMES = (".claude-agent", ".claude")
+
+
+def _parent_transcripts(session: str) -> "list[Path]":
+    """`session`'s transcripts under the config roots of `_login_home()` — never under
+    a root an env variable names, which the caller may have set."""
+    home = _login_home()
+    found: "list[Path]" = []
+    for name in CONFIG_ROOT_NAMES:
+        found.extend(Path(home, name, "projects").glob(f"*/{glob.escape(session)}.jsonl"))
+    return found
+
+
+def config_root_refusal() -> "str | None":
+    """Why the spawn must not run, or None. When the parent session's transcript is
+    found under a config root of the login home, the env this spawner runs with must
+    resolve to that same place: `harness_config_root()` (where the child reads user
+    settings) is the root holding the transcript, `agent_home()` (the engine store) is
+    one of the login home's config roots, and `$HOME` is the login home. Otherwise an
+    env prefix such as `CLAUDE_CONFIG_DIR=/tmp/h` would hand the child user settings,
+    and the engine a store, that nothing guards. The root check is unconditional; a
+    found transcript adds the check that the harness root is the one holding it."""
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    transcripts = _parent_transcripts(session) if session else []
+    holders = {os.path.realpath(t.parent.parent.parent) for t in transcripts}
+    login_roots = {os.path.realpath(os.path.join(_login_home(), name)) for name in CONFIG_ROOT_NAMES}
+    harness = os.path.realpath(harness_config_root())
+    if harness not in login_roots:
+        return f"the child's config root {harness} is none of the login home's config roots ({', '.join(sorted(login_roots))})"
+    if holders and harness not in holders:
+        return f"the child's config root {harness} is not {', '.join(sorted(holders))}, which holds the parent session's transcript"
+    home = os.path.realpath(agent_home())
+    if home not in login_roots:
+        return f"the agent home {home} is none of the login home's config roots ({', '.join(sorted(login_roots))})"
+    if os.path.realpath(os.environ.get("HOME", "")) != os.path.realpath(_login_home()):
+        return f"$HOME {os.environ.get('HOME', '')!r} is not the login home {_login_home()}"
+    return None
+
+
+def starts_in_parent_project(workdir: str, session: "str | None") -> bool:
+    """True when `workdir` is, by realpath, the project root the parent session runs in,
+    resolved from its transcript under the login home's config roots (never from
+    `$CLAUDE_PROJECT_DIR`, which an env prefix sets), and that root is outside scratch.
+    The parent already loads that place's project settings, so the child gains nothing
+    the parent lacks."""
+    if not session:
+        return False
+    root = _transcript_root(session, _parent_transcripts(session))
+    return root is not None and os.path.realpath(workdir) == os.path.realpath(root) and not _under_scratch(root)
+
+
+def user_only_reason(workdir: str, not_venue: "str | None", session: "str | None") -> "str | None":
+    """Why the child loads user settings only, or None when it may load project sources:
+    it starts in the approved delivery venue (`not_venue` is None) or in the parent's own
+    project root."""
+    if not_venue is None or starts_in_parent_project(workdir, session):
+        return None
+    return not_venue
+
+
+def project_settings_refusal(
+    project_settings: "Path | str", venue_settings: "str | None", not_venue: "str | None",
+) -> "str | None":
+    """Why `--project-settings` is refused, or None when it is exactly the file
+    `agentctl dispatch` forwards: the settings file of a venue `dispatched_venue`
+    accepts (`venue_settings`; `not_venue` is its refusal reason).
+
+    Difficulty removed: accepting any `.claude/settings.local.json` the spawner could
+    reach let an agent forge one in a scratch directory and have its rules merged into
+    the child's --settings grant."""
+    if not_venue is not None:
+        return not_venue
+    if venue_settings is None or os.path.realpath(project_settings) != os.path.realpath(venue_settings):
+        return f"it is not the delivery venue's settings file ({venue_settings or 'none'})"
+    return None
+
+
 def registers_hook(files: Sequence[str]) -> bool:
     """True when any of `files` has a non-empty `hooks` object; a file that cannot be
     read or parsed counts as registering (fail closed)."""
@@ -809,12 +955,13 @@ def registers_hook(files: Sequence[str]) -> bool:
     return False
 
 
-def _transcript_root(session: str) -> "str | None":
+def _transcript_root(session: str, transcripts: "Sequence[Path] | None" = None) -> "str | None":
     """The start directory of `session`, from its newest transcript's first `cwd`: that cwd
     when the transcript's project directory is named after it, else its nearest ancestor
-    that is. None when the transcript is missing, unreadable, carries no cwd or matches none."""
+    that is. None when the transcript is missing, unreadable, carries no cwd or matches none.
+    `transcripts` are the candidates; by default every one `iter_transcripts` finds."""
     try:
-        found = iter_transcripts(f"*/{glob.escape(session)}.jsonl")
+        found = list(transcripts) if transcripts is not None else iter_transcripts(f"*/{glob.escape(session)}.jsonl")
         newest = max(found, key=lambda p: p.stat().st_mtime) if found else None
         if newest is None:
             return None
@@ -868,16 +1015,18 @@ def decide_child_project(parent: ParentProject, child_files: Sequence[str]) -> "
     return "parent-unresolved" if parent.root is None else "parent-hooks"
 
 
-def _child_project_gate(args, workdir: str) -> "tuple[int | None, dict | None]":
+def _child_project_gate(args, workdir: str, user_only: "str | None") -> "tuple[int | None, dict | None]":
     """(exit code, override record): the exit code when the spawn must stop here, the
-    override record when --allow-child-outside-project let a refused spawn pass."""
+    override record when --allow-child-outside-project let a refused spawn pass.
+    `user_only` is the reason the child loads user settings only; such a child loads
+    no project settings wherever it starts."""
     reason = args.allow_child_outside_project
     if reason is not None and not reason.strip():
         print("error: --allow-child-outside-project needs a non-blank REASON", file=sys.stderr)
         log_refused("child-outside-project-blank-override", {"kind": args.kind})
         return 2, None
     parent = parent_project()
-    child_files, _ = project_settings_sources(workdir)
+    child_files = project_settings_sources(workdir)[0] if user_only is None else ()
     verdict = decide_child_project(parent, child_files)
     if verdict is None:
         return None, None
@@ -896,15 +1045,30 @@ def _child_project_gate(args, workdir: str) -> "tuple[int | None, dict | None]":
         )
         return None, {"reason": reason.strip(), "parent_root": parent.root, "child_dir": child_dir}
     print(f"Refusal: {CHILD_OUTSIDE_PROJECT}")
-    print(
-        f"error: the child would start in {child_dir}, which is in no project (Claude Code loads "
-        f"project settings and hooks from the start directory, and .claude/settings.local.json "
-        f"from the git root), while {where}; the child would run without those hooks. Remedy: "
-        f"pass --workdir inside a project; or create .claude/settings.local.json ({{}} suffices) "
-        f"at the git root of {child_dir} (the main checkout's root for a linked worktree); or, "
-        f"for a deliberate exception, --allow-child-outside-project REASON.",
-        file=sys.stderr,
-    )
+    if user_only is not None:
+        workdir_remedy = (
+            f"pass --workdir {parent.root} (the project root the parent's transcript names); or "
+            if parent.source == "transcript" and os.path.realpath(child_dir) != os.path.realpath(parent.root)
+            else ""
+        )
+        print(
+            f"error: the child in {child_dir} would load user settings only (--setting-sources user) because "
+            f"{user_only}, while {where}; the child would run without those hooks. Remedy: "
+            f"{workdir_remedy}start it in the session's approved delivery venue (`agentctl "
+            f"dispatch`, or --session naming that session with --workdir the venue); or, for a "
+            f"deliberate exception, --allow-child-outside-project REASON.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"error: the child would start in {child_dir}, which is in no project (Claude Code loads "
+            f"project settings and hooks from the start directory, and .claude/settings.local.json "
+            f"from the git root), while {where}; the child would run without those hooks. Remedy: "
+            f"pass --workdir inside a project; or create .claude/settings.local.json ({{}} suffices) "
+            f"at the git root of {child_dir} (the main checkout's root for a linked worktree); or, "
+            f"for a deliberate exception, --allow-child-outside-project REASON.",
+            file=sys.stderr,
+        )
     log_refused(CHILD_OUTSIDE_PROJECT, {
         "kind": args.kind, "workdir": child_dir, "parent_root": parent.root,
         "parent_source": parent.source, "parent_session": parent.session, "verdict": verdict,
@@ -932,7 +1096,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--project-settings",
         type=Path,
-        help="kind=developer only: a target project's own .claude/settings.local.json, whose "
+        help="kind=developer only: the .claude/settings.local.json of the delivery venue "
+             "--session records in the default engine store, for a child started in that venue "
+             "(what `agentctl dispatch` forwards; anything else is refused); its "
              "permissions.allow/deny entries are merged into this child's --settings grant "
              "(distinct from --project-permissions, which only affects the prose digest)",
     )
@@ -3327,9 +3493,36 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         log_refused("workdir-not-found", {"kind": args.kind, "workdir": str(args.workdir)})
         return 2
     workdir = str(args.workdir) if args.workdir is not None else os.getcwd()
+    if not prompt_only:
+        redirected = config_root_refusal()
+        if redirected is not None:
+            print(f"error: refusing to spawn: {redirected}", file=sys.stderr)
+            log_refused("config-root-redirected", {"kind": args.kind, "reason": redirected})
+            return 2
+    venue_settings, not_venue = dispatched_venue(workdir, args.session, args.state_root)
+    refusal = (
+        project_settings_refusal(args.project_settings, venue_settings, not_venue)
+        if args.project_settings is not None else None
+    )
+    if refusal is not None:
+        print(
+            f"error: --project-settings {args.project_settings} refused: {refusal} — refusing to "
+            f"merge its permissions into this child's --settings grant",
+            file=sys.stderr,
+        )
+        log_refused("project-settings-not-dispatched", {"kind": args.kind, "workdir": workdir, "session": args.session})
+        return 2
+    user_only = user_only_reason(workdir, not_venue, os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    setting_sources = SETTING_SOURCES_WITH_PROJECT if user_only is None else SETTING_SOURCES_USER_ONLY
     child_project_override = None
     if not prompt_only:
-        stop, child_project_override = _child_project_gate(args, workdir)
+        if user_only is not None and project_settings_sources(workdir)[0]:
+            print(
+                f"notice: the child loads user settings only (--setting-sources {setting_sources}), "
+                f"not the project settings of {workdir}: {user_only}",
+                file=sys.stderr,
+            )
+        stop, child_project_override = _child_project_gate(args, workdir, user_only)
         if stop is not None:
             return stop
     guard_exempt_paths: list[str] = []
@@ -3716,7 +3909,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     # ~/.claude/settings.json. Setting it in the child's process env does NOT
     # work: settings.json env is applied after process start and wins (see
     # memory-global leaf claude-code-settings-env-precedence.md).
-    settings_args = ["--settings", json.dumps(child_settings)]
+    settings_args = ["--setting-sources", setting_sources, "--settings", json.dumps(child_settings)]
     permission_args = ["--permission-mode", permission_mode] if permission_mode is not None else []
     cmd = [
         "claude",
