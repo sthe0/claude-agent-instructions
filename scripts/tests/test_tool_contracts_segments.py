@@ -507,6 +507,13 @@ def test_venue_that_is_not_a_repository_resolves_no_git_write(tmp_path):
     assert _statuses(_seg("touch f", plain)) == ["resolved"]
 
 
+def test_venue_under_an_empty_dot_git_directory_resolves_no_git_write(tmp_path):
+    (tmp_path / ".git").mkdir()
+    venue = tmp_path / "sub"
+    venue.mkdir()
+    assert _statuses(_seg("git add -A", venue)) == ["unresolved"]
+
+
 class TestGitAllowList:
     """Only the listed (subcommand, flag-shape) pairs resolve; the pin stops a widening from going unnoticed."""
 

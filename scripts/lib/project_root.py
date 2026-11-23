@@ -17,13 +17,12 @@ from typing import Callable, Iterable
 _GITDIR_PREFIX = "gitdir:"
 
 
-def vcs_root_marker(directory: str) -> bool | None:
-    """True when `directory` is a repository root: a `.git` directory holding
-    `HEAD`, a `.git` file whose `gitdir:` target (taken relative to
-    `directory` unless absolute) exists and holds `HEAD` — a linked worktree —
-    or a `.arc` directory (a mounted arc repository's root). An empty `.git`
-    directory, a stray `.git` file and a dangling `gitdir:` are no marker.
-    None when a `.git` file cannot be read."""
+def git_root_marker(directory: str) -> bool | None:
+    """True when `directory` holds a real `.git`: a directory with `HEAD`, or
+    a file whose `gitdir:` target (taken relative to `directory` unless
+    absolute) exists and holds `HEAD` — a linked worktree. An empty `.git`
+    directory (git itself walks past it), a stray `.git` file and a dangling
+    `gitdir:` are no marker. None when a `.git` file cannot be read."""
     git = os.path.join(directory, ".git")
     if os.path.isdir(git) and os.path.isfile(os.path.join(git, "HEAD")):
         return True
@@ -37,6 +36,16 @@ def vcs_root_marker(directory: str) -> bool | None:
             gitdir = os.path.join(directory, first_line[len(_GITDIR_PREFIX):].strip())
             if os.path.isfile(os.path.join(gitdir, "HEAD")):
                 return True
+    return False
+
+
+def vcs_root_marker(directory: str) -> bool | None:
+    """True when `directory` is a repository root: a real `.git` (see
+    `git_root_marker`) or a `.arc` directory (a mounted arc repository's
+    root). None when a `.git` file cannot be read."""
+    git = git_root_marker(directory)
+    if git is None or git:
+        return git
     return os.path.isdir(os.path.join(directory, ".arc"))
 
 

@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from lib.project_root import vcs_root_marker
+
 SCHEMA_AREAS = {"regularity/v1": "regularity", "principle/v1": "principle", "ontology/v1": "ontology"}
 TIER_AREAS = {"regularities": "regularity", "principles": "principle", "ontology": "ontology"}
 CASES_DIR = Path("principles/cases")
@@ -129,7 +131,7 @@ def given_source_root(tier: str, leaf_path) -> Path | None:
     ancestors = Path(leaf_path).parents
     if tier != "project":
         return next((a.parent for a in ancestors if a.name == "memory-global"), None)
-    return next((a for a in ancestors if (a / ".git").exists() or (a / ".arc").exists()), None)
+    return next((a for a in ancestors if vcs_root_marker(str(a))), None)
 
 
 def given_source_problems(text: str, base) -> list[str]:
