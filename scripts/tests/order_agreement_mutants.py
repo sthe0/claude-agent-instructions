@@ -566,7 +566,18 @@ def _first_figure_refusal_one_text(mp):
                lambda state, stage, act: "the estimate changed", raising=True)
 
 
+def _met_in_dropped(mp):
+    """The phase a difficulty was met in is lost at every seam: the leaf frontmatter never
+    carries it, a search for a phase no longer filters or ranks by it, and a record's
+    `met_in` loads as None."""
+    mp.setattr("lib.difficulty_phase.format_met_in", lambda phases: "", raising=True)
+    mp.setattr("lib.difficulty_phase.matches", lambda value, wanted: True, raising=True)
+    mp.setattr("lib.difficulty_phase.names", lambda value, wanted: False, raising=True)
+    mp.setattr("lib.difficulty_phase.phase_of", lambda value: None, raising=True)
+
+
 MUTANTS = {
+    "met_in_dropped": _met_in_dropped,
     "method_review_unbound": _method_review_unbound,
     "composition_writes_method_review": _composition_writes_method_review,
     "non_customer_approves_as_user": _non_customer_approves_as_user,

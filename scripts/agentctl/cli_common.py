@@ -17,7 +17,7 @@ import tomllib
 from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
 from pathlib import Path
-from lib import argv_text, config_root, engine_session_binding, fix_firings, hook_telemetry
+from lib import argv_text, config_root, difficulty_phase, engine_session_binding, fix_firings, hook_telemetry
 try:
     from lib.telemetry import live
 except Exception:  # telemetry must never stop the engine from starting
@@ -1661,7 +1661,7 @@ def _root_difficulty_slot(state: SessionState) -> tuple[int, str | None, str]:
 
 def _open_difficulty(state: SessionState, origin: str | None = None, *,
                      declaration: Declaration | None = None,
-                     nested: bool = False) -> Difficulty | None:
+                     nested: bool = False, met_in: str | None = None) -> Difficulty | None:
     """The one factory of difficulty records. Installs a fresh record as the open one and
     returns it, or returns None -- with `state` untouched -- when its level would reach
     the depth cap.
@@ -1670,7 +1670,8 @@ def _open_difficulty(state: SessionState, origin: str | None = None, *,
     new one nests under it (`nested=True` does that for an undeclared one too). An
     undeclared record is the placeholder the new one takes the slot of, and an absent one
     leaves the session's root slot. `origin` is None for a root record and then follows
-    the slot (`child` inside a spawned session, else `stage`)."""
+    the slot (`child` inside a spawned session, else `stage`). `met_in` is the phase of the
+    work the difficulty was met in; an unknown name is stored as None."""
     cur = state.difficulty
     root_level, root_parent_uid, root_origin = _root_difficulty_slot(state)
     push = cur is not None and (nested or cur.declaration is not None)
@@ -1690,7 +1691,8 @@ def _open_difficulty(state: SessionState, origin: str | None = None, *,
     if push:
         state.difficulty_stack.append(cur)
     state.difficulty = Difficulty(
-        declaration=declaration, level=level, parent_uid=parent_uid, origin=origin)
+        declaration=declaration, level=level, parent_uid=parent_uid, origin=origin,
+        met_in=difficulty_phase.phase_of(met_in))
     return state.difficulty
 
 

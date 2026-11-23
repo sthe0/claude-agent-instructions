@@ -2026,9 +2026,9 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::cmd_extend::pattern.match"]
 class = "structural"
-ground = "FRONTMATTER (`---` block) match and the `^created:` frontmatter-key match decide only whether a leaf has frontmatter / a created field to backfill."
-hits = 2
-hit_classes = ["structural", "structural"]
+ground = "FRONTMATTER (`---` block) matches and the `^created:` frontmatter-key match decide only whether a leaf has frontmatter / a created field to backfill, and which frontmatter text holds the `met_in` list to add a phase to."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::cmd_extend::re.findall"]

@@ -25,6 +25,8 @@ from enum import Enum
 from pathlib import Path
 from typing import ClassVar
 
+from lib import difficulty_phase
+
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
@@ -726,6 +728,10 @@ class Difficulty:
     # empty on a record whose critique has prose fields only. No SCHEMA_VERSION bump: an absent
     # key loads as the empty dict and an older engine ignores the key.
     cause: dict = field(default_factory=dict)
+    # The phase of the work the difficulty was met in (lib/difficulty_phase.PHASES). None on a
+    # record written before the phase existed and on one whose opener names none. No SCHEMA_VERSION
+    # bump: an absent or unknown key loads as None and an older engine ignores the key.
+    met_in: str | None = None
 
     def complete(self) -> bool:
         return (
@@ -757,6 +763,7 @@ class Difficulty:
             escalated_to=dict(d.get("escalated_to") or {}),
             escalated_from=dict(d.get("escalated_from") or {}),
             cause=dict(d.get("cause") or {}),
+            met_in=difficulty_phase.phase_of(d.get("met_in")),
             # A record written before schema 48 carries no identity: it becomes a level-0
             # stage-origin root. Its uid is derived from its content, not drawn at random,
             # so every load of the same unsaved legacy file names the record the same way

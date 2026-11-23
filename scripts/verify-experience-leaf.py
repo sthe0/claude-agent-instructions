@@ -57,8 +57,10 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import difficulty_phase
 from lib import hook_telemetry
 from lib import principle_provenance as pp
+from lib import understanding_effort
 
 EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/(?!MEMORY\.md$)[^/]+\.md$")
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
@@ -196,6 +198,12 @@ def check_content(content: str) -> str | None:
         return status
 
     body = content[fm.end():]
+    phase_problems = difficulty_phase.met_in_problems(difficulty_phase.in_frontmatter(fm_body))
+    if phase_problems:
+        return "schema:difficulty/v1 leaf " + "; ".join(phase_problems)
+    effort_problems = understanding_effort.problems(body)
+    if effort_problems:
+        return "schema:difficulty/v1 leaf — " + "; ".join(effort_problems)
     if _fm_field(fm_body, TICKET_RE):
         # Ticket-driven thin leaf: the record lives in the ticket. Require the
         # ticket id/url to appear in the body as the pointer; sections relaxed.

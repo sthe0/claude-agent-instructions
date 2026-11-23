@@ -87,6 +87,12 @@ Agent-system friction observed while resolving this task — missing affordance,
 
 The tag is a **σ-sentinel, not σ machinery** — its sole present purpose is to let `scripts/sigma-sentinel.py` measure the build-trigger for σ (condition **(A)**, re-refutation of an already-promoted principle) without yet building the operator. See [sigma-build-trigger.md](../../docs/sigma-build-trigger.md). `verify-experience-leaf.py` accepts it as an unknown-but-valid key (no validator change), exactly like `generality`.
 
+### The `met_in` field and the `## Understanding effort` block (understanding and planning as work)
+
+`met_in` is **optional**: a list drawn from `understanding`, `planning`, `stage` (the one source is `scripts/lib/difficulty_phase.py`) — the phase of the work the difficulty was met in, the same names the engine's difficulty record carries. A leaf without it predates the field, stays valid, and is found by a search for any phase. `record-experience.py new --met-in <phase>` (repeatable) writes it, `extend --met-in <phase>` adds a phase, and `search --met-in <phase>` keeps the leaves that name that phase or name none and lists the ones naming it first. `verify-experience-leaf.py` refuses a phase outside the three and names them.
+
+A leaf that records a type of order may carry a `## Understanding effort` section holding one fenced `toml` block: `[estimate]` (`minutes`, `usd`, `author`, `confirmer`) and one `[[actuals]]` row per order of the type that was met (`minutes`, `usd`, `session`, `date`); the format lives in `scripts/lib/understanding_effort.py`. `record-experience.py understanding-effort --leaf <path> --kind estimate|actual --minutes N --usd N` writes it (an estimate needs `--author` and `--confirmer`, an actual needs `--actual-session`) and refuses to write a block the verifier would refuse. The block is optional on a difficulty/v1 leaf and tolerated on a regularity/v1 leaf.
+
 ## Ticket-driven work
 
 When the task is a ticket (`ABC-123`), the **full structured record lives in the ticket** — the `tracker-management` skill posts the Difficulty / Order & criterion / Context / Working-plan body as the resolution comment. The leaf is then a **thin pointer**:

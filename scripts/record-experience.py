@@ -95,10 +95,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
+from lib import difficulty_phase  # noqa: E402
 from lib import leaf_forms  # noqa: E402
 from lib import memory_retrieval_ledger  # noqa: E402
 from lib import principle_provenance as pp  # noqa: E402
 from lib import semantic_join  # noqa: E402
+from lib import understanding_effort  # noqa: E402
 from lib import worktree_route  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -198,7 +200,8 @@ def birth_lines() -> list[str]:
 
 def frontmatter(name: str, description: str, confirmed_by: str,
                 refs: list[str] | None, plan_file: str | None,
-                ticket: str | None, date: str, tier: int | None = None) -> str:
+                ticket: str | None, date: str, tier: int | None = None,
+                met_in: list[str] | None = None) -> str:
     lines = [
         "---",
         f"name: {name}",
@@ -218,6 +221,9 @@ def frontmatter(name: str, description: str, confirmed_by: str,
     # (sigma-sentinel.py) treats untagged leaves as tier 0.
     if tier == 1:
         lines.append(f"tier: {tier}")
+    met_in_line = difficulty_phase.format_met_in(met_in)
+    if met_in_line:
+        lines.append(met_in_line)
     if refs:
         lines.append("refs: [" + ", ".join(refs) + "]")
     if plan_file:
@@ -236,7 +242,7 @@ def standalone_body(a) -> str:
     name = f"{a.date}-{a.slug}"
     parts = [
         frontmatter(name, a.description, a.confirmed_by, a.refs, a.plan_file,
-                    None, a.date, getattr(a, "tier", None)),
+                    None, a.date, getattr(a, "tier", None), getattr(a, "met_in", None)),
         f"\n# {a.title}\n",
         "\n## Difficulty\n", f"{a.difficulty}\n",
         "\n## Order & criterion\n", f"{a.order}\n",
@@ -255,7 +261,7 @@ def ticket_leaf_body(a) -> str:
     url = a.ticket_url or a.ticket
     body = [
         frontmatter(name, a.description, a.confirmed_by, a.refs, None, a.ticket,
-                    a.date, getattr(a, "tier", None)),
+                    a.date, getattr(a, "tier", None), getattr(a, "met_in", None)),
         f"\n# {a.title}\n",
         "\nFull structured record (Difficulty / Order & criterion / Context / "
         f"Working plan) — in the ticket: {url}.\n",
@@ -384,7 +390,9 @@ def cmd_search(a) -> int:
     terms = tokenize(a.keywords)
     if not terms:
         sys.exit("search needs keywords")
+    met_in = getattr(a, "met_in", None)
     scored: list[tuple[int, Path, str]] = []
+    names_phase: dict[Path, bool] = {}
     if tier in leaf_forms.TIER_AREAS:
         candidates = leaf_forms.tier_leaves(REPO_ROOT / "memory-global/leaves", tier)
     else:
@@ -396,19 +404,24 @@ def cmd_search(a) -> int:
         fm = FRONTMATTER.match(text)
         desc = ""
         leaf_domain = None
+        leaf_met_in = None
         if fm:
+            leaf_met_in = difficulty_phase.in_frontmatter(fm.group(1))
             dm = re.search(r"^description:\s*(.*)$", fm.group(1), re.MULTILINE)
             desc = dm.group(1) if dm else ""
             ddm = re.search(r"^domain:\s*(\S+)", fm.group(1), re.MULTILINE)
             leaf_domain = ddm.group(1) if ddm else None
         if dom and tier in ("regularities", "principles") and leaf_domain and leaf_domain != dom:
             continue
+        if tier == "experience" and not difficulty_phase.matches(leaf_met_in, met_in):
+            continue
         sec_span = section_span(text, section)
         sec = text[sec_span[0]:sec_span[1]] if sec_span else ""
         score = term_score(desc + " " + sec, terms)
         if score:
             scored.append((score, leaf, desc.strip()))
-    scored.sort(key=lambda x: -x[0])
+            names_phase[leaf] = difficulty_phase.names(leaf_met_in, met_in)
+    scored.sort(key=lambda x: (not names_phase[x[1]], -x[0]))
     noun = {"regularities": "regularity", "principles": "principle",
             "system-knowledge": "system-knowledge leaf"}.get(tier, "experience leaf")
     ledger_record("search", a, a.keywords, [leaf.resolve() for _, leaf, _ in scored[:3]])
@@ -596,6 +609,10 @@ def cmd_extend(a) -> int:
         if not re.search(r"^created\s*:", FRONTMATTER.match(text).group(1), re.MULTILINE):
             text = set_fm_field(text, "created", a.date)
         text = set_fm_field(text, "last_verified", a.date)
+        if getattr(a, "met_in", None):
+            held = difficulty_phase.in_frontmatter(FRONTMATTER.match(text).group(1))
+            phases = difficulty_phase.with_phase(held, a.met_in)
+            text = set_fm_field(text, difficulty_phase.FIELD, "[" + ", ".join(phases) + "]")
     path.write_text(text, encoding="utf-8")
     edit_ledger.stamp(str(path), "record-experience:extend", session=getattr(a, "session", None))
     ledger_record("extend", a, f"{a.context_label} {a.plan}", [path])
@@ -620,6 +637,29 @@ def cmd_set_last_verified(a) -> int:
     edit_ledger.stamp(str(path), "record-experience:set-last-verified",
                       session=getattr(a, "session", None))
     print(f"set last_verified: {a.date} on {path}")
+    return 0
+
+
+def cmd_understanding_effort(a) -> int:
+    path = Path(a.leaf)
+    if not path.exists():
+        sys.exit(f"leaf not found: {path} — --leaf takes a path to the leaf file")
+    text = path.read_text(encoding="utf-8")
+    if a.kind == "estimate":
+        if not (a.author and a.confirmer):
+            sys.exit("an estimate names who authored it (--author) and who confirmed it (--confirmer)")
+        new_text = understanding_effort.set_estimate(text, a.minutes, a.usd, a.author, a.confirmer)
+    else:
+        if not a.actual_session:
+            sys.exit("an actual names the session it was met in (--actual-session)")
+        new_text = understanding_effort.add_actual(text, a.minutes, a.usd, a.actual_session, a.date)
+    found = understanding_effort.problems(new_text)
+    if found:
+        sys.exit("refusing to write: " + "; ".join(found))
+    path.write_text(new_text, encoding="utf-8")
+    edit_ledger.stamp(str(path), "record-experience:understanding-effort",
+                      session=getattr(a, "session", None))
+    print(f"recorded {a.kind} of understanding effort on {path}")
     return 0
 
 
@@ -1742,6 +1782,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--session", default=None,
                    help="session id the retrieval ledger joins this search to "
                         "(default: $CLAUDE_CODE_SESSION_ID)")
+    s.add_argument(
+        "--met-in", dest="met_in", choices=difficulty_phase.PHASES, default=None,
+        help=("experience tier: keep the leaves that name this phase of the work or name none, "
+              "and list the ones naming it first"),
+    )
     s.add_argument("keywords")
     s.set_defaults(func=cmd_search)
 
@@ -1766,6 +1811,10 @@ def build_parser() -> argparse.ArgumentParser:
         )
         sp.add_argument("--session", default=None,
                         help="ledger session_id for the edit-ledger stamp of this write")
+        sp.add_argument(
+            "--met-in", dest="met_in", action="append", choices=difficulty_phase.PHASES,
+            help="phase of the work the difficulty was met in (repeatable); omitted when unnamed",
+        )
 
     n = sub.add_parser("new")
     add_scope(n)
@@ -1788,9 +1837,27 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--plan", required=True)
     e.add_argument("--common")
     e.add_argument("--variations")
+    e.add_argument("--met-in", dest="met_in", choices=difficulty_phase.PHASES, default=None,
+                   help="add this phase to the leaf's met_in")
     e.add_argument("--session", default=None,
                    help="ledger session_id for the edit-ledger stamp of this write")
     e.set_defaults(func=cmd_extend)
+
+    ue = sub.add_parser("understanding-effort",
+                        help="record the estimate, or one actual, of understanding an order "
+                             "of this type on a difficulty/v1 leaf")
+    ue.add_argument("--leaf", required=True)
+    ue.add_argument("--kind", choices=["estimate", "actual"], required=True)
+    ue.add_argument("--minutes", type=float, required=True)
+    ue.add_argument("--usd", type=float, required=True)
+    ue.add_argument("--author", help="estimate: who authored the figure")
+    ue.add_argument("--confirmer", help="estimate: who confirmed it")
+    ue.add_argument("--actual-session", dest="actual_session",
+                    help="actual: the session the effort was met in")
+    ue.add_argument("--date", default=today())
+    ue.add_argument("--session", default=None,
+                    help="ledger session_id for the edit-ledger stamp of this write")
+    ue.set_defaults(func=cmd_understanding_effort)
 
     slv = sub.add_parser("set-last-verified",
                          help="bump last_verified on an existing leaf (re-confirmation)")
@@ -1934,7 +2001,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 ROUTED_ENV = worktree_route.GUARD_ENV
-WRITE_COMMANDS = ("new", "extend", "ticket", "set-last-verified")
+WRITE_COMMANDS = ("new", "extend", "ticket", "set-last-verified", "understanding-effort")
 
 
 def _under_repo(path: str) -> bool:
@@ -1948,7 +2015,7 @@ def _under_repo(path: str) -> bool:
 def needs_worktree(args) -> bool:
     if args.cmd not in WRITE_COMMANDS or os.environ.get(ROUTED_ENV):
         return False
-    if args.cmd in ("extend", "set-last-verified"):
+    if args.cmd in ("extend", "set-last-verified", "understanding-effort"):
         return _under_repo(args.leaf)
     return args.scope == "global"
 
