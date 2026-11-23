@@ -86,7 +86,7 @@ def discover_phases(probe_dir: Path = PROBE_DIR) -> list[Phase]:
         consts = _module_constants(init, ("NEGATIVE_ANCHOR", "SUBJECT_FILES"))
         if "NEGATIVE_ANCHOR" not in consts:
             continue
-        cases = tuple(sorted(p for p in child.glob("c_*.py")))
+        cases = tuple(sorted(p for pattern in ("c_*.py", "e*_*.py") for p in child.glob(pattern)))
         phases.append(Phase(child.name, child, consts["NEGATIVE_ANCHOR"],
                             tuple(consts.get("SUBJECT_FILES", ())), cases))
     phases.sort(key=lambda p: (p.name != "mechanisms", p.name))

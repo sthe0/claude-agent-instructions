@@ -1,0 +1,16 @@
+{
+  "P0": ["exit_code", "loaded", "registrations", "stub_requests"],
+  "P1": ["code_mode", "control_not_executed", "evaluate_not_called_for", "evaluate_rules", "excluded_not_switchable", "exclusions", "exit_codes", "inner_call_unstoppable", "marked_executed", "sessions_with_hooks", "switch_off_invalid", "tool_list", "tool_list_has_unavailable", "tool_list_not_accounted_for", "unavailable_tools", "unconfirmed", "unrefused"],
+  "P10": ["cli_base", "run_argv_flags", "run_exit", "service_help_exit", "service_help_head", "user_config_changed", "user_config_files", "user_data_dirs", "user_data_files_naming_probe_root"],
+  "P11": ["pin", "real_binary_version", "refusal", "refused", "stand_in_launched"],
+  "P12": ["agent_variants", "config_channel", "credential_paths", "deny_rules", "evaluate_hook_calls_for_credential_paths", "exit_codes", "leaked", "marked_executed", "not_applicable", "reached"],
+  "P13": ["child_marker", "control_executed", "event_types_seen", "marked_executed"],
+  "P2": ["channel", "channels", "control_executed", "global_layer", "project_layer", "real_config_key_names"],
+  "P3": ["requests_with_tools", "system_message_count", "tokens", "tool_names"],
+  "P4": ["chat_requests", "continued_turn_seen", "exit_code", "idle_continued_logged", "idle_fired", "idle_input_keys"],
+  "P5": ["form", "pending_after_reply", "pending_forms", "run_standalone", "tool_message_seen_by_model"],
+  "P6": ["child_session", "event_schema", "exit_codes", "killed_event_types", "missing", "missing_observations", "model_error_event_sample", "model_error_events", "model_error_stderr", "model_switch", "sigterm_timed_out", "store"],
+  "P7": ["agent_definition", "config_channel", "executed_under_toolless", "marked_executed", "no_refusal_event_under_toolless", "not_executed_under_default", "paths", "stand_ins_changed", "unavailable_tools"],
+  "P8": ["agent_home_claude_md_line_in_request", "agent_home_files_changed", "exit_code", "home_files_outside_agent_home", "request_chars", "skill_names_mentioned_in_request", "written"],
+  "P9": ["alternative_tool_execute_before_command_rewrite", "call_ran", "echoed", "hook_calls", "hook_input_keys", "registered", "session_ids"]
+}

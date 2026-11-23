@@ -11,7 +11,9 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import threading
+import types
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +24,11 @@ import opencode_live
 from conftest import path_with_arc_stub
 from opencode_probe import cli, core, coverage, harness, isolated, negative, paths, record, runner, stub, subject_only, userconfig
 from opencode_probe.mechanisms import c_p1, c_p6, c_p7, c_p13
+from opencode_probe.mechanisms import (e01_ts_plugin, e02_user_shell_routes, e03_code_mode, e04_question_after,
+                                       e05_hook_order, e06_idle_loop, e07_token_aggregation, e08_env_substitution,
+                                       e09_stdin_prompt, e10_auto_flag, e11_resume, e12_serve_effects,
+                                       e13_combined_credential_deny, e14_session_id_carrier)
+from opencode_probe.mechanisms import shared_e
 
 FAKE = Path(__file__).resolve().parent / "fixtures" / "opencode-fake" / "opencode"
 STUB_REQUEST = {"stream": False, "tools": [{"function": {"name": "t", "parameters": {}}}]}
@@ -55,8 +62,8 @@ def phase_of(probe, name):
     return core.get_phase(name, probe)
 
 
-def write_run(state, phase, probe, statuses, version="2.3.2", kind="runs", event_logs=True):
-    cases = {cid: {"status": status, "evidence": {}} for cid, status in statuses.items()}
+def write_run(state, phase, probe, statuses, version="2.3.2", kind="runs", event_logs=True, evidence=None):
+    cases = {cid: {"status": status, "evidence": (evidence or {}).get(cid, {})} for cid, status in statuses.items()}
     rec_dir = record.new_record_dir(state, kind)
     record.write_record(rec_dir, version, phase.name, core.phase_hash(phase, probe), cases)
     if event_logs:
@@ -1011,5 +1018,263 @@ def test_a_record_whose_bytes_changed_is_no_longer_the_pinned_one(tmp_path):
 def test_the_committed_pin_holds_no_machine_path():
     text = (core.PROBE_DIR / core.PIN_NAME).read_text(encoding="utf-8")
     assert not re.search(r'"/|/home/|/tmp/|/var/', text)
+
+
+E_CASES = {"E1": e01_ts_plugin, "E2": e02_user_shell_routes, "E3": e03_code_mode, "E4": e04_question_after,
+           "E5": e05_hook_order, "E6": e06_idle_loop, "E7": e07_token_aggregation, "E8": e08_env_substitution,
+           "E9": e09_stdin_prompt, "E10": e10_auto_flag, "E11": e11_resume, "E12": e12_serve_effects,
+           "E13": e13_combined_credential_deny, "E14": e14_session_id_carrier}
+E_K7 = {"E1", "E3", "E4", "E5", "E10", "E12", "E13", "E14"}
+E_GOOD = {
+    "E1": {"loaded": True, "hooks_fired": True},
+    "E2": {"user_shell_hook_fires": False, "shell_create_before_fires": True,
+           "tui_bang_shell": shared_e.unobservable(e02_user_shell_routes.TUI_REASON)},
+    "E3": {"execute_reaches_shell": False, "hook_sees_inner": True, "builtin_namespace_tools": ["read"]},
+    "E4": {"after_carries_answer": True, "field": e04_question_after.FIELD},
+    "E5": {"order": "before-first", "whole_tool_deny_removes_tool": True, "whole_tool_deny_calls_evaluate": False},
+    "E6": {"guard_present": False, "max_continues": 40},
+    "E7": {"aggregation": "parent-excludes-children", "parent": {"input": 44, "output": 28},
+           "child": {"input": 22, "output": 14}},
+    "E8": {"env_substitution": True, "provider_block_shape": {"providers": {}}},
+    "E9": {"stdin_prompt": True},
+    "E10": {"auto_effect": "approves-ask-only", "marked_executed": False,
+            "real_model": shared_e.unobservable(e10_auto_flag.REAL_MODEL_REASON)},
+    "E11": {"resume_works": True},
+    "E12": {"user_config_touched": False, "port_clash": False},
+    "E13": {"combined_shape_reached": {}, "all_refused": True},
+    "E14": {"carries_session_id": True, "shell_event": {}},
+}
+
+
+def e_entry(case_id, status=record.PASS, **overrides):
+    return {"status": status, "evidence": {**E_GOOD[case_id], **overrides}}
+
+
+def e_gate(tmp_path, case_id, status=record.PASS, **overrides):
+    """What ``pin --record`` says of a tree holding the E module beside a passing A1 and A2, and the pin's last_pass."""
+    probe = make_probe(tmp_path)
+    shutil.copyfile(E_CASES[case_id].__file__, probe / "alpha" / Path(E_CASES[case_id].__file__).name)
+    alpha = phase_of(probe, "alpha")
+    state = tmp_path / "state"
+    write_run(state, alpha, probe, {"A1": "pass", "A2": "pass", case_id: status},
+              evidence={case_id: e_entry(case_id, **overrides)["evidence"]})
+    return record.pin_record(state, alpha, probe), core.read_pin(probe).get("last_pass", {})
+
+
+def test_e_cases_registered_in_mechanisms_phase():
+    phase = core.get_phase("mechanisms")
+    infos = {c.case_id: c for c in core.phase_cases(phase)}
+    assert set(E_CASES) <= set(infos)
+    assert {cid for cid in E_CASES if infos[cid].k7} == E_K7
+    assert {cid for cid in E_CASES if infos[cid].rests_on_plugin_deny} == {"E10"}
+    assert "shared_e.py" not in {p.name for p in phase.case_files}
+    for cid, module in E_CASES.items():
+        assert module.CASE_ID == cid and callable(module.run)
+        assert getattr(module, "STOPPING_IS_FAIL", None) is (True if cid in E_K7 else None)
+
+
+def test_e_case_fields_in_record():
+    for cid, module in E_CASES.items():
+        assert module.check_record(e_entry(cid), {}) == [], cid
+        for name in module.FIELDS:
+            evidence = {"other": 1, **{k: v for k, v in E_GOOD[cid].items() if k != name}}
+            problems = module.check_record({"status": record.PASS, "evidence": evidence}, {})
+            assert f"{cid}.{name} is missing from the evidence" in problems, (cid, name)
+        assert module.check_record({"status": record.PASS, "evidence": {}}, {}) == [f"{cid} has no evidence"]
+
+
+def assert_stopping_fails_require_pass(tmp_path, case_id, **stopping):
+    problems, last_pass = e_gate(tmp_path / "good", case_id)
+    assert problems == [] and "alpha" in last_pass
+    problems, last_pass = e_gate(tmp_path / "stopping", case_id, **stopping)
+    assert f"alpha/{case_id}: {case_id} is recorded pass but its evidence is on the stopping side" in problems
+    assert "alpha" not in last_pass
+
+
+def test_e3_shell_reach_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E3", execute_reaches_shell=True)
+    assert_stopping_fails_require_pass(tmp_path / "x", "E3", hook_sees_inner=False)
+
+
+def test_e4_missing_answer_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E4", after_carries_answer=False)
+    assert_stopping_fails_require_pass(tmp_path / "x", "E4", field="input.output")
+
+
+def test_e1_ts_load_failure_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E1", loaded=False)
+    assert_stopping_fails_require_pass(tmp_path / "x", "E1", hooks_fired=False)
+
+
+def test_e5_evaluate_first_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E5", order="evaluate-first")
+    probe = [{"at": "permission.evaluate", "input": {"source": {"id": "c1"}}},
+             {"at": "tool.execute.before", "input": {"id": "c1"}}]
+    assert e05_hook_order.order_of(probe, "c1") == "evaluate-first"
+    assert e05_hook_order.order_of(probe[::-1], "c1") == "before-first"
+    assert e05_hook_order.order_of(probe[:1], "c1") is None and e05_hook_order.order_of(probe, "c2") is None
+
+
+def test_e10_auto_overriding_deny_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E10", auto_effect="overrides-deny")
+    assert_stopping_fails_require_pass(tmp_path / "x", "E10", marked_executed=True)
+    runs = {f"{n}:{m}": False for n in ("ask", "resource-deny", "plugin-deny", "plugin-throw") for m in ("auto", "no-auto")}
+    assert e10_auto_flag.classify({**runs, "ask:auto": True}) == "approves-ask-only"
+    assert e10_auto_flag.classify({**runs, "ask:auto": True, "plugin-deny:auto": True}) == "overrides-deny"
+    assert e10_auto_flag.classify(runs) == "ask-not-approved"
+    assert e10_auto_flag.classify({**runs, "ask:auto": True, "ask:no-auto": True}) == "approves-without-flag"
+
+
+def test_e12_config_touched_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E12", user_config_touched=True)
+
+
+def test_e13_reached_path_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E13", all_refused=False)
+    entry = e_entry("E13", combined_shape_reached={"root:read": False, "root:shell": False})
+    cases = {"P1": {"paths": [{"id": "root:read"}, {"id": "root:shell"}]}}
+    assert e13_combined_credential_deny.check_record(entry, cases) == []
+    other = {"P1": {"paths": [{"id": "root:read"}, {"id": "root:edit"}]}}
+    problems = e13_combined_credential_deny.check_record(entry, other)
+    assert len(problems) == 1 and "missing ['root:edit']" in problems[0] and "extra ['root:shell']" in problems[0]
+
+
+def test_e14_missing_session_id_fails_require_pass(tmp_path):
+    assert_stopping_fails_require_pass(tmp_path, "E14", carries_session_id=False)
+
+
+def test_e_nonk7_absent_accepted(tmp_path):
+    for case_id in sorted(set(E_CASES) - E_K7):
+        problems, last_pass = e_gate(tmp_path / case_id, case_id, status=record.ABSENT)
+        assert problems == [] and "alpha" in last_pass, case_id
+    for case_id in sorted(E_K7):
+        problems, last_pass = e_gate(tmp_path / case_id, case_id, status=record.ABSENT)
+        assert f"alpha/{case_id}: absent is not accepted" in problems and "alpha" not in last_pass, case_id
+
+
+def test_unobservable_part_never_counts_as_pass(tmp_path):
+    assert shared_e.unobservable("r")["status"] == shared_e.UNOBSERVABLE != record.PASS
+    parts = (("E2", "tui_bang_shell", e02_user_shell_routes.TUI_REASON), ("E10", "real_model", e10_auto_flag.REAL_MODEL_REASON))
+    for case_id, part, reason in parts:
+        for faked in ({"status": record.PASS, "reason": reason}, {"status": shared_e.UNOBSERVABLE, "reason": "other"}, True, None):
+            entry = e_entry(case_id, **{part: faked})
+            assert E_CASES[case_id].check_record(entry, {}) == [
+                f"{case_id}.{part} must be the unobservable marker for {reason!r}, got {faked!r}"]
+    problems, last_pass = e_gate(tmp_path, "E2", status=record.UNOBSERVED)
+    assert "alpha/E2: unobserved is not accepted" in problems and "alpha" not in last_pass
+
+
+def test_p_case_fields_unchanged():
+    fixture = Path(__file__).resolve().parent / "fixtures" / "opencode_probe" / "p_fields.json"
+    fields = json.loads(fixture.read_text(encoding="utf-8"))
+    p_ids = {c.case_id for c in core.phase_cases(core.get_phase("mechanisms")) if c.case_id not in E_CASES}
+    assert set(fields) == p_ids and all(names == sorted(set(names)) and names for names in fields.values())
+    found = record.pinned_record(core.state_dir(), (core.read_pin().get("last_pass") or {}).get("mechanisms"))
+    if found is not None:
+        cases = found[1]["cases"]
+        assert {cid: sorted(cases[cid]["evidence"]) for cid in p_ids if cid in cases} == {
+            cid: fields[cid] for cid in p_ids if cid in cases}
+
+
+def test_pin_entry_shape_and_accessors(monkeypatch, tmp_path):
+    entry = core.read_pin()["last_pass"]["mechanisms"]
+    assert sorted(entry) == ["record_sha256", "run", "suite_sha256", "version"]
+    state = tmp_path / "state"
+    rec_dir = record.new_record_dir(state, "runs")
+    ids = ["root:read", "root:shell", "root:question"]
+    paths_listed = [{"id": pid} for pid in ids]
+    record.write_record(rec_dir, "2.3.2", "mechanisms", "h", {"P1": {"status": "pass", "evidence": {}, "paths": paths_listed}})
+
+    def pin_with_record_hash():
+        made = {"version": "2.3.2", "suite_sha256": "h", "run": rec_dir.name,
+                "record_sha256": record.file_sha256(rec_dir / "record.json")}
+        monkeypatch.setattr(core, "read_pin", lambda probe_dir=core.PROBE_DIR: {
+            "version": "2.3.2", "last_pass": {"mechanisms": made}})
+
+    pin_with_record_hash()
+    assert e13_combined_credential_deny.pinned_path_ids(state) == ids
+    record.write_record(rec_dir, "2.3.2", "mechanisms", "h", {"P1": {"status": "pass", "evidence": {}, "paths": [{"id": "brand-new"}]}})
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        e13_combined_credential_deny.pinned_path_ids(state)
+    pin_with_record_hash()
+    with pytest.raises(RuntimeError, match="does not drive"):
+        e13_combined_credential_deny.pinned_path_ids(state)
+
+
+def test_e12_detects_user_config_change(tmp_path):
+    home = tmp_path / "home"
+    config = home / ".config" / "opencode"
+    config.mkdir(parents=True)
+    (config / "opencode.json").write_text("{}\n", encoding="utf-8")
+    data = home / userconfig.DATA_DIRS[0]
+    data.mkdir(parents=True)
+    before = userconfig.digest_tree(home)
+    change = e12_serve_effects.user_config_change
+    untouched = change(before, userconfig.digest_tree(home), userconfig.leaked_probe_paths(home, needle=b"PROBE-ROOT"))
+    assert untouched["user_config_touched"] is False
+    (config / "opencode.json").write_text('{"a": 1}\n', encoding="utf-8")
+    assert change(before, userconfig.digest_tree(home), [])["changed"] == [".config/opencode/opencode.json"]
+    (config / "opencode.json").write_text("{}\n", encoding="utf-8")
+    (config / "new.json").write_text("{}\n", encoding="utf-8")
+    assert change(before, userconfig.digest_tree(home), [])["added"] == [".config/opencode/new.json"]
+    (config / "new.json").unlink()
+    (config / "opencode.json").unlink()
+    assert change(before, userconfig.digest_tree(home), [])["removed"] == [".config/opencode/opencode.json"]
+    (config / "opencode.json").write_text("{}\n", encoding="utf-8")
+    (data / "session").write_text("under PROBE-ROOT/x", encoding="utf-8")
+    leaked = userconfig.leaked_probe_paths(home, needle=b"PROBE-ROOT")
+    assert leaked == [f"{userconfig.DATA_DIRS[0]}/session"]
+    assert change(before, userconfig.digest_tree(home), leaked)["user_config_touched"] is True
+
+
+def test_e_cases_run_under_isolated_env_rule(tmp_path):
+    h = fake_harness(tmp_path, "E9")
+    with h.world(FAKE_SCENARIO) as world:
+        run = shared_e.launch_logged(h, world, shared_e.run_argv(world, prompt="go"), "isolated")
+        assert run.exit_code == 0 and run.env_paths["HOME"].startswith(str(world.root))
+        assert world.env["HOME"] != os.environ.get("HOME")
+    for module in E_CASES.values():
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "os.environ" not in source and "Path.home" not in source and "expanduser" not in source, module.CASE_ID
+        assert "subprocess" not in source and "ctx.harness()" in source, module.CASE_ID
+
+
+def test_e_deny_cases_honour_inert_switch(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_launch(h, world, argv, label, **kw):
+        seen.append(world.env.get("PROBE_INERT"))
+        return SimpleNamespace(tool_part=lambda cid: None, exists=lambda rel: False, exit_code=0, timed_out=False)
+
+    monkeypatch.setattr(shared_e, "launch_logged", fake_launch)
+    for inert, expected in ((True, "1"), (False, None)):
+        seen.clear()
+        h = harness.Harness("E10", tmp_path / f"e{inert}", inert=inert, state=tmp_path / "s", binary=fake_binary(tmp_path))
+        e10_auto_flag._variant(h, "plugin-deny", True)
+        assert seen == [expected]
+    assert runner.CaseContext("E10", tmp_path / "ev", tmp_path / "s", True, fake_binary(tmp_path)).harness().inert is True
+
+
+def test_phase_discovery_registers_e_modules(tmp_path):
+    probe = make_probe(tmp_path)
+    before = core.phase_hash(phase_of(probe, "alpha"), probe)
+    (probe / "alpha" / "e1_thing.py").write_text(case_source("E1", True), encoding="utf-8")
+    (probe / "alpha" / "shared_e.py").write_text("X = 1\n", encoding="utf-8")
+    alpha = phase_of(probe, "alpha")
+    assert [p.name for p in alpha.case_files] == ["c_a1.py", "c_a2.py", "e1_thing.py"]
+    assert core.phase_hash(alpha, probe) != before
+
+
+def test_phase_discovery_old_glob_misses_e_modules(monkeypatch, tmp_path):
+    source = Path(core.__file__).read_text(encoding="utf-8")
+    assert '("c_*.py", "e*_*.py")' in source
+    old = types.ModuleType("core_with_old_glob")
+    old.__file__ = core.__file__
+    monkeypatch.setitem(sys.modules, "core_with_old_glob", old)
+    exec(compile(source.replace('("c_*.py", "e*_*.py")', '("c_*.py",)'), core.__file__, "exec"), old.__dict__)
+    probe = make_probe(tmp_path)
+    (probe / "alpha" / "e1_thing.py").write_text(case_source("E1", True), encoding="utf-8")
+    assert [p.name for p in old.get_phase("alpha", probe).case_files] == ["c_a1.py", "c_a2.py"]
+    assert [p.name for p in core.get_phase("alpha", probe).case_files] == ["c_a1.py", "c_a2.py", "e1_thing.py"]
 
 
