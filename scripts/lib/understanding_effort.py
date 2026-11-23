@@ -27,7 +27,7 @@ _ACTUAL_REQUIRED = ("session", "date")
 
 
 def section_span(text: str) -> tuple[int, int] | None:
-    return markdown_sections.section_span(text, SECTION.removeprefix("## "))
+    return markdown_sections.section_span(text, SECTION.removeprefix("## "), exact=True)
 
 
 def parse(text: str) -> dict | None:
@@ -47,6 +47,8 @@ def _row_problems(row, keys: tuple[str, ...], required: tuple[str, ...], where: 
     if not isinstance(row, dict):
         return [f"{where} is not a table"]
     out = [f"{where} lacks {k}" for k in required if k not in row]
+    out += [f"{where} holds {k}, which {SECTION} does not take (it takes {', '.join(keys)})"
+            for k in row if k not in keys]
     if not any(k in row for k in _NUMBERS):
         out.append(f"{where} holds neither minutes nor usd")
     for key in _NUMBERS:
@@ -68,7 +70,8 @@ def problems(text: str) -> list[str]:
         return [str(exc)]
     if block is None:
         return []
-    out = []
+    out = [f"{SECTION} block holds {k}, which it does not take (it takes estimate, actuals)"
+           for k in block if k not in ("estimate", "actuals")]
     if "estimate" in block:
         out += _row_problems(block["estimate"], _ESTIMATE_KEYS, _ESTIMATE_REQUIRED, "estimate")
     actuals = block.get("actuals", [])
@@ -117,8 +120,13 @@ def _row(**fields) -> dict:
 
 def set_estimate(text: str, *, author: str, minutes: float | None = None, usd: float | None = None,
                  confirmer: str | None = None) -> str:
+    """Set the estimate. A scale left out keeps the figure the leaf already holds; the confirmer is
+    never carried over, since it agreed to the figures it saw. An empty confirmer is no confirmer."""
     block = parse(text) or {}
-    block["estimate"] = _row(minutes=minutes, usd=usd, author=author, confirmer=confirmer)
+    held = block.get("estimate", {})
+    block["estimate"] = _row(minutes=held.get("minutes") if minutes is None else minutes,
+                             usd=held.get("usd") if usd is None else usd,
+                             author=author, confirmer=confirmer or None)
     return _replace(text, block)
 
 

@@ -123,6 +123,7 @@ from .cli_common import (
     _evaluate_review_trigger,
     _cost_rows,
     _ensure_planning_arming,
+    _ensure_understanding_arming,
     _refresh_spend,
     _utcnow,
     _order_agreement_refusal,
@@ -687,6 +688,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     if result.weight_class == WeightClass.SUBSTANTIVE.value:
         plugins.auto_activate_for(state)
         exemption = _arm_order_agreement(state)
+        _ensure_understanding_arming(state, _utcnow())
 
     store.save(state)
     d = Directive(True, state.node, action, detail, data={"reasons": result.reasons})

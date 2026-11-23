@@ -854,6 +854,12 @@ def stage_budget(tier: str, thr: Thresholds, agreed: dict | None = None) -> dict
     return budget
 
 
+def understanding_default(thr: Thresholds) -> dict:
+    """The configured default for understanding an order: the small-tier price, until the order's
+    type record names a figure."""
+    return stage_budget("small", thr)
+
+
 def agreed_figures(minutes, usd) -> dict:
     """An estimate's figures keyed by the scale they price (an unnamed figure is left out)."""
     return {scale: float(figure) for scale, figure in

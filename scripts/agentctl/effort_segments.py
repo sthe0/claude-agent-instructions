@@ -18,6 +18,7 @@ from collections import Counter
 LOG = logging.getLogger(__name__)
 
 PLANNING = "planning"
+UNDERSTANDING = "understanding"
 CLOSING = "closing"
 STAGE_PREFIX = "stage:"
 
@@ -39,6 +40,12 @@ SOURCE_CARRIED = "carried"
 SOURCE_AGREED = "agreed-estimate"
 SOURCE_FALLBACK = "fallback"
 SOURCE_FALLBACK_CAPPED = "fallback-capped"
+SOURCE_CONFIGURED_DEFAULT = "configured-default"
+SOURCE_TYPE_RECORD = "type-record"
+
+AUTHOR_CONFIGURED_DEFAULT = "configured default"
+AUTHOR_TIER_PRICE = "tier price"
+AUTHOR_AGREED_ESTIMATE = "agreed estimate"
 
 OPENED_BY_MIGRATION = "migration"
 TIER_ABOVE_LADDER = "above_large"
@@ -63,6 +70,8 @@ ACT_SPAWNED_PLANNER_RUN_END = "spawned-planner-run-end"
 ACT_APPROVE_BY_USER = "approve-by-user"
 ACT_FIRE_ACK_BY_USER = "fire-acknowledge-by-user"
 ACT_ORDER_AGREE = "order-agree"
+ACT_ORDER_SUBMIT = "order-submit"
+ACT_ORDER_REVIEW = "order-review"
 
 LIVE_STAGE_JUDGING_ACTS = (
     ACT_FAILING_RECORD_RESULT,
@@ -87,6 +96,11 @@ PLANNING_JUDGING_ACTS = (
     ACT_SPAWNED_PLANNER_ACT,
     ACT_SPAWNED_PLANNER_RUN_END,
 )
+UNDERSTANDING_JUDGING_ACTS = (
+    ACT_ORDER_SUBMIT,
+    ACT_ORDER_REVIEW,
+    ACT_ORDER_AGREE,
+)
 CLOSING_REPLANS_JUDGING_ACTS = (
     ACT_SUBMIT_PLAN,
     ACT_PLAN_REVIEW,
@@ -98,6 +112,8 @@ CLOSING_REPLANS_JUDGING_ACTS = (
 def judging_acts_of(segment: str) -> tuple:
     if segment == PLANNING:
         return PLANNING_JUDGING_ACTS
+    if segment == UNDERSTANDING:
+        return UNDERSTANDING_JUDGING_ACTS
     if segment == CLOSING:
         return ()
     return LIVE_STAGE_JUDGING_ACTS
@@ -107,7 +123,7 @@ def replans_judged_at(segment: str, act: str) -> bool:
     """Whether `act` raises a replans-scale fire owed in `segment`. The replan verb never does: the
     replan ceiling bounds that act itself, so the fire falls at the next act of its review cycle.
     In closing only that cycle judges, and a spawned planner's acts never do."""
-    if act == ACT_REPLAN:
+    if act == ACT_REPLAN or segment == UNDERSTANDING:
         return False
     if segment == CLOSING:
         return act in CLOSING_REPLANS_JUDGING_ACTS
@@ -153,6 +169,27 @@ def open_arming(ledger: dict, segment: str, budget: dict | None, budget_source: 
     }
     ledger.setdefault("armings", []).append(arming)
     return arming
+
+
+def reprice_arming(arming: dict, budget: dict, source: str, author: str, pricing: dict) -> None:
+    """Give an open arming a new price in place: what it carried, booked, fired and spanned stays."""
+    arming["budget"] = dict(budget)
+    arming["budget_source"] = source
+    arming["author"] = author
+    arming["pricing"] = pricing
+
+
+def arming_author(arming: dict) -> str:
+    """Who set the arming's budget. One that carries no author reads by its source: the configuration
+    fallback is the configured default, an estimate agreed with the order is the agreed estimate, and
+    a stage's size-class price is the tier price."""
+    if arming.get("author"):
+        return arming["author"]
+    if arming["segment"] == PLANNING and arming["budget_source"] == SOURCE_FALLBACK:
+        return AUTHOR_CONFIGURED_DEFAULT
+    if arming["budget_source"] == SOURCE_AGREED:
+        return AUTHOR_AGREED_ESTIMATE
+    return AUTHOR_TIER_PRICE
 
 
 def _span(start: float) -> dict:
@@ -430,7 +467,7 @@ def timeline(ledger: dict) -> list[dict]:
     order: dict[str, list[dict]] = {}
     for arming in sorted(ledger.get("armings") or (), key=lambda a: a["seq"]):
         order.setdefault(arming["segment"], []).append(arming)
-    rank = {PLANNING: 0, CLOSING: 2}
+    rank = {UNDERSTANDING: -1, PLANNING: 0, CLOSING: 2}
     keys = sorted(order, key=lambda s: rank.get(s, 1))
     return [{"segment": segment, "armings": order[segment]} for segment in keys]
 

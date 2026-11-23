@@ -576,7 +576,27 @@ def _met_in_dropped(mp):
     mp.setattr("lib.difficulty_phase.phase_of", lambda value: None, raising=True)
 
 
+def _understanding_budget_never_repriced(mp):
+    """Understanding an order stays priced at the configured default whatever its type record
+    estimates, and the pricing type is never recorded."""
+    from agentctl import understanding_pricing
+
+    mp.setattr(understanding_pricing, "price",
+               lambda default, entry, path: understanding_pricing._default(default, None, "never re-priced"),
+               raising=True)
+
+
+def _actual_not_written_back(mp):
+    """The understanding actual is never written to the pricing type's record at closure."""
+    from agentctl import understanding_pricing
+
+    mp.setattr(understanding_pricing, "write_back",
+               lambda arming, *, session, runner=None: {"written": [], "skipped": "mutant"}, raising=True)
+
+
 MUTANTS = {
+    "understanding_budget_never_repriced": _understanding_budget_never_repriced,
+    "actual_not_written_back": _actual_not_written_back,
     "met_in_dropped": _met_in_dropped,
     "method_review_unbound": _method_review_unbound,
     "composition_writes_method_review": _composition_writes_method_review,

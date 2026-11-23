@@ -1274,7 +1274,11 @@ def _record_plan_review(args, *, store: StateStore, runner: Runner | None = None
     scope = (getattr(args, "scope", None) or "").strip()
     if scope != ORDER_REVIEW_SCOPE and getattr(args, "target", None) not in (None, state.plan_path):
         _note_mandated_review(state)
-    _book_and_judge(state, store, args, effort_segments.ACT_PLAN_REVIEW)
+    understanding = effort_segments.current_arming(state.effort_segments)
+    order_review = (scope == ORDER_REVIEW_SCOPE and understanding is not None
+                    and understanding["segment"] == effort_segments.UNDERSTANDING)
+    _book_and_judge(state, store, args,
+                    effort_segments.ACT_ORDER_REVIEW if order_review else effort_segments.ACT_PLAN_REVIEW)
     if scope == ORDER_REVIEW_SCOPE:
         return _cmd_order_review(args, state, store=store, method_runner=method_runner)
     target = getattr(args, "target", None) or state.plan_path

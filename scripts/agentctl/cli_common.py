@@ -60,6 +60,7 @@ from .plan import (
     stage_carry_key,
     PlanDoc,
     PlanError,
+    load_order_draft,
     load_plan,
     order_digest,
     plan_meta_element_key,
@@ -449,7 +450,8 @@ def _stage_identity_record(stage, uid: str | None = None) -> dict:
 def _effort_identity_payload(state: SessionState) -> tuple[dict, dict]:
     """The identity tables of this session's frames and, per segment, the latest arming's entry
     (None once it closed), for the order ledger. A migration arming carries nothing: its actual
-    is the old window's, which the order window already holds."""
+    is the old window's, which the order window already holds. The understanding segment settles at
+    the order's agreement and is not carried."""
     tables = {}
     frames = [(frame_path(state.plan_stack[:d]), f.stages) for d, f in enumerate(state.plan_stack)]
     frames.append((frame_path(state.plan_stack), state.stages))
@@ -460,7 +462,8 @@ def _effort_identity_payload(state: SessionState) -> tuple[dict, dict]:
         ]
     latest: dict = {}
     for arming in state.effort_segments.get("armings", []):
-        latest[arming["segment"]] = arming
+        if arming["segment"] != effort_segments.UNDERSTANDING:
+            latest[arming["segment"]] = arming
     armings: dict = {}
     for segment, arming in latest.items():
         if arming["budget_source"] in (effort_segments.SOURCE_STRETCH, effort_segments.SOURCE_WINDOW):
@@ -721,6 +724,37 @@ def _ensure_planning_arming(state: SessionState, now: float) -> None:
             ledger, effort_segments.PLANNING, _planning_fallback(thr),
             effort_segments.SOURCE_FALLBACK, now, "classify")
         opened["tier_ladder"] = effort.tier_ladder(thr)
+
+
+def _ensure_understanding_arming(state: SessionState, now: float) -> None:
+    """Open the understanding segment of an order not yet agreed: nested in planning (the later-started
+    span is the live one), priced at the configured default until the order's type record prices it,
+    and closed at the order's agreement. A session with no order to agree, one whose order is agreed
+    already, and a migrated window open none."""
+    ledger = state.effort_segments
+    if (not state.order_agreement_armed or state.order_agreement is not None or state.plan_stack
+            or effort_segments.window_arming(ledger) is not None
+            or any(a["segment"] == effort_segments.UNDERSTANDING for a in ledger.get("armings") or ())):
+        return
+    thr = Thresholds()
+    opened = effort_segments.open_arming(
+        ledger, effort_segments.UNDERSTANDING, effort.understanding_default(thr),
+        effort_segments.SOURCE_CONFIGURED_DEFAULT, now, "classify")
+    opened["author"] = effort_segments.AUTHOR_CONFIGURED_DEFAULT
+    opened["title"] = "understanding the order"
+    opened["tier_ladder"] = effort.tier_ladder(thr)
+    opened["pricing"] = {"type": None, "reason": "no order is submitted yet, so the configured default prices it",
+                         "scale_sources": {scale: effort_segments.SOURCE_CONFIGURED_DEFAULT
+                                           for scale in effort_segments.SCALES}, "confirmer": ""}
+
+
+def _close_understanding(state: SessionState, store: StateStore, args, act: str, by: str) -> dict | None:
+    """The user's agreement settles the understanding segment: book, then close it at its multiple."""
+    arming = effort_segments.open_arming_of(state.effort_segments, effort_segments.UNDERSTANDING)
+    if arming is None:
+        return None
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    return _close_at_user_act(state, arming, act, by, _utcnow())
 
 
 def _budget_migrated_planning(arming: dict) -> None:
@@ -1087,11 +1121,31 @@ def _line_text(line: dict) -> str:
     return f"{line['title']}{source}{flag}: " + ", ".join(parts) + carried + count
 
 
+_WORK_ITEMS = {
+    effort_segments.UNDERSTANDING: ("understanding", "agreed order", "order-agree recorded"),
+    effort_segments.PLANNING: ("planning", "approved plan", "approve recorded"),
+}
+
+
+def _work_item(kind: str, armings: list[dict], budget: dict | None, actual: dict, customer: str) -> dict:
+    """The work item an understanding or planning segment is (r3-92): who it is for, what it
+    produces, the check that accepts it, and its estimate beside the actual recorded."""
+    _, product, check = _WORK_ITEMS[kind]
+    last = armings[-1]
+    return {
+        "customer": customer, "product": product, "acceptance_check": check,
+        "estimate": {"budget": budget, "author": effort_segments.arming_author(last),
+                     "source": last["budget_source"]},
+        "actual": actual,
+    }
+
+
 def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = None,
-                 projected: bool = False) -> dict:
+                 projected: bool = False, customer: str = "") -> dict:
     """One segment's R6 line: its armings' actuals (carried plus booked) against their summed
     budgets, the carried part shown, the closing segment's actual alone. `budget` replaces the
-    sum for the migrated planning line the switch has not yet booked."""
+    sum for the migrated planning line the switch has not yet booked. An understanding or planning
+    line also carries its work item, for the `customer` the order is for."""
     closing = segment == effort_segments.CLOSING
     actual = _scale_sum(armings, effort_segments.arming_actual)
     carried = _scale_sum(armings, lambda a: a["carried"])
@@ -1105,7 +1159,7 @@ def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = Non
         "segment": segment,
         "identity": segment.removeprefix(effort_segments.STAGE_PREFIX),
         "title": title or segment,
-        "kind": "closing" if closing else "planning" if segment == effort_segments.PLANNING else "stage",
+        "kind": "closing" if closing else _WORK_ITEMS[segment][0] if segment in _WORK_ITEMS else "stage",
         "armings": len(armings),
         "budget": own,
         "budget_source": None if closing else armings[-1]["budget_source"],
@@ -1116,6 +1170,11 @@ def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = Non
     }
     if projected:
         line["projected"] = True
+    if segment in _WORK_ITEMS:
+        line["author"] = effort_segments.arming_author(armings[-1])
+        line["work_item"] = _work_item(segment, armings, own, actual, customer)
+        if segment == effort_segments.UNDERSTANDING:
+            line["pricing"] = armings[-1].get("pricing")
     line["text"] = _line_text(line)
     return line
 
@@ -1131,6 +1190,7 @@ def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> 
     switch = _switch_budget(state, Thresholds()) if (
         project_switch and effort_segments.window_arming(ledger) is not None) else None
     lines = []
+    customer = _order_customer_id(state) or _order_draft_customer_id(state)
     waiting = {uid for stage in state.stages
                if stage.outcome.status == StageStatus.PENDING.value
                and (uid := state.stage_uid(stage.index))}
@@ -1141,7 +1201,7 @@ def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> 
                             for a in entry["armings"])):
             continue
         projected = switch is not None and entry["segment"] == effort_segments.PLANNING
-        lines.append(_effort_line(entry["segment"], entry["armings"],
+        lines.append(_effort_line(entry["segment"], entry["armings"], customer=customer,
                                   budget=switch if projected else None, projected=projected))
     booked = effort_segments.conserve(ledger)["total"]
     budgeted = [line["budget"] for line in lines if line["budget"] is not None]
@@ -1606,6 +1666,17 @@ def _order_customer_id(state: SessionState) -> str:
     return order.customer_id if order is not None else ""
 
 
+def _order_draft_customer_id(state: SessionState) -> str:
+    """The customer of the submitted order draft: the one an order has before any plan exists."""
+    if not state.order_draft_path:
+        return ""
+    try:
+        order = load_order_draft(state.order_draft_path)[0].meta.order
+    except (OSError, PlanError):
+        return ""
+    return order.customer_id if order is not None else ""
+
+
 def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float,
                         store: StateStore | None = None, finished_work: bool = False) -> dict:
     """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
@@ -1673,6 +1744,9 @@ def _open_difficulty(state: SessionState, origin: str | None = None, *,
     the slot (`child` inside a spawned session, else `stage`). `met_in` is the phase of the
     work the difficulty was met in; an unknown name raises ValueError (a stored record that
     names an unknown phase still loads, as None)."""
+    if met_in is not None and difficulty_phase.phase_of(met_in) is None:
+        raise ValueError(f"met_in {met_in!r} is not a phase; a phase is one of "
+                         f"{', '.join(difficulty_phase.PHASES)}")
     cur = state.difficulty
     root_level, root_parent_uid, root_origin = _root_difficulty_slot(state)
     push = cur is not None and (nested or cur.declaration is not None)
@@ -1689,9 +1763,6 @@ def _open_difficulty(state: SessionState, origin: str | None = None, *,
         return None
     if origin is None:
         origin = root_origin if level == root_level else "stage"
-    if met_in is not None and difficulty_phase.phase_of(met_in) is None:
-        raise ValueError(f"met_in {met_in!r} is not a phase; a phase is one of "
-                         f"{', '.join(difficulty_phase.PHASES)}")
     if push:
         state.difficulty_stack.append(cur)
     state.difficulty = Difficulty(

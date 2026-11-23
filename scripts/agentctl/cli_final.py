@@ -8,11 +8,13 @@ import time
 from . import (
     cost,
     effort,
+    effort_segments,
     enumerate_sidecar,
     gates,
     plugins,
     solved_marker,
     task_accumulator,
+    understanding_pricing,
     workspace_cleanup,
     check_cache,
     delivery_channel,
@@ -885,6 +887,20 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
+def _write_understanding_actual(state: SessionState, runner: Runner | None) -> dict | None:
+    """Record what understanding the order cost on the type record that priced it. None for a
+    session that never had an understanding segment (no order, small change, exempt host); fail-open
+    like the other effects after the resolution is saved."""
+    arming = next((a for a in reversed(state.effort_segments.get("armings") or ())
+                   if a["segment"] == effort_segments.UNDERSTANDING), None)
+    if arming is None:
+        return None
+    try:
+        return understanding_pricing.write_back(arming, session=state.session_id, runner=runner)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design
+        return {"written": [], "skipped": f"the write failed: {exc}"}
+
+
 def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     # plugin gates fold into resolve (not verify_final) so a plugin can let the
@@ -1025,6 +1041,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     except Exception as exc:  # noqa: BLE001 - fail-open by design
         marker_status = {"channel": None, "key": tracker_key, "stamped": False,
                           "skipped_reason": str(exc)}
+    understanding_actual = _write_understanding_actual(state, runner)
     # Same shape as the marker stamp: resolution is already saved, so a cleanup fault
     # is reported, never allowed to undo it. Runs last of the post-resolve effects that
     # act on the working directory, because it may remove the very directory the engine
@@ -1042,6 +1059,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if effort_disclosure is not None:
         data["effort"] = effort_disclosure
         detail += "; effort per segment (see effort): " + " | ".join(effort_disclosure["text"])
+    if understanding_actual is not None:
+        data["understanding_actual"] = understanding_actual
+        if understanding_actual["skipped"]:
+            detail += f" (the understanding actual was not recorded on a type record: {understanding_actual['skipped']})"
     # Bypass visibility: the resolution summary surfaces every acceptance judge bypass
     # verbatim, so a resolved task's record shows which acceptance passes were unjudged
     # (kill switch) or overridden — never hidden behind a clean COMPLETED.

@@ -9,7 +9,8 @@ import sys
 import time
 from pathlib import Path
 from lib import ask_evidence, config_root
-from . import answer_ledger, delivery, effort_segments, gates, method_statement
+from . import answer_ledger, delivery, effort, effort_segments, gates, method_statement, understanding_pricing
+from .config import Thresholds
 from .directive import Directive
 from .dispatch import Runner, subprocess_runner
 from .plan import (
@@ -36,7 +37,10 @@ from .submission import (
     order_customer_side_missing, order_sides_violations, order_understanding_completeness_violations,
     order_understanding_violations,
 )
-from .cli_common import REPO_ROOT, _renew_order_agreement, _require
+from .cli_common import (
+    REPO_ROOT, _book_and_judge, _close_understanding, _order_draft_customer_id, _renew_order_agreement,
+    _require,
+)
 
 LEAVES_ROOT = REPO_ROOT / "memory-global" / "leaves"
 SEARCH_TIERS = ("experience", "regularities", "principles", "system-knowledge")
@@ -51,10 +55,45 @@ def _search_recorded(state: SessionState, search_id: str) -> bool:
     return any(s.get("id") == search_id for s in state.order_searches)
 
 
-def _record_exists(kind: str, ref: str) -> bool:
+def _record_path(kind: str, ref: str) -> Path | None:
     area = LEAVES_ROOT / _TYPE_ENTRY_AREA[kind]
     name = ref[:-3] if ref.endswith(".md") else ref
-    return bool(name) and "/" not in name and any(p.name == f"{name}.md" for p in area.rglob("*.md"))
+    if not name or "/" in name:
+        return None
+    return next((p for p in area.rglob("*.md") if p.name == f"{name}.md"), None)
+
+
+def _record_exists(kind: str, ref: str) -> bool:
+    return _record_path(kind, ref) is not None
+
+
+def _pricing_entry(order) -> dict | None:
+    """The order's type entry as `{kind, ref}` when it names a record (kind none names none)."""
+    executor = order.executor_side if order is not None else None
+    entry = executor.type_entry if executor is not None else None
+    if entry is None or entry.kind not in _TYPE_ENTRY_AREA or not entry.ref:
+        return None
+    return {"kind": entry.kind, "ref": entry.ref}
+
+
+def _price_understanding(state: SessionState, order) -> None:
+    """Price the open understanding segment from the order's type record; the actual, the open fire
+    and the spans it holds stay. Once the agreement closed the segment nothing is open, so a revision
+    leaves its pricing type where it was."""
+    arming = effort_segments.open_arming_of(state.effort_segments, effort_segments.UNDERSTANDING)
+    if arming is None:
+        return
+    entry = _pricing_entry(order)
+    path = _record_path(entry["kind"], entry["ref"]) if entry else None
+    pricing = understanding_pricing.price(effort.understanding_default(Thresholds()), entry, path)
+    effort_segments.reprice_arming(arming, pricing.budget, pricing.source, pricing.author, pricing.as_record())
+
+
+def _judge_understanding(state: SessionState, store: StateStore, args, act: str) -> None:
+    """Book and judge an act of understanding the order. A session holding no understanding segment
+    (unarmed, old-form, or past its agreement) books nothing here, as before the segment existed."""
+    if effort_segments.open_arming_of(state.effort_segments, effort_segments.UNDERSTANDING) is not None:
+        _book_and_judge(state, store, args, act)
 
 
 def _executor_side_violations(meta, state: SessionState) -> list[str]:
@@ -226,7 +265,9 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
     state.order_draft_path = args.plan
     state.order_draft_sha256 = understanding_digest(doc)
     state.order_beside = _beside_records(doc)
+    _price_understanding(state, doc.meta.order)
     state.log("order_submit", plan=args.plan, understanding_sha256=state.order_draft_sha256)
+    _judge_understanding(state, store, args, effort_segments.ACT_ORDER_SUBMIT)
     store.save(state)
     return Directive(
         True, state.node, "continue",
@@ -350,6 +391,9 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     state.order_agreement = agreement
     state.order_agreement_history.append(agreement)
     _record_agreed_estimate(state, doc)
+    _judge_understanding(state, store, args, effort_segments.ACT_ORDER_AGREE)
+    _close_understanding(state, store, args, effort_segments.ACT_ORDER_AGREE,
+                         _order_draft_customer_id(state) or "user")
     _renew_order_agreement(state, store, args)
     if previous is None or previous.understanding_sha256 != digest:
         for challenge in state.order_challenges:

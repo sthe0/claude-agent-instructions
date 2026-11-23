@@ -656,6 +656,12 @@ def cmd_understanding_effort(a) -> int:
     if held:
         sys.exit("refusing to write: the leaf's block is malformed already — "
                  + "; ".join(held) + " — repair it by hand first")
+    other_kind = ([("--actual-session", a.actual_session)] if a.kind == "estimate"
+                  else [("--author", a.author), ("--confirmer", a.confirmer)])
+    stray = [flag for flag, value in other_kind if value is not None]
+    if stray:
+        sys.exit(f"{', '.join(stray)} belongs to the other kind of record; --kind {a.kind} does not take "
+                 f"it — drop it or change --kind")
     if a.kind == "estimate":
         if not a.author:
             sys.exit("an estimate names who authored it (--author); --confirmer names who agreed to "
@@ -1865,7 +1871,7 @@ def build_parser() -> argparse.ArgumentParser:
     ue.add_argument("--minutes", type=float, default=None, help="effort in minutes (one of --minutes/--usd at least)")
     ue.add_argument("--usd", type=float, default=None, help="effort in dollars (one of --minutes/--usd at least)")
     ue.add_argument("--author", help="estimate: who authored the figure")
-    ue.add_argument("--confirmer", help="estimate: who confirmed it; omit while nobody has")
+    ue.add_argument("--confirmer", help="estimate: who confirmed it; omit (or give empty) while nobody has")
     ue.add_argument("--actual-session", dest="actual_session",
                     help="actual: the session the effort was met in")
     ue.add_argument("--date", default=today())
