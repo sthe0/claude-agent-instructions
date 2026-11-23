@@ -347,6 +347,19 @@ def _order_receipt_understanding(digest: str) -> str | None:
     return digest
 
 
+def _bind_presented_estimates(state: SessionState, store: StateStore) -> None:
+    """The essence the user approves a plan on shows each stage's estimate with the sub-plans
+    block: note the estimate of every stage that has a record as presented, so the agreement of
+    its first figure at `approve` is checked against what was shown."""
+    for stage in state.stages:
+        try:
+            record = sub_plan.read(state, stage.index, store)
+        except sub_plan.SubPlanError:
+            continue
+        if record is not None:
+            sub_plan.write_presented_estimate(state, stage.index, record.estimate)
+
+
 def _present_subplan(args, state: SessionState, *, store: StateStore) -> Directive:
     """`present-plan --kind subplan --stage <n>`: stamp a receipt for the recorded sub-plan of one
     stage. The receipt binds the sub-plan's approval digest (so a later edit of the sub-plan
@@ -396,6 +409,7 @@ def _present_subplan(args, state: SessionState, *, store: StateStore) -> Directi
         understanding_sha256=digest,
     )
     _record_plan_presentation(state, presentation)
+    sub_plan.write_presented_estimate(state, stage, record.estimate)
     state.log("present_plan", plan=presentation.plan_path, kind=PLAN_PRESENTATION_KIND_SUBPLAN,
               rendering_sha256=presentation.rendering_sha256)
     _deliver_presentation_via_channel(state, presentation, raw)
@@ -1226,6 +1240,8 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         grants_sha256=presented_grants_sha256,
     )
     _record_plan_presentation(state, presentation)
+    if kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        _bind_presented_estimates(state, store)
     # D9 capture: what the user said when sending a PRIOR presentation of this plan
     # back (a correction or rejection) — the one thing present_plan's own receipt
     # never had anywhere to record, since the text belongs to the user's reply, not

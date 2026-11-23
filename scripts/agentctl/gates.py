@@ -3563,8 +3563,9 @@ def estimate_dispatch_blockers(state: SessionState, stage, record, *,
     held = copy.get("held")
     if held:
         way = (CHILD_ESCALATES_THE_ESTIMATE if state.parent_link
-               else f"the user decides it: `estimate-correct --stage {stage.index} --by <their name>` "
-                    f"on their answer choosing the option marked for it")
+               else f"the user decides it: `estimate-correct --stage {stage.index} "
+                    f"{sub_plan.figure_args(held)} --basis '<why>' --by <their name>` on their "
+                    f"answer choosing the option marked for that figure")
         return [f"stage {stage.index} cannot start: its figure {held.get('minutes')} min / "
                 f"{held.get('usd')} usd is held past the allowed overrun and not decided; {way}"]
     if not sub_plan.is_decided_later(stage):

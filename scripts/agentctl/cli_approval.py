@@ -801,6 +801,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 scale: float((state.effort_estimate or {}).get(scale) or 0.0)
                 for scale in effort.RATIO_SCALES
             }
+            armed_estimate = _agree_figures_and_freeze_task_estimate(state, store, armed_estimate)
             order_approvals.record_approval(
                 order_key,
                 plan_sha256=_approved_digest or "",
@@ -1092,7 +1093,17 @@ def _past_margin_text(state: SessionState, stage: Stage, figure: dict, scales: l
     return (f"{head}: it is held unapplied and the stage stays refused at dispatch until the user "
             f"decides. Put an AskUserQuestion to the user with an option marked {marker} beside an "
             f"unmarked one; once they choose it, run `estimate-correct --stage {stage.index} "
-            f"--minutes {figure['minutes']} --usd {figure['usd']} --basis '<why>' --by <their name>`")
+            f"{sub_plan.figure_args(figure)} --basis '<why>' --by <their name>`")
+
+
+def _first_figure_line(stage: Stage, figure: dict, thr: Thresholds) -> dict:
+    """The user line a stage's first agreed figure sets: the figure itself, but for a decided-later
+    stage the provisional tier price the user approved with the plan."""
+    if not sub_plan.is_decided_later(stage):
+        return figure
+    provisional = effort.tier_figure(stage, thr)
+    return {"minutes": provisional[effort_segments.SCALE_MINUTES],
+            "usd": provisional[effort_segments.SCALE_USD]}
 
 
 def _agree_first_figure(state: SessionState, stage: Stage, record, *, authority: str,
@@ -1100,8 +1111,14 @@ def _agree_first_figure(state: SessionState, stage: Stage, record, *, authority:
     """Agree the figure of the stage's record as it stands, as the stage's first figure.
     Returns `(outcome, text)`: `agreed`, `kept` (a figure is already agreed: the record guard keeps
     the record equal to it), `held` (past the allowed overrun, kept unapplied for the user),
-    `escalate` (the same in a linked child, which cannot ask the user), or `refused` (no estimate
-    with a basis, or one that is not the estimate the approved request carried)."""
+    `escalate` (the same in a linked child, which cannot ask the user; the figure is held in the
+    child's copy too, flagged, so the dispatch gate refuses the stage), or `refused` (no estimate
+    with a basis, or one that is not the estimate the approved request carried).
+
+    The user's own act (`AUTHORITY_USER`) is not measured against the allowed overrun: it is the
+    decision the margin routes to. The figure the user line takes is the first agreed figure, but
+    for a decided-later stage the provisional tier price approved with the plan: only a decision
+    the user takes on a held figure (`estimate-correct --by <user>`) moves it."""
     estimate = record.estimate if record is not None else None
     if estimate is None or not estimate.basis.strip():
         return "refused", (f"stage {stage.index}'s request carries no estimate with a basis: the "
@@ -1119,19 +1136,17 @@ def _agree_first_figure(state: SessionState, stage: Stage, record, *, authority:
     provisional = effort.tier_figure(stage, thr)
     price = {"minutes": provisional[effort_segments.SCALE_MINUTES],
              "usd": provisional[effort_segments.SCALE_USD]}
-    against = price if decided_later else None
-    over = _overrun_scales(state, stage, figure, thr, against)
-    if over:
+    over = _overrun_scales(state, stage, figure, thr, price if decided_later else None)
+    if over and authority != sub_plan.AUTHORITY_USER:
         text = _past_margin_text(state, stage, figure, over)
-        if state.parent_link:
-            return "escalate", text
         sub_plan.hold_figure(state, stage.index, minutes=figure["minutes"], usd=figure["usd"],
-                             basis=estimate.basis, author=estimate.author, at=time.time())
-        return "held", text
+                             basis=estimate.basis, author=estimate.author, at=time.time(),
+                             escalated=bool(state.parent_link))
+        return ("escalate" if state.parent_link else "held"), text
     sub_plan.agree_copy(
         state, stage.index, minutes=figure["minutes"], usd=figure["usd"], basis=estimate.basis,
         author=estimate.author, agreer=state.session_id, authority=authority,
-        user_approved=figure if decided_later or authority == sub_plan.AUTHORITY_USER else price)
+        user_approved=_first_figure_line(stage, figure, thr))
     _reprice_open_arming(state, stage)
     return "agreed", ""
 
@@ -1181,14 +1196,30 @@ def _write_stage_approvals(state: SessionState, store: StateStore, *, by_agent: 
             _agree_named_figure(state, stage, record, authority)
 
 
+def _agree_figures_and_freeze_task_estimate(state: SessionState, store: StateStore,
+                                            armed_estimate: dict) -> dict:
+    """The user's approval agrees the figures the executors named (no margin: it is the decision
+    the margin routes to), and the task estimate they approve is the one composed with those
+    figures; each stage's copy records what that estimate holds of it (`frozen_in`). Returns the
+    composed task estimate, which the caller freezes."""
+    state.order_effort_frozen = armed_estimate
+    _write_stage_approvals(state, store, by_agent=False)
+    for stage in state.stages:
+        sub_plan.clear_frozen_in(state, stage.index)
+    composed = effort.freeze_composed(state, sub_plan.copies_of(state))
+    for stage_index, contributes in composed["stages"].items():
+        if sub_plan.estimate_copy(state, stage_index).get("agreed"):
+            sub_plan.mark_frozen_in(state, stage_index, contributes)
+    return composed["frozen"]
+
+
 def _agree_named_figure(state: SessionState, stage: Stage, record, authority: str) -> None:
     """`approve` agrees the figure an executor named with a basis; a stage whose record names none
     (a decided-later stage not planned yet) is left to the act that approves it."""
     if record is None or record.estimate is None or not record.estimate.basis.strip():
         return
-    approved = sub_plan.approval_entry(state, stage.index).get("user_subplan_estimate")
     outcome, text = _agree_first_figure(state, stage, record, authority=authority,
-                                        approved_digest=approved)
+                                        approved_digest=sub_plan.shown_estimate(state, stage))
     if outcome in ("held", "escalate", "refused"):
         state.log("estimate_not_agreed", stage=stage.index, outcome=outcome, reason=text)
 
@@ -1278,13 +1309,13 @@ def cmd_approve_stage_resources(args, *, store: StateStore, runner: Runner | Non
                          + "; ".join(outside) + f" -- {way}", data={"outside": outside})
     outcome, text = _agree_first_figure(
         state, stage, record, authority=_acting_authority(state, by_user=False),
-        approved_digest=(sub_plan.approval_entry(state, stage.index).get("user_subplan_estimate")
-                         if sub_plan.is_decided_later(stage) else None))
+        approved_digest=sub_plan.shown_estimate(state, stage))
+    if outcome != "refused":
+        sub_plan.write_parent_approval(state, stage.index, record.resource_request, widens_set=False)
     if outcome in ("held", "escalate", "refused"):
         store.save(state)
         return Directive(False, state.node, "await_user_approval", text,
                          data={"estimate": outcome})
-    sub_plan.write_parent_approval(state, stage.index, record.resource_request, widens_set=False)
     state.log("approve_stage_resources", stage=stage.index)
     store.save(state)
     return Directive(True, state.node, "next_stage",
@@ -1330,12 +1361,14 @@ def cmd_approve_resources(args, *, store: StateStore, runner: Runner | None = No
                          "; ".join(shown) + f". approve-resources approves the request the user was "
                          f"shown: the plan's own approval ({gates.user_plan_approval_way(state)}) is the "
                          f"other way on")
-    outcome, text = _agree_first_figure(state, stage, record, authority=sub_plan.AUTHORITY_USER)
+    outcome, text = _agree_first_figure(state, stage, record, authority=sub_plan.AUTHORITY_USER,
+                                        approved_digest=sub_plan.shown_estimate(state, stage))
+    if outcome != "refused":
+        sub_plan.write_parent_approval(state, stage.index, record.resource_request)
     if outcome in ("held", "escalate", "refused"):
         store.save(state)
         return Directive(False, state.node, "await_user_approval", text,
                          data={"estimate": outcome})
-    sub_plan.write_parent_approval(state, stage.index, record.resource_request)
     state.log("approve_resources", stage=stage.index, by=by)
     store.save(state)
     return Directive(True, state.node, "next_stage",
@@ -1432,10 +1465,13 @@ def cmd_estimate_correct(args, *, store: StateStore, runner: Runner | None = Non
             "from": sub_plan.figure_of(copy.get("minutes"), copy.get("usd")), "to": figure,
             "basis": basis, "by": by, "agreer": state.session_id, "authority": authority,
             "at": time.time()})
+        user_line = figure if by_user else None
+    else:
+        first_line = _first_figure_line(stage, figure, thr)
+        user_line = figure if by_user else first_line
     sub_plan.agree_copy(
         state, stage.index, **figure, basis=basis, author=state.session_id,
-        agreer=state.session_id, authority=authority,
-        user_approved=figure if by_user else None)
+        agreer=state.session_id, authority=authority, user_approved=user_line)
     if answered_at is not None:
         sub_plan.consume_answer(state, stage.index, answered_at)
     if above:

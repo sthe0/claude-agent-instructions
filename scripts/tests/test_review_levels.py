@@ -129,6 +129,75 @@ def test_review_record_through_subplan_field_lifts_blocker(
     assert not any("method review" in line for line in _unplanned(store, plan))
 
 
+def _framed_record():
+    from types import SimpleNamespace
+
+    from test_stage_order_subplan import _frame, _session
+
+    state = _session("p", plan_stack=[_frame(1)])
+    record = _record_without_review()
+    sub_plan.store(state, record, 0)
+    return state, record, lambda r: SimpleNamespace(meta=SimpleNamespace(sub_plan=r))
+
+
+@pytest.mark.parametrize("verdict, written", [("pass", True), ("override", True), ("revise", False)])
+def test_the_engine_writes_the_method_review_of_the_record_a_passing_whole_plan_review_read(
+        verdict, written):
+    """The writer is the engine's: a passing verdict (or the user's override) is stored into the
+    record the reviewer read, bound to that record's digest, and lifts the dispatch blocker; a
+    verdict asking for a revision writes nothing."""
+    state, record, doc_of = _framed_record()
+    assert not sub_plan.method_review_recorded(
+        sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"]))
+    assert sub_plan.record_method_review(
+        state, None, doc_of(record), verdict=verdict, reviewer="thinker",
+        plan_sha256="a" * 64, at=5.0) is written
+    stored = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"])
+    assert sub_plan.method_review_recorded(stored) is written
+    if written:
+        [review] = stored.reviews
+        assert review["kind"] == sub_plan.METHOD_REVIEW_KIND and review["verdict"] == verdict
+        assert review["bound_to"] == sub_plan.approval_digest(stored) and review["plan_sha256"] == "a" * 64
+
+
+def test_the_method_review_is_not_written_into_a_record_the_executor_changed_since_it_was_read():
+    state, record, doc_of = _framed_record()
+    read = _record_without_review()
+    read.method = "a method the reviewer read, rewritten since"
+    assert sub_plan.record_method_review(
+        state, None, doc_of(read), verdict="pass", reviewer="thinker", plan_sha256="a" * 64,
+        at=5.0) is False
+    assert sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"]).reviews == []
+    assert sub_plan.record_method_review(
+        state, None, None, verdict="pass", reviewer="thinker", plan_sha256="a" * 64, at=5.0) is False
+
+
+def test_a_record_cannot_carry_the_method_review_it_is_judged_by():
+    """A `method` review arriving in the submitted record is refused before anything is stored: the
+    executor cannot lift its own dispatch blocker; a review of any other kind is carried as before
+    and an engine-written review survives the executor's rewrite."""
+    state, record, doc_of = _framed_record()
+
+    class Carrier:
+        def load(self, sid):
+            return state
+
+    forged = _record_without_review()
+    forged.reviews = [{"kind": sub_plan.METHOD_REVIEW_KIND, "verdict": "pass", "by": "executor"}]
+    with pytest.raises(sub_plan.SubPlanError, match="written by the engine"):
+        sub_plan.record_carried_by(state, doc_of(forged), Carrier())
+    assert sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"]).reviews == []
+
+    assert sub_plan.record_method_review(
+        state, None, doc_of(record), verdict="pass", reviewer="thinker", plan_sha256="a" * 64,
+        at=5.0)
+    rewritten = _record_without_review()
+    rewritten.method = "a rewritten method"
+    sub_plan.record_carried_by(state, doc_of(rewritten), Carrier())
+    stored = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"])
+    assert stored.method == "a rewritten method" and sub_plan.method_review_recorded(stored)
+
+
 def test_missing_method_review_blocks_presentation_of_new_form_plan_but_not_decided_later_or_old_form(
         store, venued_fixtures_dir, tmp_path, monkeypatch):
     plan = _essence(store, venued_fixtures_dir, tmp_path, monkeypatch)

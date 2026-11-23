@@ -204,6 +204,13 @@ def _present(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True, re
         assert confirmed.ok, confirmed
 
 
+def _recorded_approvals(store, sid=SESSION) -> dict:
+    """The approvals on record, leaving out the figure a presentation records it showed."""
+    entries = {key: {k: v for k, v in entry.items() if k != "presented_estimate"}
+               for key, entry in store.load(sid).stage_approvals.items()}
+    return {key: entry for key, entry in entries.items() if entry}
+
+
 def _present_and_approve(store, tmp_path, stage=1, sid=SESSION, by="fedor", confirm=True,
                          record=None):
     _present(store, tmp_path, stage, sid, by, confirm, record)
@@ -665,7 +672,6 @@ def _subplan_table(method="split the module", **approvals) -> str:
     lines += ["[[meta.sub_plan.resource_request]]", "stage = 1", 'allow = ["Edit"]',
               "[meta.sub_plan.estimate]", "minutes = 40", "usd = 2.0",
               'basis = "one module split and a suite run"',
-              "[[meta.sub_plan.reviews]]", 'kind = "method"', 'verdict = "pass"',
               "[[meta.compared_plans.entries]]", 'ref = "plan-a"', 'departure = "no migration"']
     return "\n".join(lines) + "\n"
 
@@ -715,14 +721,28 @@ class Contour:
         finally:
             self.mp.delenv(norm_handoff.NORM_HANDOFF_ENV)
 
-    def submit(self, text: str | None = None) -> dict:
-        """Link the child and run its start, classify, plan and `submit-plan`."""
+    def review_method(self, plan: str) -> bool:
+        """The thinker's passing whole-plan review of `plan`, as the engine writes it into the
+        record the child's contour holds."""
+        child = self.store.load(CHILD)
+        written = sub_plan.record_method_review(
+            child, self.store, load_plan(plan), verdict="pass", reviewer="reviewer",
+            plan_sha256="0" * 64, at=1.0)
+        self.store.save(child)
+        return written
+
+    def submit(self, text: str | None = None, *, reviewed: bool = True) -> dict:
+        """Link the child and run its start, classify, plan and `submit-plan`; the record it
+        carries is then reviewed (`reviewed`) the way a passing plan-review writes it."""
         plan = self.write(text or self.text())
         self.child.link(grants=self.tca._covering_grants(plan) + [{"rule": "Edit"}])
         self.handoff = os.environ[norm_handoff.NORM_HANDOFF_ENV]
         self.mp.delenv(norm_handoff.NORM_HANDOFF_ENV)
         with self.as_child():
-            return self.child.submit(plan)
+            result = self.child.submit(plan)
+        if reviewed and result.get("ok"):
+            assert self.review_method(plan)
+        return result
 
     def own(self, *argv):
         """One call through the channel a linked child has: (exit code, JSON body, stderr)."""
@@ -1804,12 +1824,12 @@ def test_a_session_approved_before_approvals_were_recorded_goes_on_by_the_verb_t
     _refused(_user_approves_resources(store), "has no delivery stamp")
     _put(store, _rec(1, allow=("Edit", "Read")))
     _refused(_user_approves_resources(store), "changed since it was presented")
-    assert not store.load(SESSION).stage_approvals
+    assert _recorded_approvals(store) == {}
 
     _put(store, _rec(1))
     _present(store, tmp_path)
     _refused(_user_approves_resources(store, by="agent"), "approve-stage-resources")
-    assert not store.load(SESSION).stage_approvals
+    assert _recorded_approvals(store) == {}
     assert _user_approves_resources(store).ok
     assert _entry(store)["parent_resource_approval"] and _entry(store)["approved"]
     assert _dispatch(store).action == "execute_in_thread"

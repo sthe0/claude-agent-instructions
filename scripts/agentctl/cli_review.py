@@ -12,6 +12,7 @@ from . import (
     grounding_gate,
     method_statement,
     protected_actions,
+    sub_plan,
     carry_forward,
     order_approvals,
     plan_store,
@@ -1508,6 +1509,11 @@ def _record_plan_review(args, *, store: StateStore, runner: Runner | None = None
         # CONTRACT INVERSION note on the pass path of _plan_review_verdict_blockers),
         # so it must not become a terminal pass either.
         state.plan_review_passes[scope] = review
+    if (not scope and doc is not None and review.plan_sha256
+            and review.verdict in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_OVERRIDE)):
+        sub_plan.record_method_review(
+            state, store, doc, verdict=review.verdict, reviewer=review.reviewer,
+            plan_sha256=review.plan_sha256, at=time.time())
     _settle_override_decision(state, review, scope, crossing)
     _record_first_thinker_verdict(state, doc, review, scope, vouch=vouch)
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the

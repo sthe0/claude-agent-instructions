@@ -63,6 +63,7 @@ def build_record(
     permissions_allow: list[str] | None = None,
     add_dirs: list[str] | None = None,
     launch_dir: str | None = None,
+    parent_level: int | None = None,
 ) -> dict:
     """The handoff record. `parent_lineage` is the parent session's own
     `parent_link.norm_lineage` (None for a session nobody linked); the record's lineage
@@ -76,7 +77,10 @@ def build_record(
     directories the child was started with (`--add-dir`), which the harness treats as working directories.
     Both keys are written only when given: a record without them says "unknown", which the hook reads
     as "never deny", not as "empty". `launch_dir` is the directory the child was started in, where the
-    harness reads the project's settings from however far the child later `cd`s."""
+    harness reads the project's settings from however far the child later `cd`s. `parent_level` is
+    the stack level of the plan the parent was running when it handed the stage over: where the
+    parent-side copy of the stage's estimate sits, however the parent's stack moves afterwards;
+    written only when given (a record without it reads the parent's current level)."""
     record = {
         "schema": HANDOFF_SCHEMA,
         "parent_session": parent_session,
@@ -97,6 +101,8 @@ def build_record(
         record["add_dirs"] = list(add_dirs)
     if launch_dir is not None:
         record["launch_dir"] = launch_dir
+    if parent_level is not None:
+        record["parent_level"] = parent_level
     if closure_digest is not None:
         record["closure_digest"] = closure_digest
     return record
@@ -199,6 +205,8 @@ def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
         "permissions_allow": _optional_list(record, "permissions_allow"),
         "add_dirs": _optional_list(record, "add_dirs"),
         "launch_dir": record.get("launch_dir") if isinstance(record.get("launch_dir"), str) else None,
+        "parent_level": (record["parent_level"] if isinstance(record.get("parent_level"), int)
+                         and not isinstance(record["parent_level"], bool) else None),
         "depth": depth,
         "norm_lineage": lineage,
         "created_at": record.get("created_at") if isinstance(record.get("created_at"), str) else None,

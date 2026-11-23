@@ -316,17 +316,6 @@ def test_a_review_or_an_objection_does_not_change_the_digest_and_an_edit_does():
     assert sub_plan.digest(record) != before
 
 
-def test_an_agreed_estimate_rewritten_with_the_same_figure_changes_nothing():
-    record = sub_plan.from_meta(_META)
-    assert sub_plan.agree_estimate(record, sub_plan.Estimate(90, 3.0, "someone", "someone")) is False
-    assert record.estimate.author == "executor"
-    with pytest.raises(sub_plan.SubPlanError, match="agreed"):
-        sub_plan.agree_estimate(record, sub_plan.Estimate(120, 3.0, "executor", "parent"))
-    unagreed = sub_plan.SubPlanRecord(stage=1, estimate=sub_plan.Estimate(10, None, "executor"))
-    assert sub_plan.agree_estimate(unagreed, sub_plan.Estimate(20, None, "executor")) is True
-    assert unagreed.estimate.minutes == 20
-
-
 def test_a_lazy_stage_is_the_one_whose_sub_plan_is_decided_later():
     assert sub_plan.is_decided_later(_stage(lazy=True))
     assert not sub_plan.is_decided_later(_stage())

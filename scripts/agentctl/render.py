@@ -2153,7 +2153,36 @@ def render_subplans(doc: PlanDoc, state, store=None) -> str:
     lines = owner_lines(state, doc.stages, _plan_request_rows(doc), "", {state.session_id})
     if not lines:
         return ""
+    lines.append(_composed_total_text(state, read_current(state, children_of(state))))
     return "Sub-plans, resources and permissions\n" + "\n".join(lines) + "\n"
+
+
+def _composed_total_text(state, record_of) -> str:
+    """The task estimate the user approves with the plan, composed per stage as `approve` freezes
+    it: a stage above the size line at the figure its recorded sub-plan states, every other stage
+    at its tier price; a stage decided later is provisional at its tier price."""
+    from . import effort, effort_segments, sub_plan
+    from .config import Thresholds
+    from .plan import stage_above_threshold
+
+    thr = Thresholds()
+    copies = {}
+    for stage in state.stages:
+        if stage.place is None or sub_plan.is_decided_later(stage) or not stage_above_threshold(stage, thr):
+            continue
+        record = record_of(stage.index)
+        shown = record.estimate if record is not None else None
+        if shown is not None and shown.basis.strip():
+            copies[stage.index] = {"agreed": True, "minutes": shown.minutes, "usd": shown.usd}
+    total = effort.composed_estimate(state, copies, thr)["total"]
+    later = [str(s.index) for s in state.stages if s.place is not None and sub_plan.is_decided_later(s)]
+    provisional = (f"; stage {', '.join(later)} decided later and provisional at its tier price until "
+                   f"it is planned" if len(later) == 1 else
+                   f"; stages {', '.join(later)} decided later and provisional at their tier "
+                   f"prices until they are planned" if later else "")
+    return (f"- estimate of the task as presented: {_figure_text({'minutes': total[effort_segments.SCALE_MINUTES], 'usd': total[effort_segments.SCALE_USD]})}"
+            f" (a stage above the size line at the figure its sub-plan states, the others at their "
+            f"tier price{provisional})")
 
 
 def _plan_request_rows(doc: PlanDoc) -> dict[int, list[dict]]:
@@ -2219,8 +2248,11 @@ def _subplan_stage_lines(stages, record_of, plan_rows: dict, label: str,
             continue
         head = f"- {label}stage {stage.index} “{stage.title}”: "
         if sub_plan.is_decided_later(stage):
-            lines.append(head + "decided later — its sub-plan is written when it starts, and "
-                                "the stage starts only after you approve that sub-plan")
+            tier = effort.stage_tier(stage)
+            lines.append(head + f"decided later — provisional estimate: its tier {tier} price, "
+                         f"${thr.budget_usd_float(tier):.2f} / {thr.effort_stage_minutes(tier)} min; "
+                         f"its sub-plan and figure are written when it starts, and the stage starts "
+                         f"only after you approve that sub-plan")
             continue
         if not stage_above_threshold(stage, thr):
             tier = effort.stage_tier(stage)

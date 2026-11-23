@@ -874,8 +874,12 @@ def composed_estimate(state: SessionState, copies: dict, thr: Thresholds | None 
     copy of its estimate (`sub_plan.estimate_copy`); a stage whose copy is not agreed stays at its
     tier price, a stage below the size line has no copy and stays there too.
 
+    A task estimate frozen from a composed one (`freeze_composed`) already holds the figures the
+    stages' copies record as `frozen_in`: those count in it, and only a figure's change since is added.
+
     Returns `{"total": {scale: figure}, "stages": [{stage, source, minutes, usd, author, agreer,
-    authority}]}`; `source` is `agreed` or `tier`, so a reader sees whose figure each part is."""
+    authority, contributes}]}`; `source` is `agreed` or `tier`, so a reader sees whose figure each
+    part is, and `contributes` what the stage adds to the sum per segment scale."""
     thr = thr if thr is not None else Thresholds()
     base = dict(state.order_effort_frozen or estimate(state, thr))
     total = {SEGMENT_SCALE[scale]: float(base.get(scale) or 0.0) for scale in RATIO_SCALES}
@@ -886,18 +890,31 @@ def composed_estimate(state: SessionState, copies: dict, thr: Thresholds | None 
         tier = tier_figure(stage, thr)
         copy = copies.get(stage.index) or {}
         agreed = bool(copy.get("agreed"))
+        included = copy.get("frozen_in") or {}
         row = {"stage": stage.index, "source": "agreed" if agreed else "tier",
                "author": copy.get("author", ""), "agreer": copy.get("agreer", ""),
-               "authority": copy.get("authority", "")}
+               "authority": copy.get("authority", ""), "contributes": {}}
         for scale, key in ((effort_segments.SCALE_MINUTES, "minutes"), (effort_segments.SCALE_USD, "usd")):
             priced = tier[scale]
             counted = priced if scale == effort_segments.SCALE_MINUTES or stage.is_spawn() else 0.0
             figure = copy.get(key) if agreed and isinstance(copy.get(key), (int, float)) else None
             row[key] = float(figure) if figure else priced
-            if figure:
-                total[scale] += float(figure) - counted
+            contribution = float(figure) if figure else counted
+            row["contributes"][key] = contribution
+            already = float(included[key]) if key in included else counted
+            total[scale] += contribution - already
         stages.append(row)
     return {"total": total, "stages": stages}
+
+
+def freeze_composed(state: SessionState, copies: dict, thr: Thresholds | None = None) -> dict:
+    """The task estimate the user approves with a plan whose stages carry agreed figures: the
+    composed estimate as `{ratio scale: figure}` (what `order_effort_frozen` holds) and, per stage,
+    what it holds of that stage (`contributes`, kept on the stage's copy as `frozen_in`)."""
+    composed = composed_estimate(state, copies, thr)
+    frozen = {scale: composed["total"][SEGMENT_SCALE[scale]] for scale in RATIO_SCALES}
+    return {"frozen": frozen,
+            "stages": {row["stage"]: row["contributes"] for row in composed["stages"]}}
 
 
 def task_overrun(state: SessionState, composed: dict, thr: Thresholds | None = None) -> list[str]:

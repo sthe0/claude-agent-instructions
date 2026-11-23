@@ -2408,6 +2408,7 @@ def norm_handoff_record(
         resources=resource_set["resources"],
         rule_patterns=resource_set["rule_patterns"],
         launch_dir=workdir or None,
+        parent_level=len(state.plan_stack),
     )
 
 

@@ -22,7 +22,7 @@ import pytest
 
 from agentctl import cli, cli_approval, cli_common, effort, effort_segments, gates, own_contour, sub_plan
 from agentctl.config import Thresholds
-from agentctl.state import SessionState, estimate_correction_marker
+from agentctl.state import OrderAgreement, SessionState, estimate_correction_marker
 from lib import widening_targets
 
 import test_subplan_presentation_dispatch as base
@@ -55,6 +55,7 @@ def _doc(record):
 
 def _record(minutes=30, usd=1.0, basis="sized by the test", stage=1, **kw):
     record = _rec(stage)
+    record.reviews = []
     record.estimate = _estimate(minutes, usd, basis, **kw)
     return record
 
@@ -150,6 +151,70 @@ def test_unagreed_change_leaves_budget():
     stored = sub_plan.SubPlanRecord.from_dict(state.sub_plan_records["0:1"]).estimate
     assert (stored.minutes, stored.basis) == (90, "second sizing")
 
+    # a tier change on resubmission or replan moves neither the agreed figure nor its budget
+    for tier in ("small", "medium", "large"):
+        priced = effort.stage_budget(tier, THR)
+        state.plan_stack = []
+        budget, user_budget = cli_common._agreed_budgets(state, stage, priced, tier)
+        assert (budget["minutes"], budget["usd"]) == (90.0, 2.0), tier
+        assert (user_budget["minutes"], user_budget["usd"]) == (priced["minutes"], priced["usd"]), tier
+        state.plan_stack = [_frame(1)]
+        sub_plan.record_carried_by(state, _doc(_record(90, 2.0, "second sizing")), carrier)
+    copy = sub_plan.estimate_copy(state, 1, level=0)
+    assert (copy["minutes"], copy["usd"], copy["basis"]) == (90.0, 2.0, "second sizing")
+
+
+def test_stored_forged_child_record_is_refused_on_submission_and_not_corrected_by_it():
+    """A child's stored record that carries a figure the linked parent never agreed (written
+    around the guard) is refused when the child submits it, and a rewrite to the agreed figure is
+    taken: the copy in the parent's state stays what the parent agreed throughout."""
+    parent = _session("parent")
+    child = _session("child", parent_link={"parent_session": "parent", "stage_index": 1})
+    carrier = _Store(parent, child)
+    sub_plan.agree_copy(parent, 1, minutes=30, usd=1.0, basis="child sizing", author="child",
+                        agreer="parent", authority=sub_plan.AUTHORITY_USER)
+    forged = _record(10, 1.0, "child sizing")
+    sub_plan.store(child, forged, None)
+    stored = sub_plan.SubPlanRecord.from_dict(child.sub_plan_records[sub_plan.record_key(1, None)])
+    assert stored.estimate.minutes == 10.0
+    with pytest.raises(sub_plan.SubPlanError, match="estimate-correct"):
+        sub_plan.record_carried_by(child, _doc(stored), carrier)
+    entry_before = dict(sub_plan.estimate_copy(parent, 1))
+    sub_plan.record_carried_by(child, _doc(_record(30, 1.0, "child sizing")), carrier)
+    assert sub_plan.estimate_copy(parent, 1) == entry_before
+    assert sub_plan.agreed_figure(parent, 1) == {"minutes": 30.0, "usd": 1.0}
+
+
+def test_child_estimate_correct_in_its_own_contour(store, venued_fixtures_dir, monkeypatch):
+    """A linked child corrects the stages of its own plan only: inside the allowed overrun the
+    correction is agreed under the parent's authority, past it the call is refused (the figure
+    goes to the parent, nothing is held in the child), a decision `--by <user>` is refused in the
+    child, and a call naming another session than the one the contour speaks for is refused."""
+    _stage_one(store, venued_fixtures_dir)
+    state = store.load(SESSION)
+    state.parent_link = {"parent_session": "above", "stage_index": 3}
+    store.save(state)
+    _plan_approval_sets_resources(store)
+    monkeypatch.setenv(cli_approval.OWN_SESSION_ENV, SESSION)
+
+    inside = _estimate_correct(store, minutes=40, basis="the work grew")
+    assert inside.ok, inside
+    copy = sub_plan.estimate_copy(store.load(SESSION), 1)
+    assert copy["minutes"] == 40.0 and copy["authority"] == sub_plan.AUTHORITY_PARENT
+    assert copy["corrections"][-1]["agreer"] == SESSION
+
+    past = _estimate_correct(store, minutes=900, basis="a rewrite")
+    assert past.ok is False and past.data is None and "more than the allowed overrun" in past.detail
+    assert not sub_plan.estimate_copy(store.load(SESSION), 1).get("held")
+
+    by_user = _estimate_correct(store, minutes=45, basis="the user said so", by="fedor")
+    assert by_user.ok is False and gates.CHILD_ESCALATES_THE_ESTIMATE in by_user.detail
+
+    monkeypatch.setenv(cli_approval.OWN_SESSION_ENV, "someone-else")
+    foreign = _estimate_correct(store, minutes=41, basis="from another contour")
+    assert foreign.ok is False and "calling session's own plan" in foreign.detail
+    assert sub_plan.estimate_copy(store.load(SESSION), 1)["minutes"] == 40.0
+
 
 def test_record_cannot_write_a_correction():
     """`estimate.corrections` is written by `estimate-correct` alone: a record carrying an entry
@@ -178,6 +243,19 @@ def test_record_cannot_write_a_correction():
         state.sub_plan_records["0:1"]).estimate.corrections == [entry]
 
 
+def test_agreed_basis_is_compared_without_its_surrounding_whitespace():
+    """A record that carries the agreed figure and basis back is the same estimate whatever
+    whitespace surrounds the basis; a different basis is still a correction."""
+    state = _session("p")
+    carrier = _Store(state)
+    sub_plan.agree_copy(state, 1, minutes=30, usd=1.0, basis="sized by the test", author="p",
+                        agreer="p", authority=sub_plan.AUTHORITY_AGENT)
+    state.plan_stack = [_frame(1)]
+    sub_plan.record_carried_by(state, _doc(_record(basis="  sized by the test \n")), carrier)
+    with pytest.raises(sub_plan.SubPlanError, match="is a correction"):
+        sub_plan.record_carried_by(state, _doc(_record(basis="sized otherwise")), carrier)
+
+
 def test_child_contour_carrier_is_guarded_against_the_parent_copy():
     """The child contour's record is guarded against the copy in the linked parent's state: once
     the parent agreed a figure, the child's rewrite of it is refused; before, it is replaced."""
@@ -188,6 +266,22 @@ def test_child_contour_carrier_is_guarded_against_the_parent_copy():
     assert sub_plan.estimate_copy(parent, 1) == {}
     sub_plan.agree_copy(parent, 1, minutes=30, usd=1.0, basis="child sizing", author="child",
                         agreer="parent", authority=sub_plan.AUTHORITY_USER)
+    with pytest.raises(sub_plan.SubPlanError, match="estimate-correct"):
+        sub_plan.record_carried_by(child, _doc(_record(60, 1.0, "child sizing")), carrier)
+    sub_plan.record_carried_by(child, _doc(_record(30, 1.0, "child sizing")), carrier)
+
+
+def test_child_is_guarded_against_the_copy_at_the_level_its_parent_spawned_from():
+    """A parent that has pushed a frame since it spawned the child holds the stage's copy at the
+    level it spawned from (`parent_level`), not at the level it stands on now."""
+    parent = _session("parent")
+    sub_plan.agree_copy(parent, 1, minutes=30, usd=1.0, basis="child sizing", author="child",
+                        agreer="parent", authority=sub_plan.AUTHORITY_USER)
+    parent.plan_stack = [_frame(1)]
+    assert sub_plan.estimate_copy(parent, 1) == {}
+    child = _session("child", parent_link={"parent_session": "parent", "stage_index": 1,
+                                           "parent_level": 0})
+    carrier = _Store(parent, child)
     with pytest.raises(sub_plan.SubPlanError, match="estimate-correct"):
         sub_plan.record_carried_by(child, _doc(_record(60, 1.0, "child sizing")), carrier)
     sub_plan.record_carried_by(child, _doc(_record(30, 1.0, "child sizing")), carrier)
@@ -215,9 +309,8 @@ def _case_resource_approval_by_agent(store, vfd, tmp_path):
     assert _agent_approves_stage_resources(store).ok
     copy = sub_plan.estimate_copy(store.load(SESSION), 1)
     assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_AGENT
-    tier = effort.tier_figure(store.load(SESSION).stage(1), THR)
-    assert copy["user_approved_figure"] == {"minutes": tier["minutes"], "usd": tier["usd"]}
-    assert copy["user_approved_figure"] != {"minutes": copy["minutes"], "usd": copy["usd"]}
+    assert copy["user_approved_figure"] == {"minutes": copy["minutes"], "usd": copy["usd"]}
+    assert sub_plan.user_figure(store.load(SESSION), 1) == {"minutes": 30.0, "usd": 1.0}
 
 
 def _case_resource_approval_by_user(store, vfd, tmp_path):
@@ -263,7 +356,12 @@ def _case_decided_later_first_figure_past_margin_held(store, vfd, tmp_path):
     assert "AskUserQuestion" in held.detail and estimate_correction_marker(1, 400.0, 1.0) in held.detail
     copy = sub_plan.estimate_copy(store.load(SESSION), 1)
     assert not copy.get("agreed") and copy["held"]["minutes"] == 400.0
+    assert "escalated" not in copy["held"]
     assert sub_plan.agreed_figure(store.load(SESSION), 1) is None
+    refused = _dispatch(store, SESSION, Spawns())
+    command = f"estimate-correct --stage 1 {sub_plan.figure_args(copy['held'])} --basis"
+    _refused(refused, "held past the allowed overrun", command, "--by <their name>")
+    assert command in held.detail
 
 
 def _case_child_past_margin_escalates(store, vfd, tmp_path):
@@ -272,30 +370,202 @@ def _case_child_past_margin_escalates(store, vfd, tmp_path):
     store.save(state)
     huge = _record(400, 1.0, "the whole module is rewritten")
     _put(store, huge)
-    entry = sub_plan.approval_entry(store.load(SESSION), 1)
     state = store.load(SESSION)
     outcome, text = cli_approval._agree_first_figure(
         state, state.stage(1), huge, authority=sub_plan.AUTHORITY_PARENT,
         approved_digest=sub_plan.estimate_digest(huge.estimate))
     assert outcome == "escalate" and gates.CHILD_ESCALATES_THE_ESTIMATE in text
-    assert sub_plan.estimate_copy(state, 1).get("held") is None
-    assert entry is not None
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["held"]["escalated"] is True and copy["held"]["minutes"] == 400.0
+    assert not copy.get("agreed") and sub_plan.agreed_figure(state, 1) is None
+    blockers = gates.estimate_dispatch_blockers(state, state.stage(1), huge)
+    assert any(gates.CHILD_ESCALATES_THE_ESTIMATE in b and "held" in b for b in blockers), blockers
+
+
+def _case_child_stage_resource_approval_records_the_escalation(store, vfd, tmp_path, monkeypatch):
+    assert base._present_and_approve(
+        store, tmp_path, record=_put_huge_decided_later(store, vfd)).ok
+    state = store.load(SESSION)
+    state.parent_link = {"parent_session": "above", "stage_index": 3}
+    store.save(state)
+    monkeypatch.setattr(cli_approval, "_agent_approval_outside", lambda *a, **k: [])
+    held = _agent_approves_stage_resources(store)
+    assert held.ok is False and held.data == {"estimate": "escalate"}
+    assert gates.CHILD_ESCALATES_THE_ESTIMATE in held.detail
+    state = store.load(SESSION)
+    assert sub_plan.estimate_copy(state, 1)["held"]["escalated"] is True
+    assert sub_plan.approval_entry(state, 1).get("parent_resource_approval")
+    blockers = gates.estimate_dispatch_blockers(state, state.stage(1), sub_plan.read(state, 1, store))
+    assert any(gates.CHILD_ESCALATES_THE_ESTIMATE in b for b in blockers), blockers
+
+
+def _put_huge_decided_later(store, vfd, minutes=400, basis="the whole module is rewritten"):
+    _stage_one(store, vfd, lazy=True)
+    huge = _record(minutes, 1.0, basis)
+    _put(store, huge)
+    return huge
+
+
+def _tier_price(state, stage=1) -> dict:
+    price = effort.tier_figure(state.stage(stage), THR)
+    return {"minutes": price[effort_segments.SCALE_MINUTES], "usd": price[effort_segments.SCALE_USD]}
+
+
+def _case_decided_later_agreed_by_the_agent_sets_the_line_at_the_tier_price(store, vfd, tmp_path):
+    _stage_one(store, vfd, lazy=True)
+    assert base._present_and_approve(store, tmp_path).ok
+    assert _agent_approves_stage_resources(store).ok
+    state = store.load(SESSION)
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_AGENT
+    assert (copy["minutes"], copy["usd"]) == (30.0, 1.0)
+    assert sub_plan.user_figure(state, 1) == _tier_price(state) != {"minutes": 30.0, "usd": 1.0}
+
+
+def _case_decided_later_agreed_by_the_user_past_the_margin_sets_the_line_at_the_tier_price(
+        store, vfd, tmp_path):
+    huge = _put_huge_decided_later(store, vfd, minutes=200, basis="a large module")
+    assert base._present_and_approve(store, tmp_path, record=huge).ok
+    _plan_approval_sets_resources(store)
+    state = store.load(SESSION)
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and copy["minutes"] == 200.0
+    assert sub_plan.user_figure(state, 1) == _tier_price(state) == {"minutes": 10.0, "usd": 1.0}
+
+
+def _case_held_figure_decided_by_the_user_reaches_dispatch(store, vfd, tmp_path):
+    huge = _put_huge_decided_later(store, vfd)
+    assert base._present_and_approve(store, tmp_path, record=huge).ok
+    assert _agent_approves_stage_resources(store).data == {"estimate": "held"}
+    refused = _dispatch(store, SESSION, Spawns())
+    _refused(refused, "estimate-correct --stage 1 --minutes 400.0 --usd 1.0 --basis")
+
+    assert _user_choice(estimate_correction_marker(1, 400.0, 1.0)) == 1
+    decided = _estimate_correct(store, minutes=400, usd=1.0, basis="the user decided", by="fedor")
+    assert decided.ok, decided
+    state = store.load(SESSION)
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
+    assert sub_plan.user_figure(state, 1) == {"minutes": 400.0, "usd": 1.0}
+    assert _start_blockers(store) == []
+    assert _dispatch(store, SESSION, Spawns()).ok is not False
+
+
+def _case_user_approval_agrees_a_figure_past_the_margin_as_the_line(store, vfd, tmp_path):
+    _stage_one(store, vfd)
+    huge = _record(400, 1.0, "the whole module is rewritten")
+    _put(store, huge)
+    _present(store, tmp_path)
+    done = cli_approval.cmd_approve_resources(ns(session=SESSION, stage=1, by="fedor"), store=store)
+    assert done.ok, done
+    state = store.load(SESSION)
+    copy = sub_plan.estimate_copy(state, 1)
+    assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
+    assert sub_plan.user_figure(state, 1) == {"minutes": 400.0, "usd": 1.0}
+
+
+def _case_estimate_changed_after_the_presentation_refused_by_resource_approval_of_the_user(
+        store, vfd, tmp_path):
+    _stage_one(store, vfd)
+    _present(store, tmp_path)
+    _put(store, _record(31, 1.0, "resized after it was shown"))
+    refused = cli_approval.cmd_approve_resources(ns(session=SESSION, stage=1, by="fedor"), store=store)
+    assert refused.ok is False and refused.data == {"estimate": "refused"}
+    assert "changed since the sub-plan the user approved" in refused.detail
+    assert sub_plan.estimate_copy(store.load(SESSION), 1) == {}
+    assert not sub_plan.approval_entry(store.load(SESSION), 1).get("parent_resource_approval")
+    _present(store, tmp_path)
+    assert cli_approval.cmd_approve_resources(
+        ns(session=SESSION, stage=1, by="fedor"), store=store).ok
+
+
+def _case_estimate_changed_after_the_presentation_refused_by_resource_approval_of_the_agent(
+        store, vfd, tmp_path):
+    _stage_one(store, vfd)
+    _present(store, tmp_path)
+    state = store.load(SESSION)
+    sub_plan.write_parent_approval(state, 1, sub_plan.read(state, 1, store).resource_request)
+    store.save(state)
+    _put(store, _record(31, 1.0, "resized after it was shown"))
+    refused = _agent_approves_stage_resources(store)
+    assert refused.ok is False and refused.data == {"estimate": "refused"}
+    assert sub_plan.estimate_copy(store.load(SESSION), 1) == {}
+
+
+def _case_estimate_changed_after_the_presentation_refused_by_plan_approval(store, vfd, tmp_path):
+    _stage_one(store, vfd)
+    _present(store, tmp_path)
+    _put(store, _record(31, 1.0, "resized after it was shown"))
+    _plan_approval_sets_resources(store)
+    state = store.load(SESSION)
+    assert sub_plan.estimate_copy(state, 1) == {}
+    [event] = [h for h in state.history if h.get("event") == "estimate_not_agreed"]
+    assert event["outcome"] == "refused" and "changed since" in event["reason"]
 
 
 _CASES = {
     "plan-approval-agrees-the-named-figure": _case_agent_inside_set,
-    "agent-resource-approval-agrees-at-tier-user-line": _case_resource_approval_by_agent,
+    "agent-resource-approval-agrees-the-figure-as-the-user-line": _case_resource_approval_by_agent,
     "user-resource-approval-sets-the-user-line": _case_resource_approval_by_user,
+    "user-resource-approval-agrees-a-figure-past-the-margin-as-the-line":
+        _case_user_approval_agrees_a_figure_past_the_margin_as_the_line,
     "no-basis-refused": _case_no_basis_refused,
     "changed-after-the-users-subplan-approval-refused": _case_changed_after_user_sub_plan_approval,
+    "estimate-changed-after-the-presentation-refused-at-plan-approval":
+        _case_estimate_changed_after_the_presentation_refused_by_plan_approval,
+    "estimate-changed-after-the-presentation-refused-at-the-users-resource-approval":
+        _case_estimate_changed_after_the_presentation_refused_by_resource_approval_of_the_user,
+    "estimate-changed-after-the-presentation-refused-at-the-agents-resource-approval":
+        _case_estimate_changed_after_the_presentation_refused_by_resource_approval_of_the_agent,
     "decided-later-first-figure-past-margin-held": _case_decided_later_first_figure_past_margin_held,
+    "decided-later-agreed-by-the-agent-sets-the-line-at-the-tier-price":
+        _case_decided_later_agreed_by_the_agent_sets_the_line_at_the_tier_price,
+    "decided-later-agreed-by-the-user-past-the-margin-sets-the-line-at-the-tier-price":
+        _case_decided_later_agreed_by_the_user_past_the_margin_sets_the_line_at_the_tier_price,
+    "held-figure-decided-by-the-user-sets-the-line-and-reaches-dispatch":
+        _case_held_figure_decided_by_the_user_reaches_dispatch,
     "child-past-margin-escalates": _case_child_past_margin_escalates,
+    "child-stage-resource-approval-records-the-escalation":
+        _case_child_stage_resource_approval_records_the_escalation,
 }
 
 
 @pytest.mark.parametrize("case", list(_CASES))
-def test_first_figure_agreed_on_resource_approval(case, store, venued_fixtures_dir, tmp_path):
-    _CASES[case](store, venued_fixtures_dir, tmp_path)
+def test_first_figure_agreed_on_resource_approval(case, store, venued_fixtures_dir, tmp_path,
+                                                  monkeypatch):
+    """Every first-figure agreement path: the line it sets (the tier price for a decided-later
+    stage, the approved figure otherwise), the digest it binds, the hold or escalation of a figure
+    past the margin and how dispatch refuses a held one."""
+    case_fn = _CASES[case]
+    if "monkeypatch" in case_fn.__code__.co_varnames[:case_fn.__code__.co_argcount]:
+        case_fn(store, venued_fixtures_dir, tmp_path, monkeypatch)
+    else:
+        case_fn(store, venued_fixtures_dir, tmp_path)
+
+
+def test_plan_approval_agrees_the_figures_then_freezes_the_composed_task_estimate(
+        store, venued_fixtures_dir):
+    """`approve` fixes the task estimate the user approves after the stages' figures are agreed:
+    the figure the plan was armed with plus each agreed stage's figure less the tier price it
+    replaces, with no overrun margin in the way (the user decides, the engine does not measure
+    them). Run again over the same figures the result is the same: a stage counted once is not
+    counted on top of itself."""
+    _stage_one(store, venued_fixtures_dir)
+    state = store.load(SESSION)
+    armed = {effort.SCALE_SPEND: 4.0, effort.SCALE_WALL_CLOCK: 40.0}
+    tier = effort.tier_figure(state.stage(1), THR)
+    expected = {
+        effort.SCALE_SPEND: 4.0 + 1.0,
+        effort.SCALE_WALL_CLOCK: 40.0 + 30.0 - tier[effort_segments.SCALE_MINUTES],
+    }
+
+    first = cli_approval._agree_figures_and_freeze_task_estimate(state, store, dict(armed))
+    assert first == expected != armed
+    assert sub_plan.estimate_copy(state, 1)["agreed"] and "frozen_in" in sub_plan.estimate_copy(state, 1)
+    assert state.order_effort_frozen == armed, "the caller records the composed figure, not this function"
+
+    second = cli_approval._agree_figures_and_freeze_task_estimate(state, store, dict(armed))
+    assert second == first
 
 
 def test_decided_later_stage_without_a_figure_is_skipped_by_plan_approval(store, venued_fixtures_dir):
@@ -369,6 +639,8 @@ def test_reagreement_rekeys_parent_copy(store, venued_fixtures_dir):
     _agree_estimate(state)
     assert sub_plan.agreed_figure(state, 1) == {"minutes": 30.0, "usd": 1.0}
     first = dict(sub_plan.estimate_copy(state, 1))
+    frozen = {effort.SCALE_SPEND: 7.0, effort.SCALE_WALL_CLOCK: 70.0}
+    state.order_effort_frozen = dict(frozen)
 
     state.order_agreement_history.append({"agreed_at": 1.0})
     assert sub_plan.order_revision(state) == 1
@@ -376,6 +648,8 @@ def test_reagreement_rekeys_parent_copy(store, venued_fixtures_dir):
     assert sub_plan.agreed_figure(state, 1) is None
     row = effort.composed_estimate(state, sub_plan.copies_of(state), THR)["stages"][0]
     assert row["source"] == "tier"
+    refused = gates.stage_start_blockers(state, state.stage(1), store=store)
+    assert any("confirmed but not agreed" in b for b in refused), refused
 
     sub_plan.agree_copy(state, 1, minutes=45, usd=1.5, basis="new revision", author="x",
                         agreer=SESSION, authority=sub_plan.AUTHORITY_USER)
@@ -384,6 +658,9 @@ def test_reagreement_rekeys_parent_copy(store, venued_fixtures_dir):
     assert estimates["0"] == first and estimates["1"]["minutes"] == 45.0
     assert sub_plan.agreed_figure(state, 1) == {"minutes": 45.0, "usd": 1.5}
     assert sub_plan.estimate_copy(state, 1)["corrections"] == []
+    assert not any("confirmed but not agreed" in b
+                   for b in gates.stage_start_blockers(state, state.stage(1), store=store))
+    assert state.order_effort_frozen == frozen, "the user-approved estimate is fixed by `approve` alone"
 
 
 def test_overrun_without_user_decision_unapplied(store, venued_fixtures_dir):
@@ -412,6 +689,20 @@ def test_overrun_without_user_decision_unapplied(store, venued_fixtures_dir):
     assert no_answer.ok is False and marker in no_answer.detail
     assert sub_plan.estimate_copy(store.load(SESSION), 1)["minutes"] == 30.0
 
+    assert _user_choice(marker) == 1
+    still_agent = _estimate_correct(store, minutes=400, usd=1.0, basis="the agent applies it")
+    assert still_agent.ok is False and still_agent.data == {"estimate": "held"}
+    after_choice = sub_plan.estimate_copy(store.load(SESSION), 1)
+    assert after_choice["minutes"] == 30.0 and after_choice["corrections"] == []
+    assert _arming(store.load(SESSION))["budget"]["minutes"] == 30.0
+
+    state = store.load(SESSION)
+    _arming(state)["carried"]["minutes"] = 500.0
+    store.save(state)
+    unrelated = _estimate_correct(store, minutes=40, usd=1.0, basis="inside the margin")
+    assert unrelated.ok, "a stage's overrun in actual effort does not make a figure correction past the margin"
+    assert sub_plan.estimate_copy(store.load(SESSION), 1)["minutes"] == 40.0
+
     state = store.load(SESSION)
     state.parent_link = {"parent_session": "above", "stage_index": 2}
     store.save(state)
@@ -420,7 +711,7 @@ def test_overrun_without_user_decision_unapplied(store, venued_fixtures_dir):
     user_at_depth = _estimate_correct(store, minutes=400, usd=1.0, basis="x", by="fedor")
     assert user_at_depth.ok is False and gates.CHILD_ESCALATES_THE_ESTIMATE in user_at_depth.detail
     after = sub_plan.estimate_copy(store.load(SESSION), 1)
-    assert after["minutes"] == before["minutes"] and after["corrections"] == []
+    assert after["minutes"] == 40.0 and len(after["corrections"]) == 1
     assert after["user_approved_figure"] == before["user_approved_figure"]
 
 
@@ -482,6 +773,23 @@ def test_user_line_ignores_corrections(store, venued_fixtures_dir, monkeypatch):
     assert fires[effort_segments.LINE_DIFFICULTY] == fires[effort_segments.LINE_USER] == [
         effort_segments.SCALE_MINUTES]
 
+    # (b) a figure is measured against the user's line, not the agent-corrected figure: 150 min is
+    # inside the margin of the corrected 60 and past that of the approved 30
+    stage = state.stage(1)
+    approved = sub_plan.estimate_copy(state, 1)["user_approved_figure"]
+    assert cli_approval._overrun_scales(state, stage, {"minutes": 149.0, "usd": 2.0}, THR, approved) == []
+    assert cli_approval._overrun_scales(
+        state, stage, {"minutes": 150.0, "usd": 2.0}, THR, approved) == [effort_segments.SCALE_MINUTES]
+    assert _arming(state)["user_budget"] == {"minutes": 30.0, "usd": 1.0}
+
+    # (c) the composed task estimate is measured against the one the user approved
+    inside = {"minutes": 120.0, "usd": 1.0}
+    assert cli_approval._overrun_scales(state, stage, inside, THR, approved) == []
+    state.order_effort_frozen = {effort.SCALE_SPEND: 5.0, effort.SCALE_WALL_CLOCK: 10.0}
+    assert cli_approval._overrun_scales(
+        state, stage, inside, THR, approved) == [effort_segments.SCALE_MINUTES]
+    state.order_effort_frozen = None
+
     marker = estimate_correction_marker(1, 80.0, 2.0)
     assert _user_choice(marker) == 1
     decided = _estimate_correct(store, minutes=80, usd=2.0, basis="the user decided", by="fedor")
@@ -496,6 +804,27 @@ def test_user_line_ignores_corrections(store, venued_fixtures_dir, monkeypatch):
     assert _user_choice(wrong, choose=False) == 1
     other = _estimate_correct(store, minutes=90, usd=2.0, basis="x", by="fedor")
     assert other.ok is False and wrong in other.detail
+
+    # (e) the user is not margin-measured: a decision past the margin of the user's own line is
+    # applied on the marked answer and moves the line to the decided figure
+    huge = estimate_correction_marker(1, 600.0, 2.0)
+    assert _user_choice(huge) == 1
+    big = _estimate_correct(store, minutes=600, usd=2.0, basis="the user decided it is big", by="fedor")
+    assert big.ok, big
+    state = store.load(SESSION)
+    assert sub_plan.user_figure(state, 1) == {"minutes": 600.0, "usd": 2.0}
+    assert not sub_plan.estimate_copy(state, 1).get("held")
+
+    # (f) a re-agreed order does not hand the spent answer back: it licenses no second decision
+    state.order_agreement_history.append(OrderAgreement(
+        understanding_sha256="re-agreed", parts={}, draft_path="", at=1.0))
+    sub_plan.agree_copy(state, 1, minutes=30, usd=1.0, basis="the re-agreed order", author="x",
+                        agreer=SESSION, authority=sub_plan.AUTHORITY_USER)
+    store.save(state)
+    replay = _estimate_correct(store, minutes=600, usd=2.0, basis="replayed after re-agreement",
+                               by="fedor")
+    assert replay.ok is False and huge in replay.detail
+    assert sub_plan.estimate_copy(store.load(SESSION), 1)["minutes"] == 30.0
 
 
 def test_correction_before_first_approval(store, venued_fixtures_dir):
@@ -542,6 +871,33 @@ def test_presentation_names_authorship_agreement_correction_and_the_users_figure
     held = render._estimate_text(est, {"held": {"minutes": 900.0, "usd": 30.0}})
     assert "held at 900.0 min / $30.0, awaiting the user's decision" in held
     assert "agreed by" not in held
+
+
+def test_presentation_shows_the_composed_total_and_marks_decided_later_stages_provisional(
+        store, venued_fixtures_dir):
+    """What the user approves is shown as a number: the composed task estimate with each stage
+    above the line at the figure its sub-plan states, and a decided-later stage named as provisional
+    at its tier price (its line and the total's note), never as a figure that is not yet written."""
+    from agentctl import render
+
+    _stage_one(store, venued_fixtures_dir)
+    state = store.load(SESSION)
+
+    def total(owner):
+        return render._composed_total_text(owner, lambda index: sub_plan.read(owner, index, store))
+
+    stated = effort.composed_estimate(state, {1: {"agreed": True, "minutes": 30.0, "usd": 1.0}}, THR)["total"]
+    shown = total(state)
+    assert render._figure_text({"minutes": stated["minutes"], "usd": stated["usd"]}) in shown
+    assert "decided later" not in shown
+
+    later = _stage_one(store, venued_fixtures_dir, lazy=True)
+    shown = total(later)
+    assert "stage 1 decided later and provisional at its tier price until it is planned" in shown
+    tier_only = effort.composed_estimate(later, {}, THR)["total"]
+    assert render._figure_text({"minutes": tier_only["minutes"], "usd": tier_only["usd"]}) in shown
+    [line] = render._subplan_stage_lines([later.stage(1)], lambda index: None, {}, "")
+    assert "decided later — provisional estimate: its tier" in line
 
 
 def test_estimate_correct_is_the_agents_verb_and_not_the_users():
