@@ -405,7 +405,10 @@ def _ask(name, prompt, runner, parse):
     judge_ledger.set_current_judge(name)
     start = time.monotonic()
     try:
-        argv = host_llm.build_launch_argv(HOST_CLAUDE, _JUDGE_MODEL, lean=False, structured_output=True)
+        host = host_llm.effective_host(HOST_CLAUDE)
+        argv = host_llm.build_launch_argv(
+            host, _JUDGE_MODEL if host == HOST_CLAUDE else model_for(host, _JUDGE_COMPLEXITY),
+            lean=False, structured_output=True)
         result = runner(argv, timeout=_JUDGE_TIMEOUT_S, stdin=prompt)
     except Exception as exc:
         _record_call(name, verdict=False, reason="judge raised (fail-open)",

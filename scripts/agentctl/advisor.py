@@ -138,6 +138,7 @@ def _prompt_argv(runtime_host: str, complexity: str, *, lean: bool | None = None
     stay lean, so it passes `lean=True` explicitly rather than inherit the
     tier-derived value.
     """
+    runtime_host = host_llm.effective_host(runtime_host)
     model = model_for(runtime_host, complexity)
     if lean is None:
         lean = complexity == _JUDGE_COMPLEXITY
@@ -2090,10 +2091,8 @@ def subprocess_runner(
     judge_ledger.started(judge_name)
     start = time.monotonic()
     try:
-        run_kwargs = host_llm.isolated_run_kwargs()
-        proc = subprocess.run(
-            argv, input=stdin, capture_output=True, text=True, timeout=timeout, **run_kwargs,
-        )
+        proc = host_llm.launch_single_call(argv, stdin=stdin, timeout=timeout)
+        run_kwargs = proc.run_kwargs
         duration = time.monotonic() - start
         text, usage, usage_reason = host_llm.unwrap_structured(argv, proc.stdout)
         judge_ledger.call(

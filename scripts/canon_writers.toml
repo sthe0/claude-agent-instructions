@@ -155,6 +155,7 @@
 "scripts/lib/hook_telemetry.py" = { disposition = "not-canon", category = "not-canon", reason = "decision log under the config root's agentctl state directory, outside the repo" }
 "scripts/lib/hook_wiring.py" = { disposition = "not-canon", category = "not-canon", reason = "hook wiring table; names `git commit`/`sed -i` as deny patterns in text" }
 "scripts/lib/host_llm.py" = { disposition = "not-canon", category = "not-canon", reason = "per-call sandbox home under the fleet temp root, pruned by itself" }
+"scripts/lib/opencode_env.py" = { disposition = "not-canon", category = "not-canon", reason = "writes the generated OpenCode config and creates the isolated config, data and cache directories under the fleet temp root" }
 "scripts/lib/judge_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "judge ledger under ~/.local/log" }
 "scripts/lib/kind_baselines.py" = { disposition = "not-canon", category = "not-canon", reason = "table of permission rules such as Bash(git commit:*); writes no file" }
 "scripts/lib/mcp_registration.py" = { disposition = "not-canon", category = "not-canon", reason = "atomic rewrite of the user's MCP registration file outside the repo" }

@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import host_llm  # noqa: E402
 from lib.telemetry import live, report, sync  # noqa: E402
 
 MAX_BUDGET_USD = "0.50"
@@ -115,6 +116,8 @@ def task_prompt(state_root: Path, plan: Path) -> str:
 
 def run_task(prompt: str, env: dict, trace_log: "Path | None" = None) -> int:
     """One headless child; the seam tests replace."""
+    if host_llm.exempt_skip("scripts/telemetry-synthetic-task.py:run_task"):
+        return 0
     command = ["claude", "-p", "--model", MODEL, "--max-budget-usd", MAX_BUDGET_USD, prompt]
     if trace_log is not None:
         if shutil.which("strace"):

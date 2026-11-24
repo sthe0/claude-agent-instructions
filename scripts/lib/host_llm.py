@@ -25,10 +25,11 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from .config_root import harness_config_root
-from .runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
+from .runtime_models import HOST_CLAUDE, HOST_CURSOR, HOST_OPENCODE, HOSTS
 
 DEFAULT_CURSOR_API_KEY_FILE = Path.home() / ".cursor_api_key"
 
@@ -610,6 +611,7 @@ LEAN_ISOLATION_FLAGS = [
 _HOST_BINARY_FAMILY = {
     HOST_CLAUDE: frozenset({"claude"}),
     HOST_CURSOR: frozenset({"agent", "cursor-agent"}),
+    HOST_OPENCODE: frozenset({"opencode"}),
 }
 
 
@@ -632,6 +634,8 @@ def binary_for(host: str) -> str:
         return "claude"
     if host == HOST_CURSOR:
         return shutil.which("agent") or shutil.which("cursor-agent") or "agent"
+    if host == HOST_OPENCODE:
+        return shutil.which("opencode") or "opencode"
     raise ValueError(f"unknown host {host!r}; must be one of {HOSTS}")
 
 
@@ -670,17 +674,49 @@ def preflight(host: str) -> tuple[bool, str]:
                 f"{DEFAULT_CURSOR_API_KEY_FILE}"
             )
         return True, ""
+    if host == HOST_OPENCODE:
+        from . import opencode_env
+
+        not_ready = opencode_env.not_ready()
+        return (False, not_ready[1]) if not_ready else (True, "")
     raise ValueError(f"unknown host {host!r}; must be one of {HOSTS}")
 
 
 STRUCTURED_OUTPUT_FLAGS = ["--output-format", "json"]
+_OPENCODE_USAGE_FIELDS = {"input": "input_tokens", "output": "output_tokens"}
+
+
+def _unwrap_opencode_events(stdout: str) -> "tuple[str, dict | None, str | None]":
+    texts, usage, seen = [], None, False
+    for line in (stdout or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        part = event.get("part") if isinstance(event, dict) else None
+        if not isinstance(part, dict):
+            continue
+        seen = True
+        if event.get("type") == "text" and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+        elif event.get("type") == "step_finish" and isinstance(part.get("tokens"), dict):
+            tokens = part["tokens"]
+            usage = {to: tokens[frm] for frm, to in _OPENCODE_USAGE_FIELDS.items()
+                     if isinstance(tokens.get(frm), int)}
+    if not seen:
+        return stdout, None, "unparsed"
+    return "".join(texts), usage, None if usage else "no_usage"
 
 
 def unwrap_structured(argv, stdout: str) -> "tuple[str, dict | None, str | None]":
     """(reply text, usage, reason usage is None) of one child's stdout. For an argv built with
     `structured_output` the stdout is the JSON envelope; any other stdout is returned unchanged.
     A Claude argv without the envelope request is `not_requested` (the caller could have had
-    usage); a host whose output carries none is `usage_unavailable:<host id>`."""
+    usage); a host whose output carries none is `usage_unavailable:<host id>`. An OpenCode argv
+    always asks for the JSON event stream, so its stdout is read as events: the reply is the joined
+    `text` parts, the usage the `step_finish` tokens."""
+    if argv and host_of_binary(argv[0]) == HOST_OPENCODE:
+        return _unwrap_opencode_events(stdout)
     if argv[-len(STRUCTURED_OUTPUT_FLAGS):] != STRUCTURED_OUTPUT_FLAGS:
         host = host_of_binary(argv[0]) if argv else None
         return stdout, None, USAGE_NOT_REQUESTED if host == HOST_CLAUDE else f"usage_unavailable:{host}"
@@ -742,6 +778,13 @@ def build_launch_argv(
             argv += ["--model", model]
         if workspace is not None:
             argv += ["--workspace", str(workspace)]
+    elif host == HOST_OPENCODE:
+        from .opencode_env import AGENT_NAME
+
+        argv = [binary, "run", "--standalone", "--auto", "--format", "json"]
+        if model is not None:
+            argv += ["--model", model]
+        argv += ["--agent", AGENT_NAME]
     else:
         raise ValueError(f"unknown host {host!r}; must be one of {HOSTS}")
     assert_same_family(binary, host)
@@ -767,3 +810,229 @@ def build_prompt_argv(
     argv = build_launch_argv(host, model, workspace=workspace, lean=lean)
     argv.append(prompt)
     return argv
+
+
+# --- the single-call seam -------------------------------------------------------------------------
+#
+# Every judge, extractor and enumerator call launches through `launch_single_call`. A site builds its
+# argv for the host it was written for; `effective_host` swaps in OpenCode when the engine session
+# bound to this process runs under it, so one function, not each site, decides which binary starts.
+
+LEDGER_NAME = "claude-single-calls.jsonl"
+OPENCODE_PROMPT_ARG_MAX_BYTES = 100000
+OUTCOME_OK, OUTCOME_ERROR, OUTCOME_TIMEOUT = "ok", "error", "timeout"
+OUTCOME_REFUSED, OUTCOME_SKIPPED = "refused", "skipped"
+UNATTRIBUTED_SITE = "unattributed"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The facts of the launch-site registry (docs/operations/llm-prompt-sites.md § Single-call registry);
+# the AST fixes which sites exist, this table fixes what is true of each. `consumer` is
+# `hook:<script>:<event>` (denying by that script's integrations/opencode/parity.toml row),
+# `engine:<what>` (the verdict refuses an engine transition, denying by R1) or `advisory:<what>`.
+# `legacy_host` names a host the site's source hard-codes; under Cursor it keeps launching it.
+# `exempt` is the reason a site is skipped under OpenCode. `timeout` names the source constant.
+SINGLE_CALL_SITES: dict = {}
+
+
+def _site(key, consumer, timeout, *, legacy_host=None, exempt=None):
+    SINGLE_CALL_SITES[key] = {
+        "consumer": consumer, "legacy_host": legacy_host, "exempt": exempt, "timeout": timeout,
+    }
+
+
+_ADV = "scripts/agentctl/advisor.py"
+_TURN_END = "hook:hook-turn-end-gate.py:Stop"
+_site(f"{_ADV}:enumerate_claims", "advisory:ledger-enumerate (agentctl/cli_session.py)", "ENUMERATE_TIMEOUT_S")
+_site(f"{_ADV}:enumerate_subprocess_runner", "advisory:ledger-enumerate (agentctl/cli_session.py)", "ENUMERATE_TIMEOUT_S")
+_site(f"{_ADV}:judge", "advisory:plan advisories (agentctl/cli_common.py)", "_ADVISOR_TIMEOUT_S")
+_site(f"{_ADV}:acceptance_judge", "engine:stage result acceptance (agentctl/cli_results.py)", "_ACCEPTANCE_JUDGE_TIMEOUT_S")
+_site(f"{_ADV}:judge_question_materiality", "engine:premise gate (agentctl/cli_questions.py)", "_QUESTION_MATERIALITY_TIMEOUT_S")
+_site(f"{_ADV}:_judge_user_text", "advisory:no refusing caller (judge_user_question, judge_resolution_confirmation)", "_USER_QUESTION_TIMEOUT_S")
+_site(f"{_ADV}:judge_approval_ask", "hook:hook-plan-delivery-gate.py:PreToolUse", "_APPROVAL_ASK_TIMEOUT_S")
+_site(f"{_ADV}:judge_binary_ask", _TURN_END, "_BINARY_ASK_TIMEOUT_S")
+_site(f"{_ADV}:judge_feedback_signal", _TURN_END, "_FEEDBACK_SIGNAL_TIMEOUT_S")
+_site(f"{_ADV}:judge_silent_closure", _TURN_END, "_SILENT_CLOSURE_TIMEOUT_S")
+_site(f"{_ADV}:judge_deferring_disposition", "hook:hook-deferring-disposition-gate.py:PreToolUse", "_DEFERRING_DISPOSITION_TIMEOUT_S")
+_site(f"{_ADV}:judge_outage_escalation", "hook:hook-escalation-diagnosis-gate.py:PreToolUse", "_OUTAGE_ESCALATION_TIMEOUT_S")
+_site(f"{_ADV}:judge_landing_discipline_ask", "hook:hook-resolution-reminder.py:PreToolUse", "_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S")
+_site(f"{_ADV}:judge_published_attachment", "hook:hook-published-text-writer-gate.py:PreToolUse", "_PUBLISHED_ATTACHMENT_TIMEOUT_S")
+_site(f"{_ADV}:judge_published_text_rules", "hook:hook-published-text-writer-gate.py:PreToolUse", "_PUBLISHED_TEXT_RULES_TIMEOUT_S")
+_site(f"{_ADV}:judge_same_difficulty", "engine:new-leaf guard and semantic join (lib/semantic_join.py)", "_SAME_DIFFICULTY_TIMEOUT_S")
+_site(f"{_ADV}:judge_code_effects", "engine:resource grant decision (agentctl/code_effects.py)", "code_effects_judge_timeout_s", legacy_host="claude")
+_site("scripts/agentctl/gates.py:_semantic_invariants_coverage", "engine:plan lint (agentctl/gates.py)", "_ADVISOR_TIMEOUT_S", legacy_host="claude")
+_site("scripts/agentctl/conditions.py:judge_restatement", "engine:plan submission (agentctl/submission.py)", "_JUDGE_TIMEOUT_S", legacy_host="claude")
+_site("scripts/agentctl/procedure.py:judge_collapse", "engine:plan submission (agentctl/submission.py)", "_JUDGE_TIMEOUT_S", legacy_host="claude")
+_site("scripts/agentctl/result_image.py:judge_echo", "engine:plan submission (agentctl/submission.py)", "_JUDGE_TIMEOUT_S", legacy_host="claude")
+_site("scripts/agentctl/grounding_judge.py:_ask", "engine:grounding verdict (agentctl/grounding_judge.py)", "_JUDGE_TIMEOUT_S", legacy_host="claude")
+_site("scripts/lib/marker_extract.py:extract", "engine:return marker extraction (lib/marker_extract.py)", "_EXTRACT_TIMEOUT_S")
+_site("scripts/mandate_cycle/driver.py:real_judge", "engine:mandate cycle verdict (mandate_cycle/driver.py)", "JUDGE_TIMEOUT_S", legacy_host="claude")
+
+
+def consumer_denies(consumer: str) -> bool:
+    """The `denying` value a consumer implies. A hook is as denying as the event of its parity row;
+    an engine transition refuses by R1; an advisory consumer never refuses."""
+    kind, _, rest = consumer.partition(":")
+    if kind == "engine":
+        return True
+    if kind != "hook":
+        return False
+    from . import hook_parity
+
+    return hook_parity.is_denying(rest.rpartition(":")[2])
+
+
+def site_denying(key) -> bool:
+    entry = SINGLE_CALL_SITES.get(key)
+    return bool(entry) and entry["exempt"] is None and consumer_denies(entry["consumer"])
+
+
+def bound_host() -> "str | None":
+    """`runtime_host` of the engine session this process belongs to, None when it has none."""
+    from . import config_root, host_stamp
+
+    session = host_stamp.task_key()
+    path = config_root.resolve_agentctl_state_file(session) if session else None
+    if path is None:
+        return None
+    try:
+        host = json.loads(path.read_text(encoding="utf-8")).get("runtime_host")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return host if isinstance(host, str) else None
+
+
+def effective_host(requested: str) -> str:
+    """The host a single call launches on: OpenCode when the bound session runs under it, else the
+    host the site asked for."""
+    return HOST_OPENCODE if bound_host() == HOST_OPENCODE else requested
+
+
+def _calling_site() -> "str | None":
+    """The registry key of the innermost registered frame on the stack."""
+    frame, depth = sys._getframe(2), 0
+    while frame is not None and depth < 60:
+        code = frame.f_code
+        try:
+            rel = Path(code.co_filename).resolve().relative_to(_REPO_ROOT).as_posix()
+        except (ValueError, OSError):
+            rel = None
+        if rel:
+            parts = code.co_qualname.replace(".<locals>.", ".").split(".")
+            for end in range(len(parts), 0, -1):
+                key = f"{rel}:{'.'.join(parts[:end])}"
+                if key in SINGLE_CALL_SITES:
+                    return key
+        frame, depth = frame.f_back, depth + 1
+    return None
+
+
+def _model_of(argv) -> "list[str]":
+    return [argv[i + 1] for i, element in enumerate(argv[:-1]) if element == "--model"][:1]
+
+
+def _cost_usd(argv, stdout) -> "float | None":
+    if argv[-len(STRUCTURED_OUTPUT_FLAGS):] != STRUCTURED_OUTPUT_FLAGS:
+        return None
+    try:
+        cost = json.loads(stdout).get("total_cost_usd")
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+
+
+def _ledger_path() -> Path:
+    return Path.home() / ".local" / "log" / LEDGER_NAME
+
+
+def _write_ledger(site, host, argv, outcome, *, reason=None, cost_usd=None) -> None:
+    from . import host_stamp
+
+    row = host_stamp.stamp(
+        host, os.environ.get(host_stamp.HARNESS_VERSION_ENV) or None, _model_of(argv),
+        host_stamp.engine_session_binding.harness_session_id(os.environ) or None,
+    )
+    row.update({
+        "ts": time.time(), "site": site or UNATTRIBUTED_SITE, "session": host_stamp.task_key(),
+        "outcome": outcome, "denying": site_denying(site), "cost_usd": cost_usd,
+    })
+    if reason is not None:
+        row["reason"] = reason
+    try:
+        path = _ledger_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+class SingleCallRefused(Exception):
+    """A site whose verdict refuses an engine or hook step could not launch under the bound host."""
+
+    def __init__(self, site, code, detail):
+        super().__init__(f"{site}: {code}: {detail}")
+        self.code, self.detail = code, detail
+
+
+def exempt_skip(site) -> bool:
+    """True, with a `skipped` row, when `site` is registered exempt and the bound host is OpenCode."""
+    entry = SINGLE_CALL_SITES.get(site)
+    if not entry or not entry["exempt"] or bound_host() != HOST_OPENCODE:
+        return False
+    _write_ledger(site, HOST_OPENCODE, [], OUTCOME_SKIPPED,
+                  reason={"code": "exempt", "detail": entry["exempt"]})
+    return True
+
+
+def _opencode_delivery(argv, stdin):
+    """(argv, stdin) with the prompt where OpenCode takes it: positional while it is short and does
+    not look like an option, standard input otherwise."""
+    from .opencode_env import AGENT_NAME
+
+    if argv[-2:] == ["--agent", AGENT_NAME]:
+        argv, prompt = list(argv), stdin or ""
+    else:
+        argv, prompt = list(argv[:-1]), argv[-1]
+    if not prompt:
+        return argv, stdin
+    if len(prompt.encode("utf-8")) <= OPENCODE_PROMPT_ARG_MAX_BYTES and not prompt.startswith("-"):
+        return argv + [prompt], ""
+    return argv, prompt
+
+
+def launch_single_call(argv, *, stdin=None, timeout) -> subprocess.CompletedProcess:
+    """Run one single-turn model call and write its ledger row. The result carries the `run_kwargs`
+    the child got. A timeout writes its row and raises `subprocess.TimeoutExpired`; a denying site
+    that cannot launch under OpenCode raises `SingleCallRefused`, any other site gets a failed
+    result (returncode 127), which its own fail-open default reads."""
+    host = host_of_binary(argv[0])
+    site = _calling_site()
+    if host == HOST_OPENCODE:
+        from . import opencode_env
+
+        problem = opencode_env.not_ready()
+        if problem:
+            code, detail = problem
+            denying = site_denying(site)
+            _write_ledger(site, host, argv, OUTCOME_REFUSED if denying else OUTCOME_ERROR,
+                          reason={"code": code, "detail": detail})
+            if denying:
+                raise SingleCallRefused(site, code, detail)
+            failed = subprocess.CompletedProcess(argv, 127, "", detail)
+            failed.run_kwargs = {}
+            return failed
+        argv, stdin = _opencode_delivery(argv, stdin)
+        run_kwargs = opencode_env.run_kwargs()
+        run_kwargs["env"]["AGENTCTL_RUNTIME_HOST"] = HOST_OPENCODE
+    else:
+        run_kwargs = isolated_run_kwargs()
+    try:
+        proc = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout,
+                              **run_kwargs)
+    except subprocess.TimeoutExpired:
+        _write_ledger(site, host, argv, OUTCOME_TIMEOUT)
+        raise
+    _write_ledger(site, host, argv, OUTCOME_OK if proc.returncode == 0 else OUTCOME_ERROR,
+                  cost_usd=_cost_usd(argv, proc.stdout))
+    proc.run_kwargs = run_kwargs
+    return proc

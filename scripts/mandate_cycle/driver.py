@@ -40,7 +40,7 @@ from agentctl import cost, dispatch, grants, inline_class, inline_git, mandate a
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
 from lib import config_root, host_llm, judge_ledger, transcript_cost
-from lib.runtime_models import HOST_CLAUDE
+from lib.runtime_models import HOST_CLAUDE, model_for
 from session_scope import registry as scopes
 
 from . import notifiers
@@ -183,25 +183,26 @@ def real_spawn(argv, cwd, timeout_s) -> SpawnResult:
 def real_judge(prompt: str) -> "tuple[str, float]":
     """One isolated single-turn sonnet call, mirrored to the judge ledger with its usage; returns
     (text, cost in USD)."""
-    argv = host_llm.build_launch_argv(HOST_CLAUDE, "sonnet", lean=True, structured_output=True)
+    host = host_llm.effective_host(HOST_CLAUDE)
+    argv = host_llm.build_launch_argv(
+        host, "sonnet" if host == HOST_CLAUDE else model_for(host, "medium"), lean=True, structured_output=True)
     judge_ledger.begin_attributed_call(MANDATE_JUDGE)
     judge_ledger.started(MANDATE_JUDGE)
     start = time.monotonic()
     try:
-        proc = subprocess.run(
-            argv, input=prompt, capture_output=True, text=True, timeout=JUDGE_TIMEOUT_S,
-            **host_llm.isolated_run_kwargs(),
-        )
+        proc = host_llm.launch_single_call(argv, stdin=prompt, timeout=JUDGE_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         judge_ledger.call(MANDATE_JUDGE, timed_out=True, duration=time.monotonic() - start,
                           returncode=None, prompt_chars=len(prompt), usage_reason="timed_out")
         raise
-    _, usage, usage_reason = host_llm.unwrap_structured(argv, proc.stdout)
+    reply, usage, usage_reason = host_llm.unwrap_structured(argv, proc.stdout)
     judge_ledger.call(MANDATE_JUDGE, timed_out=False, duration=time.monotonic() - start,
                       returncode=proc.returncode, prompt_chars=len(prompt), usage=usage,
                       usage_reason=usage_reason)
     if proc.returncode != 0:
         raise DriverError(f"judge exited {proc.returncode}: {proc.stderr.strip()[:200]}")
+    if host != HOST_CLAUDE:
+        return reply, JUDGE_FLAT_CHARGE_USD
     try:
         data = json.loads(proc.stdout)
         text = data["result"]

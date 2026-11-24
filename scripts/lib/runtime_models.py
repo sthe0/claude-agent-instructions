@@ -11,6 +11,9 @@ from __future__ import annotations
 HOST_CLAUDE = "claude"
 HOST_CURSOR = "cursor"
 HOSTS = (HOST_CLAUDE, HOST_CURSOR)
+# A single-call host only: a session is not bound to it through `HOSTS`; its model per tier is
+# the per-machine setting `opencode-model-<tier>` (lib/opencode_env.py), None when unset.
+HOST_OPENCODE = "opencode"
 
 # Claude Code model aliases — the same ladder spawn-specialist.py's
 # COMPLEXITY_MODEL uses (--complexity low/medium/high -> haiku/sonnet/opus).
@@ -27,6 +30,10 @@ COMPLEXITY_MODEL_BY_HOST = {
 
 def model_for(host: str, complexity: str) -> str | None:
     """Resolve `host`'s model for a `low`/`medium`/`high` complexity tier."""
+    if host == HOST_OPENCODE:
+        from .opencode_env import model_setting
+
+        return model_setting(complexity)
     try:
         table = COMPLEXITY_MODEL_BY_HOST[host]
     except KeyError:

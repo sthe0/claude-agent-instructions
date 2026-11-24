@@ -49,7 +49,7 @@ from typing import Callable
 
 from lib import host_llm
 from lib.planner_plan_check import RETURN_MARKERS, markers_for_kind
-from lib.runtime_models import HOST_CLAUDE, model_for
+from lib.runtime_models import HOST_CLAUDE, HOST_OPENCODE, model_for
 
 # "low" complexity per lib.runtime_models — Claude's haiku, byte-identical to
 # the pre-host-aware constant this module always used.
@@ -192,11 +192,8 @@ def subprocess_runner(argv: list[str], *, timeout: int = _EXTRACT_TIMEOUT_S) -> 
     if os.environ.get("AGENTCTL_LIVE_JUDGES") == "0":
         return RunResult(1, "", "live judges disabled (AGENTCTL_LIVE_JUDGES=0)")
     try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout,
-            **host_llm.isolated_run_kwargs(),
-        )
-        return RunResult(proc.returncode, proc.stdout, proc.stderr)
+        proc = host_llm.launch_single_call(argv, timeout=timeout)
+        return RunResult(proc.returncode, host_llm.unwrap_structured(argv, proc.stdout)[0], proc.stderr)
     except subprocess.TimeoutExpired:
         return RunResult(1, "", f"marker extractor timed out after {timeout}s")
 
@@ -213,11 +210,16 @@ def extractor_available(host: str = HOST_CLAUDE) -> bool:
     Cursor ``agent`` CLI environment where ``claude`` is not on PATH — and vice
     versa. Delegates to ``lib.host_llm.preflight``, the one place that knows
     which binary (and, for Cursor, which API key) a given host actually needs."""
+    if host_llm.effective_host(host) == HOST_OPENCODE:
+        # the launch itself refuses and records why; a silent fall back to the regex scan would hide it
+        return True
     ok, _ = host_llm.preflight(host)
     return ok
 
 
 def model(host: str = HOST_CLAUDE) -> str:
+    if host == HOST_OPENCODE:
+        return model_for(host, _EXTRACT_COMPLEXITY)
     return os.environ.get(ENV_MODEL) or model_for(host, _EXTRACT_COMPLEXITY)
 
 
@@ -391,6 +393,7 @@ def extract(
     run = runner or subprocess_runner
     prompt = build_prompt(result_text, allowed, hint)
     try:
+        runtime_host = host_llm.effective_host(runtime_host)
         argv = host_llm.build_prompt_argv(runtime_host, model(runtime_host), prompt)
     except Exception as exc:  # a broken host/model lookup must never crash a finished spawn
         return Extraction(
