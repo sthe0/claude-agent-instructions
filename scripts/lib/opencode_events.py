@@ -343,7 +343,7 @@ def parse_hook_output(returncode: int, stdout: str, stderr: str) -> Decision:
     if returncode == 2:
         return Decision(True, (stderr or stdout).strip() or "hook exited 2")
     if returncode != 0:
-        return Decision()
+        return Decision()  # Claude Code: any exit other than 0 and 2 is a non-blocking error, the call runs
     text = stdout.strip()
     if not text.startswith("{"):
         return Decision(context=[text] if text else [])
@@ -396,7 +396,7 @@ def run_row(row: Row, payload: dict, env: dict) -> Decision:
         proc = subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
                               timeout=row.timeout_s, env=env, cwd=payload.get("cwd") or None)
     except subprocess.TimeoutExpired:
-        return Decision()
+        return Decision()  # Claude Code treats a timed-out hook as a non-blocking error: the call runs
     decision = parse_hook_output(proc.returncode, proc.stdout, proc.stderr)
     decision.script = os.path.basename(row.script)
     return decision

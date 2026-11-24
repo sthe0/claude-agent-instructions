@@ -266,6 +266,7 @@ function install(ctx, failures) {
     const held = idle.get(input.sessionID) || 0;
     const answer = await verdict("experimental.idle", input, directory(input));
     if (answer.failed) {
+      // Claude Code's Stop hook that fails does not hold the turn either: the turn ends
       log({ at: "bridge-error", event: "experimental.idle", error: answer.failed });
       return;
     }
