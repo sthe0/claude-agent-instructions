@@ -1604,8 +1604,10 @@ class Experiment:
                                     found["registry"], catalogue_key.max_age_s(), now)
                 found["deps"] = {i: row["deps"] for i in hits for row in store.rows_of(i)
                                  if row["key"] == hits[i].key}
-                found["always_rerun"] = json.loads(store.get_meta(result_store.ALWAYS_RERUN_META) or "[]")
-                found["failed"] = json.loads(store.get_meta(result_store.FAILED_META) or "[]")
+                tree = gate.core_tree(root / "core")
+                found["always_rerun"] = json.loads(
+                    gate.get_tagged_meta(store, result_store.ALWAYS_RERUN_META, tree) or "[]")
+                found["failed"] = json.loads(gate.get_tagged_meta(store, result_store.FAILED_META, tree) or "[]")
             found["environment"], found["hits"] = environment, hits
 
         found["ids"] = collect_only_ids(self.repo, sha, inspect)
@@ -1625,7 +1627,8 @@ class Experiment:
 
 
 def needs_warm_up(state: dict) -> bool:
-    """True when some collected id has no hit and is not one the last settled run could not store."""
+    """True when some collected id has no hit and is not one the last settled run of this very tree could not
+    store; the preview reads those sets as empty when they were computed on another tree or carry no tree tag."""
     unstorable = set(state["always_rerun"]) | set(state["failed"])
     return any(i not in state["hits"] and i not in unstorable for i in state["ids"])
 

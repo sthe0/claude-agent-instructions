@@ -8,7 +8,8 @@ which touches the production check:
 
 - a spawner a test loads by path and runs in-process gets the check answered "no
   refusal" unless the test arms it (`ARMED`, set by the `config_root_check_armed`
-  fixture): `install()` wraps `SourceFileLoader.exec_module` in the pytest process only;
+  fixture): `install()` makes `importlib.util.spec_from_file_location` hand the spawner a loader
+  that appends the guard to the spawner's own code, in the pytest process only;
 - a spawner a test starts as a subprocess is started through `launcher()`: a script
   written into a fresh temp dir at call time that loads `spawn-specialist.py`, replaces
   `config_root_refusal` with one that never refuses, and runs its `main()`. A test that
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import atexit
 import importlib.machinery
+import importlib.util
 import os
 import shutil
 import sys
@@ -115,19 +117,40 @@ def _is_spawner(path) -> bool:
     return os.path.basename(str(path or "")) == SPAWNER.name
 
 
+_GUARD_SUFFIX = (
+    "\n__import__('sys').modules[{module!r}].guard_namespace(globals())\n"
+)
+
+
+def guard_namespace(namespace: dict) -> None:
+    check = namespace.get(CHECK_NAME)
+    if check is not None and not hasattr(check, "unguarded"):
+        namespace[CHECK_NAME] = _guarded(check)
+
+
+class _SpawnerLoader(importlib.machinery.SourceFileLoader):
+    """Loads the spawner with the guard appended to its own code, so no frame of this file is on the
+    stack while any module body runs (the dependency tracer attributes a module body to the nearest
+    repository frame, and a wrapper around `exec_module` would own every module the suite loads)."""
+
+    def get_code(self, fullname):
+        return self.source_to_code(self.get_data(self.path) + _GUARD_SUFFIX.format(module=__name__).encode(),
+                                   self.path)
+
+
 def install() -> None:
     """Guard every spawner this process loads by path from now on."""
-    loader = importlib.machinery.SourceFileLoader
-    if hasattr(loader.exec_module, "unguarded"):
+    util = importlib.util
+    if hasattr(util.spec_from_file_location, "unguarded"):
         return
-    exec_module = loader.exec_module
+    spec_from_file_location = util.spec_from_file_location
 
-    def guarding_exec_module(self, module):
-        exec_module(self, module)
-        if _is_spawner(getattr(module, "__file__", None)):
-            check = module.__dict__.get(CHECK_NAME)
-            if check is not None and not hasattr(check, "unguarded"):
-                module.__dict__[CHECK_NAME] = _guarded(check)
+    def guarding_spec_from_file_location(name, location=None, *args, **kwargs):
+        spec = spec_from_file_location(name, location, *args, **kwargs)
+        if spec is not None and "loader" not in kwargs and not args and _is_spawner(location) \
+                and type(spec.loader) is importlib.machinery.SourceFileLoader:
+            spec.loader = _SpawnerLoader(spec.loader.name, spec.loader.path)
+        return spec
 
-    guarding_exec_module.unguarded = exec_module
-    loader.exec_module = guarding_exec_module
+    guarding_spec_from_file_location.unguarded = spec_from_file_location
+    util.spec_from_file_location = guarding_spec_from_file_location
