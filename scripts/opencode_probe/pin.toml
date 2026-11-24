@@ -2,9 +2,9 @@ version = "2.3.2"
 
 [last_pass.adapter]
 version = "2.3.2"
-suite_sha256 = "df200a0a68548fce19f14ef83364efac09251be63c09f0d30bfaa7355d2a6dca"
-run = "20261124T190524Z"
-record_sha256 = "6fcadcb4f35a7e8e930a2bddba4b6dae89670a9a4c42f6225ce7fe655e5583ad"
+suite_sha256 = "baf923ec9ec034374ed8f4fec5b600d0bb243848f8192a944fcdda235c28b18b"
+run = "20261124T201901Z"
+record_sha256 = "91d4391ce1a3a34f0ac737b2bd54643f78dd15ca39c969fc0f2bf2b7827a95e4"
 
 [last_pass.mechanisms]
 version = "2.3.2"
