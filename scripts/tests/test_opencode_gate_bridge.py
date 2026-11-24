@@ -383,7 +383,7 @@ def test_tool_before_prefixes_shell_command_with_session_id(tmp_path):
     assert result["results"][0]["threw"] is None
     prefixed = result["results"][0]["input"]["input"]["command"]
     assert prefixed.startswith("export AGENTCTL_HARNESS_SESSION_ID=") and prefixed.endswith(f"; {command}")
-    ran = subprocess.run(["bash", "-c", prefixed], capture_output=True, text=True, env={})
+    ran = subprocess.run(["bash", "-c", prefixed], capture_output=True, text=True, env=_env(tmp_path))
     assert ran.stdout == session
 
 

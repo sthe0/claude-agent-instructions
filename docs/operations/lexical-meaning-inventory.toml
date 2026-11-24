@@ -91,6 +91,12 @@ ground = "_ORDER_ANCHOR_RE.findall collects the '[R1]'/'[P1]'/'[K1]' anchors of 
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/lib/opencode_events.py::Row.matches::re.fullmatch"]
+class = "structural"
+ground = "Matches a parity row's tool-name matcher against the Claude-style tool name of a call, the same fullmatch of tool names the host's own hook matcher applies; tool-name syntax, no free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/cli_order.py::_order_draft_violations::re.fullmatch"]
 class = "structural"
 ground = "Checks an order item id has the form R<n>/P<n>/K<n> the rendering shows as an anchor; an identifier shape, not free-text meaning."
