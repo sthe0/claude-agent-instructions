@@ -61,7 +61,11 @@ def test_unknown_event_raises():
 
 def test_legal_targets_from_routed():
     targets = set(legal_targets(Node.ROUTED.value))
-    assert targets == {Node.PLANNING.value, Node.EXECUTING.value}
+    assert targets == {Node.PLANNING.value, Node.EXECUTING.value, Node.DIAGNOSING.value}
+    assert transition(Node.ROUTED.value, "understanding_fire") == Node.DIAGNOSING.value
+    assert transition(Node.PLANNING.value, "planning_fire") == Node.DIAGNOSING.value
+    assert transition(Node.DIAGNOSING.value, "understanding_return") == Node.ROUTED.value
+    assert transition(Node.DIAGNOSING.value, "first_plan_return") == Node.PLAN_READY.value
 
 
 def test_reject_edge_resolution_to_diagnosing():

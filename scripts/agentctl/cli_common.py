@@ -1480,7 +1480,8 @@ def _record_arming_fire(state: SessionState, arming: dict, scales: list[str], *,
     budget and the whole-window baselines alone. A ledgered order owes the user the fire in every
     later session too (K3)."""
     actual = effort_segments.arming_actual(arming)
-    budget = arming["user_budget"] if line == effort_segments.LINE_USER else arming["budget"]
+    budget = (arming.get("user_budget") or arming["budget"]
+              if line == effort_segments.LINE_USER else arming["budget"])
     fire = next((f for f in state.effort_fires
                  if f.get("arming_id") == arming["arming_id"] and f.get("ack") is None), None)
     if fire is None:
@@ -1690,6 +1691,8 @@ def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: f
     there is no remaining plan for the user to renegotiate."""
     fire = effort.record_fire(state, div, now=now, finished_work=finished_work)
     fire["difficulty_id_at_fire"] = _difficulty_id(state.difficulty)
+    fire["line"] = (effort_segments.LINE_DIFFICULTY if div.scale == effort.SCALE_REPLANS
+                    else effort_segments.LINE_USER)
     if div.scale in effort.RATIO_SCALES:
         key = _ledgered_order_key(state)
         if key is not None:
@@ -1885,19 +1888,16 @@ def _done_criterion_or_handoff(state: SessionState) -> str:
 
 
 def _agent_replans_fire_route(state: SessionState) -> dict | None:
-    """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
-    order: a planning-difficulty cycle, not a question to the user. None for every other
-    fire (spend/wall-clock stay the user's) and for a session with no user-approved order."""
-    if _ledgered_order_key(state) is None:
-        return None
+    """The agent's own route for an unacknowledged fire at the difficulty line only
+    (`line_acknowledged_by`): a difficulty cycle, not a question to the user. Understanding fires
+    are always the agent's, before any plan exists; any other needs a user-approved order version
+    (without one the fire is the user's). None for a fire at the user line."""
     last = gates.open_fire_record(state)
-    if last is None or last.get("scale") != effort.SCALE_REPLANS:
+    if last is None or effort_segments.line_acknowledged_by(last) != effort_segments.AUTHORITY_AGENT:
         return None
-    return {
-        "route": "agent_planning_difficulty_cycle",
-        "steps": ["declare", "investigate", "critique (differences_to_remove)", "normalize",
-                  "fire-acknowledge --decision revise --by agent", "replan"],
-    }
+    if _fire_phase(state, last) != "understanding" and _ledgered_order_key(state) is None:
+        return None
+    return _effort_fire_route(state, last)
 
 
 def _agent_self_decision_refusal(
@@ -3145,53 +3145,145 @@ def _effort_fire_escalation_data(state: SessionState) -> dict:
         "identity": fire.get("identity"),
         "title": fire.get("title"),
         "ts": fire.get("ts"),
+        "line": fire.get("line"),
+        "acknowledged_by": effort_segments.line_acknowledged_by(fire) if fire else None,
+        "met_in": _fire_phase(state, fire) if fire else None,
     }
 
 
-def _enter_replans_diagnosis(state: SessionState) -> None:
-    """Move the session into DIAGNOSING so the agent's planning-difficulty cycle can run."""
-    if state.node == Node.EXECUTING.value:
-        state.node = transition(state.node, "verify")
-    if state.node == Node.VERIFYING.value:
-        state.node = transition(state.node, "diagnose")
-    elif state.node == Node.PLAN_READY.value:
-        state.node = transition(state.node, "review_trigger")
-    else:
-        return
-    opened = _open_difficulty(state)
+def _fire_phase(state: SessionState, fire: dict | None) -> str | None:
+    """The phase a fire was met in: its segment's, else (a replans-scale record, which names no
+    segment) the one the session's live arming or node is in."""
+    phase = effort_segments.phase_of((fire or {}).get("segment"))
+    if phase is not None:
+        return phase
+    arming = effort_segments.current_arming(state.effort_segments)
+    phase = effort_segments.phase_of(arming["segment"]) if arming is not None else None
+    if phase is not None:
+        return phase
+    return {Node.ROUTED.value: "understanding", Node.PLANNING.value: "planning",
+            Node.PLAN_READY.value: "planning"}.get(state.node, "stage")
+
+
+def _enter_effort_diagnosis(state: SessionState) -> Difficulty | None:
+    """The D1 entry: an unacknowledged effort fire on understanding, planning or a stage takes the
+    session into DIAGNOSING with a difficulty record seeded with the phase it was met in, over the
+    edge its node has (`machine.TRANSITIONS`): ROUTED `understanding_fire`, PLANNING
+    `planning_fire`, EXECUTING and VERIFYING the stage's own `verify` / `diagnose` (the stage
+    still running goes back to PENDING, to be re-armed by the replan), PLAN_READY `review_trigger`.
+    A session already in DIAGNOSING, or at a node with no edge, does not move; the opened record
+    is linked on the fire as `difficulty_uid`. A planning fire met at PLAN_READY does not move
+    either: the plan awaits the user, whose approval is the decision on a fire at the user line
+    (`_close_at_user_act` acknowledges it). Returns the record it opened, else None."""
     fire = gates.open_fire_record(state)
+    node = state.node
+    if node == Node.ROUTED.value:
+        if _fire_phase(state, fire) != "understanding":
+            return None
+        state.node = transition(node, "understanding_fire")
+    elif node == Node.PLANNING.value:
+        state.node = transition(node, "planning_fire")
+    elif node in (Node.EXECUTING.value, Node.VERIFYING.value):
+        if node == Node.EXECUTING.value:
+            running = state.active_stage()
+            if running is not None:
+                running.outcome.status = StageStatus.PENDING.value
+            state.node = transition(node, "verify")
+        state.node = transition(state.node, "diagnose")
+    elif node == Node.PLAN_READY.value:
+        if _fire_phase(state, fire) == "planning":
+            return None
+        state.node = transition(node, "review_trigger")
+    else:
+        return None
+    opened = _open_difficulty(state, met_in=_fire_phase(state, fire))
     if opened is not None and fire is not None:
         fire["difficulty_uid"] = opened.uid
+    return opened
+
+
+def _fire_return_step(state: SessionState, phase: str | None) -> str:
+    """The verb that closes a difficulty met in `phase` and leaves DIAGNOSING."""
+    if phase == "understanding":
+        return "order-submit (the revised order draft)"
+    if phase == "planning" and not state.plan_path:
+        return "submit-plan (the first plan)"
+    return "replan"
+
+
+def _effort_return_blockers(state: SessionState, phase: str) -> list[str] | None:
+    """None when the session is not in the difficulty cycle a fire on `phase` opened; else why
+    the verb that returns from it may not yet: the record is incomplete or the fire is unacknowledged."""
+    diff = state.difficulty
+    if state.node != Node.DIAGNOSING.value or diff is None or diff.met_in != phase:
+        return None
+    return [*gates.difficulty_blockers(state), *gates.effort_fire_blockers(state)]
+
+
+def _effort_return(state: SessionState, event: str) -> None:
+    """Leave the difficulty cycle by the return edge `event`, filing the difficulty record."""
+    _archive_difficulty(state)
+    state.node = transition(state.node, event)
+
+
+def _effort_fire_route(state: SessionState, fire: dict | None) -> dict:
+    """The named way on of an open fire, by who may acknowledge it (`line_acknowledged_by`): the
+    agent's difficulty cycle ending in its own `fire-acknowledge --decision revise --by agent`,
+    or the user's `fire-acknowledge` on the figures the ask states."""
+    exit_step = _fire_return_step(state, _fire_phase(state, fire))
+    if fire is not None and effort_segments.line_acknowledged_by(fire) == effort_segments.AUTHORITY_AGENT:
+        return {
+            "route": "agent_planning_difficulty_cycle",
+            "acknowledged_by": effort_segments.AUTHORITY_AGENT,
+            "steps": ["declare", "investigate", "critique (differences_to_remove)", "normalize",
+                      "fire-acknowledge --decision revise --by agent", exit_step],
+        }
+    return {
+        "route": "user_fire_acknowledgment",
+        "acknowledged_by": effort_segments.AUTHORITY_USER,
+        "steps": ["ask the user about the fire",
+                  "fire-acknowledge --by <user> --decision <continue|revise|abandon>",
+                  "declare", "investigate", "critique", exit_step],
+    }
 
 
 def _effort_fire_refusal(state: SessionState, what: str, efblock: list[str], *,
                          store: StateStore | None = None) -> Directive:
-    """The refusal `gates.effort_fire_blockers` produces. A replans-scale fire of a ledgered order
-    names the agent's planning-difficulty cycle, entered here when `store` lets it persist; a
-    linked child's fire goes to its parent as a norm divergence; every other fire is the user's."""
+    """The refusal `gates.effort_fire_blockers` produces, and the D1 route: when `store` lets it
+    persist, the session enters DIAGNOSING (`_enter_effort_diagnosis`) and the directive names who
+    acknowledges the fire and how. A fire at the difficulty line only is the agent's (its
+    difficulty cycle, then `fire-acknowledge --by agent`); a fire at the user line is the user's;
+    a linked child's fire goes to its parent as a norm divergence, the child staying where it is."""
     data = {"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)}
+    fire = gates.open_fire_record(state)
     route = _agent_replans_fire_route(state)
-    if route is None:
+    if route is None and state.parent_link:
         data.update(_fire_directive_figures(state))
-        if state.parent_link:
-            return Directive(
-                False, state.node, "norm_mismatch",
-                f"{what} blocked by an unacknowledged effort-divergence fire; return it to the "
-                "parent stage as a norm divergence",
-                marker="REPLAN", data={**data, "norm_mismatch": True},
-            )
+        data["met_in"] = _fire_phase(state, fire)
+        return Directive(
+            False, state.node, "norm_mismatch",
+            f"{what} blocked by an unacknowledged effort-divergence fire; return it to the "
+            "parent stage as a norm divergence",
+            marker="REPLAN", data={**data, "norm_mismatch": True},
+        )
+    opened = _enter_effort_diagnosis(state) if store is not None else None
+    if route is None:
+        route = _effort_fire_route(state, fire)
+        data["route"] = route
+        data.update(_fire_directive_figures(state))
         return Directive(
             False, state.node, "fire_acknowledge",
+            f"{what} blocked by an unacknowledged effort-divergence fire; its decision is the "
+            "user's (`fire-acknowledge --by <user>`), and the difficulty cycle is open beside it"
+            if opened is not None or state.node == Node.DIAGNOSING.value else
             f"{what} blocked by an unacknowledged effort-divergence fire",
             marker=DIRECTIVE_ESCALATE_TO_USER, data=data,
         )
     data["agent_route"] = route
-    if store is not None:
-        _enter_replans_diagnosis(state)
     return Directive(
         False, state.node, "planning_difficulty",
-        f"{what} blocked by an unacknowledged replans-scale effort-divergence fire; "
-        "run the planning-difficulty cycle (" + " → ".join(route["steps"]) + ")",
+        f"{what} blocked by an unacknowledged effort-divergence fire at the difficulty line; "
+        "run the difficulty cycle (" + " → ".join(route["steps"]) + ")",
         marker="OVERCOME-DIFFICULTY", data=data,
     )
 
@@ -3457,7 +3549,8 @@ def _evaluate_review_trigger(
 
 def _fail_stage_into_diagnosing(
     state: SessionState, store: StateStore, stage: Stage, *, note: str, event: str,
-    declaration: Declaration, escalated_from: dict | None = None, **event_fields,
+    declaration: Declaration, escalated_from: dict | None = None, met_in: str | None = None,
+    **event_fields,
 ):
     """FAILED / DIAGNOSING on `stage` for a fault no re-dispatch of the stage unchanged
     would remove: mirrors `cmd_record_result`'s failed-stage branch, including its two-step
@@ -3473,7 +3566,7 @@ def _fail_stage_into_diagnosing(
     if state.node == Node.EXECUTING.value:
         state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    opened = _open_difficulty(state, declaration=declaration)
+    opened = _open_difficulty(state, declaration=declaration, met_in=met_in)
     if opened is not None and escalated_from:
         opened.escalated_from = dict(escalated_from)
     store.save(state)
@@ -3515,7 +3608,7 @@ def _open_norm_mismatch(
     decl = mismatch["declaration"]
     opened = _fail_stage_into_diagnosing(
         state, store, stage, event="norm_mismatch", child_session=mismatch["child_session"],
-        norm_digest=mismatch["norm_digest"], declaration=Declaration(**decl),
+        norm_digest=mismatch["norm_digest"], declaration=Declaration(**decl), met_in="stage",
         escalated_from={"child_session": mismatch["child_session"],
                         "child_uid": mismatch["child_uid"],
                         "norm_digest": mismatch["norm_digest"]},

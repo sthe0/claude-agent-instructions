@@ -38,8 +38,9 @@ from .submission import (
     order_understanding_violations,
 )
 from .cli_common import (
-    REPO_ROOT, _book_and_judge, _close_understanding, _effort_fire_escalation_data, _order_draft_customer_id,
-    _renew_order_agreement, _require,
+    REPO_ROOT, _book_and_judge, _close_understanding, _effort_fire_escalation_data, _effort_fire_refusal,
+    _effort_fire_route, _effort_return, _effort_return_blockers, _enter_effort_diagnosis, _fire_return_step,
+    _order_draft_customer_id, _renew_order_agreement, _require,
 )
 
 LEAVES_ROOT = REPO_ROOT / "memory-global" / "leaves"
@@ -96,6 +97,24 @@ def _judge_understanding(state: SessionState, store: StateStore, args, act: str)
     if effort_segments.open_arming_of(state.effort_segments, effort_segments.UNDERSTANDING) is not None:
         return _book_and_judge(state, store, args, act)
     return None
+
+
+def _understanding_fire_refusal(state: SessionState, store: StateStore, args, act: str) -> Directive | None:
+    """Judge the understanding segment at `act`; an understanding fire still unacknowledged then
+    holds the act. The agreement closes the segment at its multiple and so would otherwise
+    discharge the fire unseen, but every understanding fire is the agent's to acknowledge
+    (fire-acknowledge --by agent --decision revise) and none is the user's. The way on is
+    named by the directive `_effort_fire_refusal` returns."""
+    _judge_understanding(state, store, args, act)
+    fire = gates.open_fire_record(state)
+    if fire is None or fire.get("segment") != effort_segments.UNDERSTANDING:
+        return None
+    efblock = gates.effort_fire_blockers(state)
+    if not efblock:
+        return None
+    directive = _effort_fire_refusal(state, "recording the agreement", efblock, store=store)
+    store.save(state)
+    return directive
 
 
 def _executor_side_violations(meta, state: SessionState) -> list[str]:
@@ -264,20 +283,37 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
             f"order draft {args.plan} is not fit to put to the user: " + "; ".join(problems),
             data={"problems": problems},
         )
+    in_cycle = _effort_return_blockers(state, "understanding")
+    if in_cycle:
+        return Directive(
+            False, state.node, "noop",
+            "order-submit of the revised draft closes the difficulty an understanding fire opened, "
+            "and it is not complete yet: " + "; ".join(in_cycle) + ". Finish the difficulty record "
+            "(declare, investigate, critique, normalize), acknowledge the fire with fire-acknowledge "
+            "--by agent --decision revise, then submit the draft again",
+            data={"blockers": in_cycle})
     state.order_draft_path = args.plan
     state.order_draft_sha256 = understanding_digest(doc)
     state.order_beside = _beside_records(doc)
     _price_understanding(state, doc.meta.order)
     state.log("order_submit", plan=args.plan, understanding_sha256=state.order_draft_sha256)
     fire = _judge_understanding(state, store, args, effort_segments.ACT_ORDER_SUBMIT)
+    if fire is not None:
+        _enter_effort_diagnosis(state)
+    elif in_cycle is not None:
+        _effort_return(state, "understanding_return")
     store.save(state)
     data = {"order_draft_path": args.plan, "understanding_sha256": state.order_draft_sha256}
     detail = (f"order draft {args.plan} submitted (understanding {state.order_draft_sha256[:12]}); "
               "next: plan-review --scope order, then present-plan --kind order")
     if fire is not None:
         data["effort_fire"] = _effort_fire_escalation_data(state)
+        data["route"] = _effort_fire_route(state, fire)
         detail += ("; this submission raised an effort-divergence fire on understanding the order "
-                   f"(scales: {', '.join(fire.get('scales') or [fire.get('scale')])}), open until it is acknowledged")
+                   f"(scales: {', '.join(fire.get('scales') or [fire.get('scale')])}). Every understanding "
+                   "fire is the agent's: run the difficulty cycle (declare, investigate, critique, "
+                   "normalize), then `fire-acknowledge --by agent --decision revise`, then "
+                   f"{_fire_return_step(state, 'understanding')}; the user does not decide it")
     return Directive(True, state.node, "continue", detail, data=data)
 
 
@@ -375,6 +411,9 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     answered, ledger_read = _agreement_ask_answered(state_file, since, marker)
     if not answered:
         return refuse(_no_marked_answer_refusal("agreeing the order", marker, ledger_read, since))
+    fire_refusal = _understanding_fire_refusal(state, store, args, effort_segments.ACT_ORDER_AGREE)
+    if fire_refusal is not None:
+        return fire_refusal
     previous = state.order_agreement
     agreement = OrderAgreement(
         understanding_sha256=digest, parts=understanding_parts(doc), draft_path=path,
@@ -395,7 +434,6 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     state.order_agreement = agreement
     state.order_agreement_history.append(agreement)
     _record_agreed_estimate(state, doc)
-    _judge_understanding(state, store, args, effort_segments.ACT_ORDER_AGREE)
     _close_understanding(state, store, args, effort_segments.ACT_ORDER_AGREE,
                          _order_draft_customer_id(state) or "user")
     _renew_order_agreement(state, store, args)

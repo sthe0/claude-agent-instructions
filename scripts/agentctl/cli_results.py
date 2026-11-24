@@ -290,7 +290,9 @@ def _record_result(args, *, store: StateStore, runner: Runner | None = None) -> 
         if segment_fire is not None and segment_fire.get("arming_id") and gates.effort_active(state):
             efblock = gates.effort_fire_blockers(state)
             _log_gate(state, "effort_fire", efblock, passed=False)
-            return _effort_fire_refusal(state, "a passing record-result", efblock)
+            directive = _effort_fire_refusal(state, "a passing record-result", efblock, store=store)
+            store.save(state)
+            return directive
     actual = args.actual or ""
     stage.outcome.actual = actual
     passed = args.status == "passed"
@@ -706,7 +708,7 @@ def _record_result(args, *, store: StateStore, runner: Runner | None = None) -> 
     # enter the overcome-difficulty sub-spine: a fresh Difficulty record must be
     # worked through (declare -> investigate -> critique) before replan is allowed.
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    opened = _open_difficulty(state)
+    opened = _open_difficulty(state, met_in="stage" if fire is not None else None)
     data = {"failure_kind": failure_kind} if failure_kind else {}
     if fire is not None:
         data["effort_divergence"] = fire

@@ -210,17 +210,25 @@ def _agent_fire_ack_refusal(
 ) -> tuple[str | None, dict | None]:
     """(refusal, crossing) of an agent-authored fire-acknowledge: a refusal when it may not
     proceed, else None and the backstop crossing it would be (None below the backstop)."""
-    if _ledgered_order_key(state) is None:
+    if effort_segments.line_acknowledged_by(last) != effort_segments.AUTHORITY_AGENT:
+        return ("the fire is at the user line, the figure the user approved: the decision is the "
+                "user's. Ask them, then run fire-acknowledge --by <user> --decision "
+                "continue|revise|abandon on their marked answer"), None
+    understanding = effort_segments.phase_of(last.get("segment")) == "understanding"
+    if not understanding and _ledgered_order_key(state) is None:
         return "the order has no user-approved version; the fire is the user's decision", None
-    if last.get("scale") != effort.SCALE_REPLANS:
-        return "an open spend/wall-clock fire is owed to the user, not the agent", None
     if decision != "revise":
         return (f"decision {decision!r} on a fire is the user's; the agent may only revise. "
-                "A replans-scale fire spends no approved money or time, so do not ask the user: "
-                "acknowledge with --decision revise --by agent, change an operative field of the "
-                "plan (means/method/procedure/verify) that removes the critique's difference, get "
-                "the scoped review, then replan (at the replan ceiling with "
-                "--renegotiation-decision continue --renegotiated-by agent)"), None
+                "A fire at the difficulty line spends no approved money or time, so do not ask "
+                "the user: acknowledge with --decision revise --by agent after the difficulty "
+                "record is complete and normalized, change what the critique's difference "
+                "points at, then take the way out the directive names"), None
+    if understanding or not state.plan_path:
+        refused = _agent_self_decision_refusal(
+            state, last.get("difficulty_id_at_fire"),
+            event="the fire", consumed="an earlier fire", decision="fire")
+        return (refused, None) if refused is not None else (None, None)
+
     def load_doc():
         try:
             return load_plan(state.plan_path, strict=False)
@@ -1871,6 +1879,76 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     return d
 
 
+def _fire_stage(state: SessionState, fire: dict):
+    """The stage whose segment `fire` was raised on, None when it is not a stage fire."""
+    segment = fire.get("segment") or ""
+    if not segment.startswith(effort_segments.STAGE_PREFIX):
+        return None
+    uid = segment.removeprefix(effort_segments.STAGE_PREFIX)
+    return next((s for s in state.stages if state.stage_uid(s.index) == uid), None)
+
+
+def _revised_figure(args, state: SessionState, fire: dict, stage) -> dict:
+    """The figure a revise of a stage fire writes: `--minutes` / `--usd` when given, else each
+    scale's figure now agreed or, above it, what the stage's segment had spent when the fire
+    fired (minutes up to the whole minute, usd up to the cent)."""
+    import math
+    from . import sub_plan
+    agreed = sub_plan.agreed_figure(state, stage.index) or {}
+    actual = fire.get("arming_actual") or {}
+
+    def scale(flag, key, step):
+        given = getattr(args, flag, None)
+        if given is not None:
+            return float(given)
+        spent = math.ceil(float(actual.get(key) or 0.0) * step) / step
+        return max(spent, float(agreed.get(flag) or 0.0))
+
+    return {"minutes": scale("minutes", effort_segments.SCALE_MINUTES, 1),
+            "usd": scale("usd", effort_segments.SCALE_USD, 100)}
+
+
+def _revise_stage_estimate(args, state: SessionState, store: StateStore, fire: dict,
+                           stage, by: str) -> Directive | None:
+    """A revise of a new-form stage's fire writes the stage's correction through
+    `estimate-correct`, the only writer of the correction and its agreer: with authority agent
+    inside the margin of the figure the user approved, with authority user on the user's marked
+    answer. None when it was written, else the refusal to hand back."""
+    from types import SimpleNamespace
+    from .cli_approval import cmd_estimate_correct
+    figure = _revised_figure(args, state, fire, stage)
+    basis = (getattr(args, "note", None) or "").strip() or (
+        f"revised on the {fire.get('scale')} fire of stage {stage.index}")
+    result = cmd_estimate_correct(
+        SimpleNamespace(session=args.session, stage=stage.index, minutes=figure["minutes"],
+                        usd=figure["usd"], basis=basis, by=by),
+        store=store)
+    if result.ok:
+        return None
+    return Directive(
+        False, state.node, "fire_acknowledge",
+        f"fire-acknowledge --decision revise by {by} refused: the stage's correction was not "
+        f"written. {result.detail}",
+        marker=DIRECTIVE_ESCALATE_TO_USER if by.casefold() == AGENT_ACTOR else None,
+        data={"figure": figure, "estimate": (result.data or {}).get("estimate")})
+
+
+def _after_acknowledgment(state: SessionState) -> str:
+    """The step that is actually next once a fire is acknowledged: at DIAGNOSING the missing
+    phase of the difficulty record, else the way out its origin takes; elsewhere the next stage."""
+    if state.node != Node.DIAGNOSING.value:
+        return "next_stage"
+    diff = state.difficulty
+    if diff is None or diff.declaration is None:
+        return "declare"
+    if diff.investigation is None:
+        return "investigate"
+    if diff.critique is None:
+        return "critique"
+    from .cli_common import _fire_return_step
+    return _fire_return_step(state, diff.met_in).split(" ")[0]
+
+
 def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """The synchronous decision `gates.effort_fire_blockers` refuses dispatch/replan/
     submit_plan without: appends an "ack" onto the LAST entry of state.effort_fires
@@ -1922,6 +2000,16 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
                 data={"effort_fire": _effort_fire_escalation_data(state), "reason": refusal,
                       **(_fire_directive_figures(state) if last.get("arming_id") else {})},
             )
+    corrected = False
+    fire_stage = _fire_stage(state, last) if decision == "revise" else None
+    if fire_stage is not None and fire_stage.place is not None:
+        refusal = _revise_stage_estimate(args, state, store, last, fire_stage, args.by.strip())
+        if refusal is not None:
+            return refusal
+        state = _require(store, args.session)
+        last = gates.open_fire_record(state) or state.effort_fires[-1]
+        corrected = True
+    if by_agent:
         state.agent_ack_difficulty_ids.append(_difficulty_id(state.difficulty))
         # The replans-scale fire rebased every scale's baseline; the spend / wall-clock
         # progress it swallowed is still owed to the user's own fire.
@@ -1938,7 +2026,16 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     _acked_arming = effort_segments.find_arming(state.effort_segments, last.get("arming_id"))
     if _acked_arming is not None and _acked_arming["fire"]:
         _acked_arming["fire"]["ack"] = last["ack"]
-    if not by_agent and decision != "abandon" and _acked_arming is not None and _acked_arming["closed_at"] is None:
+    if (_acked_arming is not None and _acked_arming["closed_at"] is None
+            and decision != "abandon" and (corrected or by_agent)):
+        # The correction moved the figure the arming is judged against; the arming goes on
+        # with a fresh fire so a later overrun of the new figure fires again. An agent's revise
+        # of an understanding fire renews the arming with its budget, source, pricing and author.
+        if corrected:
+            _acked_arming["fire"] = None
+        elif effort_segments.phase_of(_acked_arming["segment"]) == "understanding":
+            _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_AGENT, args.by)
+    elif not by_agent and decision != "abandon" and _acked_arming is not None and _acked_arming["closed_at"] is None:
         _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_USER, args.by)
     state.log("fire_acknowledge", by=args.by, decision=decision)
     _record_backstop_crossing(state, crossing)
@@ -1954,7 +2051,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
                          marker="ESCALATE",
                          data={"fire": last})
     store.save(state)
-    next_action = "declare" if state.difficulty is not None else "next_stage"
+    next_action = _after_acknowledgment(state)
     return Directive(True, state.node, next_action,
                      f"fire acknowledged (decision={decision}); resuming",
                      data={"fire": last, **_crossing_data(crossing)})
@@ -2175,6 +2272,11 @@ def register(sub, add):
                          "check_invariants refuses RESOLVED unless every stage PASSED; "
                          "revise: route to the ordinary DIAGNOSING replan cycle")
     sp.add_argument("--note", default=None)
+    sp.add_argument("--minutes", type=float, default=None,
+                    help="revise of a new-form stage's fire: the corrected minutes (default: what "
+                         "the segment had spent, or the figure now agreed if higher)")
+    sp.add_argument("--usd", type=float, default=None,
+                    help="revise of a new-form stage's fire: the corrected usd (same default)")
     sp = add("check-coverage"); sp.add_argument("--session", required=True)
     sp.add_argument("--new", required=True,
                     help="corrected plan file to check against the active critique, "

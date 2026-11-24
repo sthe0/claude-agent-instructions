@@ -27,7 +27,10 @@ from . import (
 )
 from . import effort_segments
 from . import sub_plan
-from .cli_common import _book_and_judge, _closing_arming_figures, _figures_instruction, _judge_and_refuse
+from .cli_common import (
+    _book_and_judge, _closing_arming_figures, _effort_return, _effort_return_blockers,
+    _figures_instruction, _judge_and_refuse,
+)
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -726,6 +729,15 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _fire_refusal = _judge_and_refuse(state, store, args, effort_segments.ACT_SUBMIT_PLAN, "submit_plan")
     if _fire_refusal is not None:
         return _fire_refusal
+    returning_from_planning = _effort_return_blockers(state, "planning")
+    if returning_from_planning:
+        return Directive(
+            False, state.node, "noop",
+            "submit-plan of the first plan closes the difficulty a planning fire opened, and it is "
+            "not complete yet: " + "; ".join(returning_from_planning) + ". Finish the difficulty "
+            "record (declare, investigate, critique), have the user acknowledge the fire with "
+            "fire-acknowledge --by <user>, then submit the plan again",
+            data={"blockers": returning_from_planning})
     _flush_order_effort(state, store=store)
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
@@ -823,7 +835,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _write_plan_version_snapshot(store, state, _submitted_plan_bytes, _submitted_plan_digest,
                                  plan_path=plan_path)
     _submitted_plan_sha256 = _submitted_plan_digest
-    state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
+    if returning_from_planning is not None:
+        _effort_return(state, "first_plan_return")
+    else:
+        state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     _carry_note = ""
     if resubmitting:

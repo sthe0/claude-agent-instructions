@@ -12,6 +12,7 @@ that go red under it are the ones driving the record, the leaf frontmatter and t
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import re
 import time
@@ -21,17 +22,18 @@ from types import SimpleNamespace
 import pytest
 
 from agentctl import (
-    cli_common, cli_difficulty, cli_final, cli_order, cli_replan, cli_session, delivery_channel, effort,
+    cli, cli_common, cli_difficulty, cli_final, cli_order, cli_replan, cli_session, delivery_channel, effort,
     effort_segments, gates, runtime_host, understanding_pricing)
 from agentctl import cli_plan
 from agentctl.config import Thresholds
+from agentctl.dispatch import RunResult
 from agentctl.state import Declaration, Difficulty, Node, SessionState
 from agentctl.sub_plan import Estimate
 from lib import difficulty_phase, markdown_sections, understanding_effort
 from order_agreement_mutants import mutant, script_module  # noqa: F401  (autouse fixture)
 from test_order_agreement import (  # noqa: F401  (home, ostore and armed_env are fixtures)
-    SESSION, _agree, _classify, _confirm_delivery, _marker_of, _user_answers, _wire_answer_hook, armed_env, home,
-    ostore)
+    SESSION, _agree, _classify, _confirm_delivery, _marker_of, _plan, _user_answers, _wire_answer_hook, armed_env,
+    home, ostore)
 from test_order_agreement import _start as _start_session
 from test_order_phase import SIDES, _draft, _present, _review, _submit
 
@@ -1381,38 +1383,108 @@ def test_a_user_acknowledging_an_understanding_fire_renews_the_arming(
     assert state.effort_fires[-1]["ack"]["decision"] == decision
 
 
+def _difficulty_cycle(store, factor: str = "an order read without its type's record") -> None:
+    """Declare, investigate, critique and normalize the open difficulty record (the cycle a fire opens)."""
+    assert cli_difficulty.cmd_declare(
+        SimpleNamespace(session=SESSION, expected="the order agreed within its estimate",
+                        actual="the understanding ran past its estimate", mismatch="the type record was not read"),
+        store=store).ok
+    assert cli_difficulty.cmd_investigate(
+        SimpleNamespace(session=SESSION, localized_expectation="the record names the requirements",
+                        localized_actual="the requirements were found by asking", hypotheses=["h one", "h two"]),
+        store=store).ok
+    assert cli_difficulty.cmd_critique(
+        SimpleNamespace(session=SESSION, functional_ground="the type record is the order's functional place",
+                        replanning_task="read the record before the draft", failure_address="resource",
+                        cause_category="implementation_defect", machinery_induced="false", mechanism="none",
+                        functional_place="verification",
+                        differences_to_remove=["the record is read before the draft is written"]), store=store).ok
+    assert cli_difficulty.cmd_normalize(
+        SimpleNamespace(session=SESSION, factor=factor, level="note"), store=store).ok
+
+
+def _checks_pass(argv, cwd=None, *, timeout=None):
+    """Every check passes and every negative control, the command `false`, fails as it should."""
+    return RunResult(1 if argv[-1].strip().endswith("false") else 0, "", "")
+
+
+def _agent_acknowledges(store, decision: str = "revise"):
+    return cli_replan.cmd_fire_acknowledge(
+        SimpleNamespace(session=SESSION, by="agent", decision=decision, note="the cycle is closed"), store=store)
+
+
 def test_the_whole_understanding_effort_across_a_renewal_is_what_resolve_hands_to_the_record(
-        ostore, armed_env, tmp_path, monkeypatch):
-    """Fire, a user's acknowledgment, more work, a second fire, the agreement, then the write-back
-    `cmd_resolve` runs: the figures handed to the record are the effort of both armings."""
+        ostore, home, armed_env, tmp_path, monkeypatch):
+    """Fire, a user's acknowledgment and renewal, more work, a second fire and its difficulty cycle, the
+    agent's acknowledgment, the order agreed, a plan approved, a stage passed, `verify-final` and the
+    `resolve` verb: the figures on the type record are the effort of every understanding arming."""
+    from conftest import STAGE_OBSERVATIONS
     path = _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0, confirmer="user"))
     leaf = Path(_understanding(ostore)["pricing"]["type"]["path"])
+    assert ostore.load(SESSION).node == "DIAGNOSING"
     assert cli_replan.cmd_fire_acknowledge(
         SimpleNamespace(session=SESSION, by="user", decision="continue", note="go on"), store=ostore).ok
-    _book(ostore, usd=_overrun(3.0))
+    assert ostore.load(SESSION).node == "DIAGNOSING", "a user's acknowledgment clears the fire, not the difficulty"
+    _difficulty_cycle(ostore)
     assert _submit(ostore, path).ok
-    assert _understanding(ostore)["fire"] is not None
+    assert ostore.load(SESSION).node == "ROUTED"
+    _book(ostore, usd=_overrun(3.0))
+    second = _submit(ostore, path)
+    assert second.ok and second.data["route"]["route"] == "agent_planning_difficulty_cycle"
+    state = ostore.load(SESSION)
+    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "understanding"
+    _difficulty_cycle(ostore)
+    acknowledged = _agent_acknowledges(ostore)
+    assert acknowledged.ok, acknowledged.detail
+    returned = _submit(ostore, path)
+    assert returned.ok, returned.detail
+    assert ostore.load(SESSION).node == "ROUTED"
     _agreed_order(ostore, tmp_path, path)
 
     armings = [a for a in ostore.load(SESSION).effort_segments["armings"]
                if a["segment"] == effort_segments.UNDERSTANDING]
-    assert len(armings) == 2 and all(a["closed_at"] is not None for a in armings)
+    assert len(armings) >= 3 and all(a["closed_at"] is not None for a in armings)
     per_arming = [effort_segments.arming_actual(a) for a in armings]
-    assert all(figures[USD] >= _overrun(3.0) for figures in per_arming)
     whole = {scale: sum(figures[scale] for figures in per_arming) for scale in (USD, MINUTES)}
+    assert whole[USD] >= 2 * _overrun(3.0)
 
-    calls = []
+    plan = _plan(tmp_path)
+    assert cli.cmd_plan(SimpleNamespace(session=SESSION), store=ostore).ok
+    submitted = cli.cmd_submit_plan(SimpleNamespace(session=SESSION, plan=plan), store=ostore)
+    assert submitted.ok, (submitted.detail, submitted.data)
+    cli.cmd_order_raise(SimpleNamespace(session=SESSION, id="O1", element="the release is one command"),
+                        store=ostore)
+    cli.cmd_order_dispose(SimpleNamespace(session=SESSION, id="O1", as_="covered", stage=1, reason="",
+                                          plan=plan), store=ostore)
+    reviewed = cli.cmd_plan_review(SimpleNamespace(
+        session=SESSION, verdict="pass", reviewer="thinker", concerns=None, note="", target=None,
+        plan_digest=hashlib.sha256(Path(plan).read_bytes()).hexdigest(), scope=None), store=ostore)
+    assert reviewed.ok, reviewed.detail
+    approved = cli.cmd_approve(SimpleNamespace(session=SESSION, by="user"), store=ostore)
+    assert approved.ok, (approved.detail, approved.data.get("blockers"))
+    cli.cmd_partition(SimpleNamespace(session=SESSION, m1=False, m2=False, m3=False, m4=False,
+                                      m3_severe=False, m4_severe=False), store=ostore)
+    cli.cmd_next_stage(SimpleNamespace(session=SESSION), store=ostore)
+    passed = cli.cmd_record_result(SimpleNamespace(
+        session=SESSION, status="passed", actual="ok", control="reviewed: ok", observation=STAGE_OBSERVATIONS[0],
+        cost_log=None), store=ostore, runner=_checks_pass)
+    after = ostore.load(SESSION)
+    assert passed.ok, (after.stage(1).outcome.status, after.stage(1).outcome.actual,
+                       [(f["segment"], f["scale"]) for f in after.effort_fires], passed.detail[:80],
+                       after.stage(1).outcome.actual.replace("\n", " ")[:400])
+    verified = cli.cmd_verify_final(SimpleNamespace(session=SESSION), store=ostore, runner=_checks_pass)
+    assert verified.ok, (verified.detail[:200], verified.data.get("blockers"))
+    for phase, note in (("searched", ""), ("skipped", "test fixture, nothing to record")):
+        cli.cmd_plugin_record(SimpleNamespace(session=SESSION, plugin="experience", phase=phase, note=note),
+                              store=ostore)
+    monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
+    done = cli.cmd_resolve(SimpleNamespace(session=SESSION, by="user", quality=5, quality_by="user-confirmed",
+                                           quality_note=None, cost_log=None), store=ostore)
+    assert done.ok, (done.detail, done.data)
 
-    def recording(argv):
-        calls.append(argv)
-        return understanding_pricing.subprocess_runner(argv)
-
-    outcome = cli_final._write_understanding_actual(ostore.load(SESSION), recording)
-    assert outcome["written"] == ["actual", "estimate"] and outcome["skipped"] is None
-    actual_call = next(argv for argv in calls if "actual" in argv)
-    assert float(actual_call[actual_call.index("--usd") + 1]) == pytest.approx(whole[USD])
+    written = done.data["understanding_actual"]
+    assert written["written"] == ["actual", "estimate"] and written["skipped"] is None
     block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
     (row,) = block["actuals"]
     assert row["usd"] == pytest.approx(whole[USD]) and row.get("minutes", 0.0) == pytest.approx(whole[MINUTES])
-    assert ("--minutes" in actual_call) == (whole[MINUTES] > 0)
-    assert outcome["replaced_confirmed"] == {"confirmer": "user", "minutes": 30.0, "usd": 3.0}
+    assert written["replaced_confirmed"] == {"confirmer": "user", "minutes": 30.0, "usd": 3.0}

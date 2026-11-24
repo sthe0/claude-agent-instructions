@@ -69,6 +69,7 @@ ACT_SPAWNED_PLANNER_ACT = "spawned-planner-act"
 ACT_SPAWNED_PLANNER_RUN_END = "spawned-planner-run-end"
 ACT_APPROVE_BY_USER = "approve-by-user"
 ACT_FIRE_ACK_BY_USER = "fire-acknowledge-by-user"
+ACT_FIRE_ACK_BY_AGENT = "fire-acknowledge-by-agent"
 ACT_ORDER_AGREE = "order-agree"
 ACT_ORDER_SUBMIT = "order-submit"
 ACT_ORDER_REVIEW = "order-review"
@@ -592,6 +593,9 @@ def lines_to_fire(arming: dict, act: str, multiple: float, floor: dict | None) -
     migrated window, else the scales each line has crossed and not yet fired."""
     if act not in judging_acts_of(arming["segment"]) or arming["budget_source"] == SOURCE_WINDOW:
         return {LINE_DIFFICULTY: [], LINE_USER: []}
+    if lines_coincide(arming):
+        crossed = judge(arming, multiple, floor, LINE_DIFFICULTY)
+        return {LINE_DIFFICULTY: [], LINE_USER: unfired_scales(arming, crossed, LINE_USER)}
     return {line: unfired_scales(arming, judge(arming, multiple, floor, line), line)
             for line in (LINE_DIFFICULTY, LINE_USER)}
 
@@ -600,6 +604,39 @@ def scales_to_fire(arming: dict, act: str, multiple: float, floor: dict | None) 
     """The scales either line fires (the union of `lines_to_fire`)."""
     fires = lines_to_fire(arming, act, multiple, floor)
     return [scale for scale in SCALES if scale in fires[LINE_DIFFICULTY] or scale in fires[LINE_USER]]
+
+
+def lines_coincide(arming: dict) -> bool:
+    """Whether the arming's two lines are one line, the user's. Understanding has no user line, so
+    its fires are at the difficulty line only; any other segment with no figure of its own for the
+    user (planning, an old-form stage, a stage with no agreed correction) is judged once, against
+    the figure the user approved, and a crossing of it is the user's."""
+    return arming["segment"] != UNDERSTANDING and not arming.get("user_budget")
+
+
+def phase_of(segment: str | None) -> str | None:
+    """The phase of the work a segment's difficulty is met in (`difficulty_phase.PHASES`); None for
+    a segment with no phase (closing, an absent one)."""
+    if segment == UNDERSTANDING:
+        return "understanding"
+    if segment == PLANNING:
+        return "planning"
+    return "stage" if segment and segment.startswith(STAGE_PREFIX) else None
+
+
+AUTHORITY_AGENT = "agent"
+AUTHORITY_USER = "user"
+
+
+def line_acknowledged_by(fire: dict) -> str:
+    """Who may acknowledge `fire`, read from its `line`: a fire at the difficulty line only is the
+    agent's, a fire at the user line the user's decision. A record that predates the field names
+    no line; its scale stands in (a replans fire was always the agent's, a spend or wall-clock
+    fire the user's). The one place that decides it."""
+    line = fire.get("line")
+    if line is None:
+        return AUTHORITY_AGENT if fire.get("scale") == "replans" else AUTHORITY_USER
+    return AUTHORITY_AGENT if line == LINE_DIFFICULTY else AUTHORITY_USER
 
 
 def note_fire(arming: dict, scales: list[str], at: float, line: str = LINE_DIFFICULTY) -> None:

@@ -524,7 +524,8 @@ def test_fire_raised_in_a_replan_cycle_stays_open_until_the_replans_approval(eng
     assert gates.open_fire_record(eng.state()) is not None
     assert eng.run("approve", session="s", by="agent")["ok"] is False
     assert gates.open_fire_record(eng.state()) is not None
-    assert eng.run("approve", session="s", by="user")["ok"]
+    assert eng.state().node == "DIAGNOSING"
+    assert eng.run("fire_acknowledge", session="s", by="user", decision="continue")["ok"]
     assert gates.open_fire_record(eng.state()) is None
 
 
@@ -1051,7 +1052,7 @@ def test_continuation_refusal_of_a_self_approval_comes_after_judging_the_live_st
     refused = eng.run("approve", session="s", by="agent")
     assert refused["ok"] is False
     state = eng.state()
-    assert state.node == "PLAN_READY"
+    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "stage"
     [fire] = [f for f in state.effort_fires if f.get("arming_id") == held["arming_id"]]
     assert seg.SCALE_USD in fire["scales"] and gates.open_fire_record(state) is not None
 

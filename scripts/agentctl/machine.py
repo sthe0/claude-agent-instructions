@@ -29,6 +29,10 @@ The graph (happy path + carve-outs):
   DIAGNOSING --(replan substantive)        direct set to PLAN_READY (re-arm plan-approval gate)
   PLAN_READY --revise_plan--> PLAN_READY   (pre-approval revision: resubmit a corrected plan)
   PLAN_READY --review_trigger--> DIAGNOSING (a review-cost trigger crossed: gates.review_trigger)
+  ROUTED --understanding_fire--> DIAGNOSING  (an effort fire on understanding the order)
+  PLANNING --planning_fire--> DIAGNOSING     (an effort fire on planning)
+  DIAGNOSING --understanding_return--> ROUTED   (order-submit of the revised draft closes it)
+  DIAGNOSING --first_plan_return--> PLAN_READY  (submit-plan of the first plan closes it)
   RESOLUTION --resolve--> RESOLVED      (resolution gate passes)
   RESOLUTION --reject--> DIAGNOSING     (user rejects the delivery: re-open the difficulty cycle)
   any --block--> BLOCKED ; BLOCKED --unblock--> <prior>
@@ -76,6 +80,14 @@ TRANSITIONS: dict[str, tuple[str, str]] = {
     # second tuple on submit_plan's key (the one-tuple-per-key table can't hold it).
     "revise_plan": (Node.PLAN_READY.value, Node.PLAN_READY.value),
     "review_trigger": (Node.PLAN_READY.value, Node.DIAGNOSING.value),
+    # An effort fire on understanding the order (ROUTED) or on planning (PLANNING) enters the
+    # difficulty cycle at its own node; the cycle returns to the order draft or to the first
+    # plan, not to a stage (cli_common._enter_effort_diagnosis; the returns are fired by
+    # cmd_order_submit and cmd_submit_plan).
+    "understanding_fire": (Node.ROUTED.value, Node.DIAGNOSING.value),
+    "planning_fire": (Node.PLANNING.value, Node.DIAGNOSING.value),
+    "understanding_return": (Node.DIAGNOSING.value, Node.ROUTED.value),
+    "first_plan_return": (Node.DIAGNOSING.value, Node.PLAN_READY.value),
     # Sub-plan stack edges: push starts a fresh child cycle; pop restores the parent.
     # "no auto-pop across an unresolved child" is structural — pop_subplan's frm is
     # RESOLVED, and check_invariants already requires resolution.passed at RESOLVED.
