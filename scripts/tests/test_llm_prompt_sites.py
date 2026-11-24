@@ -756,7 +756,7 @@ def launch_population(root: Path = REPO) -> "set[str]":
 def _facts() -> dict:
     from lib import host_llm
 
-    return host_llm.SINGLE_CALL_SITES
+    return getattr(host_llm, "SINGLE_CALL_SITES", {})
 
 
 def parity_events(script: str) -> "set[str]":

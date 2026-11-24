@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import tempfile
 import tomllib
 from pathlib import Path
@@ -126,8 +127,6 @@ def config_content() -> str:
 
 def not_ready() -> tuple[str, str] | None:
     """(code, detail) of what keeps a single call from launching under OpenCode, else None."""
-    import shutil
-
     if shutil.which("opencode") is None:
         return "binary_missing", "`opencode` is not on PATH"
     if provider_config() is None:
