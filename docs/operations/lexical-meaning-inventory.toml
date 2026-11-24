@@ -172,6 +172,18 @@ ground = "_PUSH_RIGHTS.sub rewrites permission/denied wording in a gate message 
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/lib/opencode_env.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles _COMMENTS, which matches a JSON string literal or a // or /* */ comment so JSONC comments can be dropped before parsing; JSON syntax, never meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/opencode_env.py::user_config_provider::pattern.sub"]
+class = "structural"
+ground = "_COMMENTS.sub removes the JSONC comments of the user's OpenCode config before json.loads reads its provider block; syntax stripping, no verdict depends on the match."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/lib/landing_gate.py::is_valid_sha::pattern.fullmatch"]
 class = "structural"
 ground = "_SHA.fullmatch tests the 40/64-hex object-id shape; a format check."
