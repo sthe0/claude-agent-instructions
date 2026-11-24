@@ -12,7 +12,11 @@ rows without a session or a transcript: exit 1 on deny, printing ``deny: <script
 allow; exit 2 with ``missing-script: <path>`` when a row's script does not resolve.
 
 The rows are the Core parity table's, plus each non-home layer root's, plus the table-shaped file named
-by ``AGENT_GATE_EXTRA_ROWS``. Plugin shim, rows and combination: ``lib/opencode_events.py``.
+by ``AGENT_GATE_EXTRA_ROWS``. A parity table without a PreToolUse row for the OpenCode host is an error
+(exit 2), not an allow-all. A tool id that is no built-in, no plugin tool (``AGENT_GATE_PLUGIN_TOOLS``) and
+no tool of an MCP server named in ``AGENT_GATE_MCP_SERVERS`` is refused whatever rows exist; a ``patch``
+call is judged per file as the Claude ``Write`` / ``Edit`` call it stands for. Plugin shim, rows and
+combination: ``lib/opencode_events.py``.
 """
 from __future__ import annotations
 
@@ -41,22 +45,34 @@ def _read_json(source) -> dict:
     return data
 
 
-def _decide(event: str, data: dict, roots: list[Path], transcript: Path | None) -> oe.Decision:
+def _decide_call(event: str, data: dict, rows: list[oe.Row], transcript: Path | None) -> oe.Decision:
     cwd = data.get("cwd") or os.getcwd()
-    plugin = oe.plugin_tools()
     payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"), cwd=cwd,
-                               plugin=plugin)
+                               plugin=oe.plugin_tools(), servers=oe.mcp_servers())
     if transcript is not None:
         oe.append_transcript(transcript, oe.transcript_records(event, {**data, "cwd": cwd}, payload["session_id"]))
-    rows = oe.load_rows(roots, os.environ.get(oe.EXTRA_ROWS_ENV))
     if event == "tool.execute.before":
         tool = data.get("tool") or ""
         if oe.denied_by_name(tool):
             return oe.Decision(True, f"{tool} is denied by the OpenCode gate adapter", "opencode-gate-bridge")
-        if payload["tool_name"] is None and oe.rows_for(rows, "PreToolUse", None):
-            return oe.Decision(True, f"tool {tool!r} has no Claude name and a denying row exists; refused",
+        if payload["tool_name"] is None:
+            return oe.Decision(True, f"tool {tool!r} is neither a built-in tool, a plugin tool nor a tool of "
+                                     f"a configured MCP server; refused", "opencode-gate-bridge")
+    return oe.run_rows(oe.rows_for(rows, payload["hook_event_name"], payload.get("tool_name")), payload)
+
+
+def _decide(event: str, data: dict, roots: list[Path], transcript: Path | None) -> oe.Decision:
+    rows = oe.load_rows(roots, os.environ.get(oe.EXTRA_ROWS_ENV))
+    if event == "tool.execute.before":
+        oe.require_pretool_rows(rows)
+    try:
+        calls = oe.patch_calls(data) if event.startswith("tool.execute.") else [data]
+    except oe.UnreadablePatch as error:
+        if event == "tool.execute.before":
+            return oe.Decision(True, f"patch refused, its file operations are unreadable: {error}",
                                "opencode-gate-bridge")
-    decision = oe.run_rows(oe.rows_for(rows, payload["hook_event_name"], payload.get("tool_name")), payload)
+        return oe.Decision()
+    decision = oe.combine([_decide_call(event, call, rows, transcript) for call in calls])
     if event == "session.created":
         from lib import hook_parity
 

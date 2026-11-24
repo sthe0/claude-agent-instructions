@@ -22,6 +22,29 @@ that mechanism was seen to refuse.
   Limits: a `shell` call run by the user or from the TUI (`!`) is not bound to an engine session,
   and Code Mode `execute` reaches no shell.
 
+### What the shim refuses, and what it reports
+
+- **Tool ids.** A tool id is judged as the Claude tool whose rows see it: a built-in through
+  `BUILTIN_TOOLS` in `scripts/lib/opencode_events.py` (the gpt model family is offered `patch`, not
+  `edit` and `write`; the shim judges each file of a patch as a `Write` or `Edit` call), a plugin
+  tool named in `AGENT_GATE_PLUGIN_TOOLS`, a tool of an MCP server named in `AGENT_GATE_MCP_SERVERS`
+  (comma separated; the launcher passes the servers of the session's config). Any other id is refused
+  whatever rows exist, because the parity table has no matcherless PreToolUse row. Case A5 of the adapter
+  probe phase re-checks the ids the pinned binary offers.
+- **Grep.** The credential check compares real paths (symlinks resolved on both sides, a tail that does
+  not exist yet kept), against the session directory (`ctx.location.directory`, else the process cwd).
+  A result is filtered per file block; when the search root holds a credential path and the text is not
+  the recognised `Found N matches` shape, the whole text is withheld. `result.content[].text`,
+  `result.output` and the other result fields are all filtered (a root above a credential drops the
+  others); what OpenCode 2.3.2 sends to the model is `content[].text`.
+- **Setup.** OpenCode skips, silently, a plugin whose setup throws, so setup does not throw. When
+  `AGENT_GATE_SETUP_MARKER` names a file, the shim writes `{"status": "ok" | "failed", "failures": [...]}`
+  to it once setup ran; a launcher (the stage-9/10 preflight) treats a missing marker or `failed` as an
+  unusable gate. A failed bridge leaves hooks that refuse every tool call; a `shell.create.before` that
+  cannot register fails the marker and refuses `shell`. An unwritable `AGENT_GATE_LOG` is ignored.
+- **Parity with Claude's hook protocol, on purpose.** A hook that times out or exits with a code other than
+  0 or 2 allows the call, and a bridge failure on the turn-end event ends the turn.
+
 ## Row format
 
 | Key | Meaning |

@@ -22,6 +22,7 @@ GATES_DIR = "gdir"
 GATES_PLUGIN = "file://{root}/" + GATES_DIR
 PROBE_PLUGIN = "file://{root}/pdir"
 DENY_REASON = "adapter-probe-deny"
+PROBE_MCP_SERVERS = ("probesrv", "probecm")
 
 
 def shim_files(*, inert: bool) -> dict[str, str]:
@@ -73,7 +74,8 @@ def gate_env(**more: str) -> dict[str, str]:
     """The environment that makes the shim reach the bridge and write its log under the run root."""
     env = {"AGENT_GATE_BRIDGE": str(BRIDGE), "AGENT_GATE_PYTHON": sys.executable,
            "AGENT_GATE_LOG": "{root}/gates.log", "AGENT_GATE_EXTRA_ROWS": "{root}/extra-rows.toml",
-           "AGENT_OPENCODE_HOME": "{root}/opencode-home"}
+           "AGENT_OPENCODE_HOME": "{root}/opencode-home",
+           "AGENT_GATE_MCP_SERVERS": ",".join(PROBE_MCP_SERVERS), "AGENT_GATE_SETUP_MARKER": "{root}/setup.marker"}
     env.update(more)
     return env
 

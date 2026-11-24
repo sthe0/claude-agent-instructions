@@ -38,6 +38,7 @@ OWN_SESSION_ENV = "AGENTCTL_OWN_SESSION"
 INTEGRATION_ENV = "AGENT_OPENCODE_HOME"
 EXTRA_ROWS_ENV = "AGENT_GATE_EXTRA_ROWS"
 PLUGIN_TOOLS_ENV = "AGENT_GATE_PLUGIN_TOOLS"
+MCP_SERVERS_ENV = "AGENT_GATE_MCP_SERVERS"
 SETTINGS_CREDENTIAL_KEY = "opencode-credential-file"
 SETTINGS_FILE = "opencode.local.toml"
 
@@ -45,6 +46,9 @@ BUILTIN_TOOLS = {
     "read": "Read", "edit": "Edit", "write": "Write", "shell": "Bash", "glob": "Glob", "grep": "Grep",
     "webfetch": "WebFetch", "websearch": "WebSearch", "question": "AskUserQuestion", "subagent": "Agent",
     "skill": "Skill", "execute": "Bash",
+    # The model-family variant of edit/write (offered instead of them to the gpt family, probe A5); the
+    # bridge hands the rows one Edit or Write call per file the patch names, see ``patch_calls``.
+    "patch": "Edit",
 }
 DENIED_BY_NAME = frozenset({"opencode_worktree_create", "opencode_worktree_remove", "opencode_session_move"})
 
@@ -57,6 +61,8 @@ PATH_TOOL_NAMES = {
     "mcp:probesrv:touch": "probesrv_touch", "plugin-tool:probe_tool": "probe_tool",
     "child-run": "shell", "root:question": "question",
 }
+# Paths a model family reaches under another tool id (probe A5 lists the ids each family is offered).
+FAMILY_TOOL_PATHS = {"root:patch": "patch"}
 PLUGIN_TOOLS_OF_PATHS = ("probe_tool",)
 DISABLED_PATHS: dict[str, str] = {}
 
@@ -98,20 +104,83 @@ def plugin_tools(environ=None) -> frozenset[str]:
     return frozenset(t for t in (env.get(PLUGIN_TOOLS_ENV) or "").split(",") if t)
 
 
-def claude_tool(name: str, plugin: frozenset[str] = frozenset()) -> str | None:
-    """The Claude tool name for an OpenCode tool, or None when no name is known.
+def mcp_servers(environ=None) -> frozenset[str]:
+    """The MCP server names of the session's config, as the launcher that generated it lists them."""
+    env = os.environ if environ is None else environ
+    return frozenset(s for s in (env.get(MCP_SERVERS_ENV) or "").split(",") if s)
 
-    ``<server>_<tool>`` is an MCP tool and a tool the plugin registers is ``plugin__<id>``; the two
-    differ only by whether the name is in ``plugin``."""
+
+def claude_tool(name: str, plugin: frozenset[str] = frozenset(),
+                servers: frozenset[str] = frozenset()) -> str | None:
+    """The Claude tool name for an OpenCode tool, or None when the tool is not one the session knows.
+
+    A built-in maps by ``BUILTIN_TOOLS``, a tool the plugin registers is ``plugin__<id>``, and an MCP
+    tool is ``<server>_<tool>`` for a server named in ``servers`` (the longest such server wins). A name
+    that is none of these has no Claude name; an underscore alone does not make an MCP tool."""
     if name in BUILTIN_TOOLS:
         return BUILTIN_TOOLS[name]
     if name in plugin:
         return f"plugin__{name}"
-    if "_" in name:
-        server, tool = name.split("_", 1)
-        if server and tool:
+    for server in sorted(servers, key=len, reverse=True):
+        tool = name[len(server) + 1:]
+        if name.startswith(server + "_") and tool:
             return f"mcp__{server}__{tool}"
     return None
+
+
+class UnreadablePatch(ValueError):
+    """A ``patch`` input whose file operations the gates cannot read."""
+
+
+_PATCH_FRAME = ("*** Begin Patch", "*** End Patch", "*** End of File")
+_PATCH_OPS = (("*** Add File: ", "write"), ("*** Update File: ", "edit"), ("*** Delete File: ", "edit"),
+              ("*** Move to: ", "write"))
+
+
+def patch_operations(patch_text) -> list[tuple[str, str, str]]:
+    """``(tool, path, content)`` per file operation of an OpenCode ``patch`` text, in order: ``write`` for
+    an added file or a rename's target, ``edit`` for an updated or deleted file. Raises ``UnreadablePatch``
+    when the text names no file or carries a ``***`` line that is neither a frame line nor an operation:
+    a gate that cannot read what the patch touches must refuse it, not pass it."""
+    if not isinstance(patch_text, str):
+        raise UnreadablePatch("the patch text is not a string")
+    operations: list[tuple[str, str, list[str]]] = []
+    adding = False
+    for line in patch_text.splitlines():
+        for prefix, tool in _PATCH_OPS:
+            if line.startswith(prefix):
+                path = line[len(prefix):].strip()
+                if not path:
+                    raise UnreadablePatch(f"{prefix.strip()} names no path")
+                operations.append((tool, path, []))
+                adding = prefix == _PATCH_OPS[0][0]
+                break
+        else:
+            if line.startswith("***") and line.strip() not in _PATCH_FRAME:
+                raise UnreadablePatch(f"unknown patch line {line[:40]!r}")
+            if adding and line.startswith("+"):
+                operations[-1][2].append(line[1:])
+    if not operations:
+        raise UnreadablePatch("the patch names no file")
+    return [(tool, path, "\n".join(body)) for tool, path, body in operations]
+
+
+def patch_calls(data: dict) -> list[dict]:
+    """The event ``data`` of one ``patch`` call as one ``write``/``edit`` event per file it names, so
+    the rows see the Claude tool and ``file_path`` they are written against. Other events are returned
+    as they are. The first call keeps the call id, later ones carry ``<id>#<n>``."""
+    if data.get("tool") != "patch":
+        return [data]
+    args = data.get("input") if isinstance(data.get("input"), dict) else {}
+    calls = []
+    for index, (tool, path, content) in enumerate(patch_operations(args.get("patchText"))):
+        call = {**data, "tool": tool, "input": {"path": path}}
+        if tool == "write":
+            call["input"]["content"] = content
+        if index:
+            call["id"] = f"{data.get('id')}#{index}"
+        calls.append(call)
+    return calls
 
 
 def claude_input(tool: str, args: dict) -> dict:
@@ -182,7 +251,7 @@ class Row:
     origin: str
 
     def matches(self, tool_name: str | None) -> bool:
-        if not self.matcher:
+        if not self.matcher or self.matcher == "*":  # Claude: an empty or "*" matcher matches every tool
             return True
         return tool_name is not None and re.fullmatch(self.matcher, tool_name) is not None
 
@@ -247,6 +316,16 @@ def load_rows(layer_roots: list[Path] | None = None, extra_rows_file: str | None
 
 def rows_for(rows: list[Row], event: str, tool_name: str | None) -> list[Row]:
     return [r for r in rows if r.event == event and r.matches(tool_name)]
+
+
+class EmptyParityTable(Exception):
+    """The Core parity table yields no PreToolUse row for the OpenCode host: an empty table is a broken
+    install, and a tool call that no row sees must not pass as allowed."""
+
+
+def require_pretool_rows(rows: list[Row]) -> None:
+    if not any(r.origin == "core" and r.event == "PreToolUse" for r in rows):
+        raise EmptyParityTable("the parity table has no PreToolUse row for the opencode host")
 
 
 @dataclass
@@ -340,7 +419,7 @@ def now() -> str:
 
 
 def build_payload(event: str, data: dict, *, transcript_path: Path, cwd: str, plugin: frozenset[str],
-                  environ=None) -> dict:
+                  environ=None, servers: frozenset[str] = frozenset()) -> dict:
     """The Claude-shaped payload of an OpenCode event ``data`` (the hook input, as the probe recorded it).
     The tool name is None when no Claude name is known for the tool."""
     opencode_session = data.get("sessionID") or ""
@@ -349,7 +428,7 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, cwd: str, pl
                "hook_event_name": EVENT_OF[event]}
     if event in ("tool.execute.before", "tool.execute.after"):
         tool, args = data.get("tool") or "", data.get("input") or {}
-        payload["tool_name"] = claude_tool(tool, plugin)
+        payload["tool_name"] = claude_tool(tool, plugin, servers)
         payload["tool_input"] = claude_input(tool, args)
         payload["tool_use_id"] = data.get("id")
         if event == "tool.execute.after":
@@ -373,7 +452,7 @@ def transcript_records(event: str, data: dict, session: str) -> list[dict]:
         return [{**base, "type": "user", "uuid": str(uuid.uuid4()),
                  "message": {"role": "user", "content": [{"type": "text", "text": text}]}}]
     tool, args = data.get("tool") or "", data.get("input") or {}
-    name = claude_tool(tool, plugin_tools()) or tool
+    name = claude_tool(tool, plugin_tools(), mcp_servers()) or tool
     if event == "tool.execute.before":
         return [{**base, "type": "assistant", "uuid": str(uuid.uuid4()),
                  "message": {"role": "assistant", "content": [
