@@ -38,8 +38,8 @@ from .submission import (
     order_understanding_violations,
 )
 from .cli_common import (
-    REPO_ROOT, _book_and_judge, _close_understanding, _order_draft_customer_id, _renew_order_agreement,
-    _require,
+    REPO_ROOT, _book_and_judge, _close_understanding, _effort_fire_escalation_data, _order_draft_customer_id,
+    _renew_order_agreement, _require,
 )
 
 LEAVES_ROOT = REPO_ROOT / "memory-global" / "leaves"
@@ -89,11 +89,13 @@ def _price_understanding(state: SessionState, order) -> None:
     effort_segments.reprice_arming(arming, pricing.budget, pricing.source, pricing.author, pricing.as_record())
 
 
-def _judge_understanding(state: SessionState, store: StateStore, args, act: str) -> None:
-    """Book and judge an act of understanding the order. A session holding no understanding segment
-    (unarmed, old-form, or past its agreement) books nothing here, as before the segment existed."""
+def _judge_understanding(state: SessionState, store: StateStore, args, act: str) -> dict | None:
+    """Book and judge an act of understanding the order, and return the fire it raised. A session
+    holding no understanding segment (unarmed, old-form, or past its agreement) books nothing here,
+    as before the segment existed."""
     if effort_segments.open_arming_of(state.effort_segments, effort_segments.UNDERSTANDING) is not None:
-        _book_and_judge(state, store, args, act)
+        return _book_and_judge(state, store, args, act)
+    return None
 
 
 def _executor_side_violations(meta, state: SessionState) -> list[str]:
@@ -267,14 +269,16 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
     state.order_beside = _beside_records(doc)
     _price_understanding(state, doc.meta.order)
     state.log("order_submit", plan=args.plan, understanding_sha256=state.order_draft_sha256)
-    _judge_understanding(state, store, args, effort_segments.ACT_ORDER_SUBMIT)
+    fire = _judge_understanding(state, store, args, effort_segments.ACT_ORDER_SUBMIT)
     store.save(state)
-    return Directive(
-        True, state.node, "continue",
-        f"order draft {args.plan} submitted (understanding {state.order_draft_sha256[:12]}); "
-        "next: plan-review --scope order, then present-plan --kind order",
-        data={"order_draft_path": args.plan, "understanding_sha256": state.order_draft_sha256},
-    )
+    data = {"order_draft_path": args.plan, "understanding_sha256": state.order_draft_sha256}
+    detail = (f"order draft {args.plan} submitted (understanding {state.order_draft_sha256[:12]}); "
+              "next: plan-review --scope order, then present-plan --kind order")
+    if fire is not None:
+        data["effort_fire"] = _effort_fire_escalation_data(state)
+        detail += ("; this submission raised an effort-divergence fire on understanding the order "
+                   f"(scales: {', '.join(fire.get('scales') or [fire.get('scale')])}), open until it is acknowledged")
+    return Directive(True, state.node, "continue", detail, data=data)
 
 
 def _user_answered_after(state_file: Path, since: float, marker: str) -> "tuple[bool, answer_ledger.LedgerRead]":

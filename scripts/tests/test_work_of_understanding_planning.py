@@ -21,8 +21,8 @@ from types import SimpleNamespace
 import pytest
 
 from agentctl import (
-    cli_common, cli_difficulty, cli_final, cli_order, delivery_channel, effort, effort_segments,
-    gates, runtime_host, understanding_pricing)
+    cli_common, cli_difficulty, cli_final, cli_order, cli_replan, cli_session, delivery_channel, effort,
+    effort_segments, gates, runtime_host, understanding_pricing)
 from agentctl import cli_plan
 from agentctl.config import Thresholds
 from agentctl.state import Declaration, Difficulty, Node, SessionState
@@ -246,6 +246,9 @@ def test_section_span_ends_at_the_next_heading_and_matches_a_whole_word():
     assert text[start:end] == "## Cost\nbody\n\n"
     assert markdown_sections.section_span(text, "Absent") is None
     assert markdown_sections.section_span(text, "Plan") == (text.index("## Plan"), len(text))
+    suffixed = "# t\n\n## Cost notes\nx\n"
+    assert markdown_sections.section_span(suffixed, "Cost") is not None
+    assert markdown_sections.section_span(suffixed, "Cost", exact=True) is None
 
 
 def test_the_leaf_command_and_the_effort_block_find_a_section_with_one_helper():
@@ -512,7 +515,7 @@ def test_confirming_an_estimate_with_one_scale_keeps_the_other_and_drops_the_old
         "minutes": 12, "usd": 2.0, "author": "agent", "confirmer": "user"}
 
 
-# --- the effort of understanding an order (part 16b) ---------------------------------------------
+# --- the effort of understanding an order ---------------------------------------------
 
 TYPE_REF = "a-child-process-reads-its-parents-ambient-root"
 USD, MINUTES = effort_segments.SCALE_USD, effort_segments.SCALE_MINUTES
@@ -759,6 +762,21 @@ def test_the_understanding_arming_closes_at_agreement_and_planning_resumes(
 
 
 def test_spend_fire_after_repricing(ostore, armed_env, tmp_path, monkeypatch):
+    _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=_default()[MINUTES] * 4))
+    _book(ostore, usd=_overrun(_default()[USD]))
+    submitted = _submit(ostore, path)
+    assert submitted.ok, submitted.detail
+    arming = _understanding(ostore)
+    assert arming["budget"] == {USD: _default()[USD], MINUTES: _default()[MINUTES] * 4}
+    assert arming["pricing"]["scale_sources"] == {USD: "configured-default", MINUTES: "type-record"}
+    state = ostore.load(SESSION)
+    assert [fire["scale"] for fire in state.effort_fires] == [effort.SCALE_SPEND]
+    assert arming["fire"]["scales"] == [USD]
+    assert effort_segments.arming_actual(arming)[MINUTES] < arming["budget"][MINUTES]
+
+
+def test_a_spend_only_record_reprices_the_spend_scale_and_a_fire_follows_the_new_budget(
+        ostore, armed_env, tmp_path, monkeypatch):
     record_usd = _default()[USD] * 4 + 1
     _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(usd=record_usd))
     _book(ostore, usd=_overrun(_default()[USD]))
@@ -769,6 +787,18 @@ def test_spend_fire_after_repricing(ostore, armed_env, tmp_path, monkeypatch):
     assert _submit(ostore, path).ok
     assert [fire["scale"] for fire in ostore.load(SESSION).effort_fires] == [effort.SCALE_SPEND]
     assert _understanding(ostore)["fire"]["scales"] == [USD]
+
+
+def test_an_order_submit_that_raises_a_fire_says_so_in_its_directive(ostore, armed_env, tmp_path, monkeypatch):
+    _, path = _classified(ostore, tmp_path, monkeypatch)
+    quiet = _submit(ostore, path)
+    assert quiet.ok and "effort_fire" not in quiet.data and "effort-divergence" not in quiet.detail
+    _book(ostore, usd=_overrun(_default()[USD]))
+    fired = _submit(ostore, path)
+    assert fired.ok, fired.detail
+    assert "raised an effort-divergence fire on understanding the order" in fired.detail
+    assert fired.data["effort_fire"]["scales"] == [USD]
+    assert fired.data["effort_fire"]["arming_id"] == _understanding(ostore)["arming_id"]
 
 
 def test_understanding_overrun_yields_fire_record(ostore, armed_env, tmp_path, monkeypatch):
@@ -819,12 +849,12 @@ def test_actual_goes_to_pricing_type(ostore, armed_env, tmp_path, monkeypatch):
     _book(ostore, usd=0.6, minutes=4)
     _agreed_order(ostore, tmp_path, path)
     written = cli_final._write_understanding_actual(ostore.load(SESSION), None)
-    assert written == {"written": ["actual"], "skipped": None}
+    assert written == {"written": ["actual", "estimate"], "skipped": None, "retry": None}
     text = leaf.read_text(encoding="utf-8")
     block = understanding_effort.parse(text)
-    assert block["estimate"] == {"minutes": 30, "usd": 3.0, "author": "the typing agent"}
     (row,) = block["actuals"]
     assert row["session"] == SESSION and row["usd"] == pytest.approx(0.6) and row["minutes"] >= 4
+    assert block["estimate"]["author"] == SESSION and block["estimate"]["usd"] == pytest.approx(0.6)
     assert understanding_effort.problems(text) == []
 
 
@@ -854,23 +884,172 @@ def test_a_failed_write_back_is_reported_not_raised(ostore, armed_env, tmp_path,
         raise OSError("no disk")
 
     state = ostore.load(SESSION)
-    assert "the actual was not written" in cli_final._write_understanding_actual(state, refusing)["skipped"]
+    refused = cli_final._write_understanding_actual(state, refusing)
+    assert "the actual was not written" in refused["skipped"]
+    assert state.effort_segments["understanding_actual"] == refused
     assert "the write failed" in cli_final._write_understanding_actual(state, raising)["skipped"]
     leaf.unlink()
     assert "cannot be read" in cli_final._write_understanding_actual(state, None)["skipped"]
 
 
+def _closed(**kw) -> dict:
+    base = {"segment": "understanding", "carried": {USD: 0.0, MINUTES: 0.0}, "booked": {USD: 0.0, MINUTES: 0.0},
+            "closed_at": 1.0}
+    return {**base, **kw}
+
+
 def test_write_back_names_why_nothing_was_written(tmp_path, monkeypatch):
-    base = {"segment": "understanding", "carried": {USD: 0.0, MINUTES: 0.0}, "booked": {USD: 0.0, MINUTES: 0.0}}
     assert "names no record" in understanding_pricing.write_back(
-        {**base, "pricing": {"type": None}}, session="s")["skipped"]
+        [_closed(pricing={"type": None})], session="s")["skipped"]
     leaf = tmp_path / "t.md"
     leaf.write_text("# t\n", encoding="utf-8")
-    typed = {**base, "pricing": {"type": {"kind": "regularity", "ref": "t", "path": str(leaf)}}}
-    assert "nothing was measured" in understanding_pricing.write_back(typed, session="s")["skipped"]
+    typed = _closed(pricing={"type": {"kind": "regularity", "ref": "t", "path": str(leaf)}})
+    assert "nothing was measured" in understanding_pricing.write_back([typed], session="s")["skipped"]
     typed["booked"] = {USD: 1.0, MINUTES: 0.0}
     monkeypatch.setenv("CLAUDE_DRY_RUN", "1")
-    assert "dry run" in understanding_pricing.write_back(typed, session="s")["skipped"]
+    assert "dry run" in understanding_pricing.write_back([typed], session="s")["skipped"]
+    assert leaf.read_text(encoding="utf-8") == "# t\n"
+
+
+def test_a_write_that_did_not_land_is_printed_as_the_command_that_repeats_it(
+        ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.6, minutes=4)
+    _agreed_order(ostore, tmp_path, path)
+    calls = []
+
+    def second_write_refused(argv):
+        calls.append(argv)
+        return SimpleNamespace(returncode=2 if len(calls) == 2 else 0, stdout="", stderr="busy")
+
+    outcome = cli_final._write_understanding_actual(ostore.load(SESSION), second_write_refused)
+    assert outcome["written"] == ["actual"] and "the estimate from the actual was not written" in outcome["skipped"]
+    command = outcome["retry"]
+    assert command.startswith("python3 ") and "record-experience.py understanding-effort" in command
+    assert f"--leaf {leaf}" in command and "--kind estimate" in command and f"--session {SESSION}" in command
+    assert command.split()[3:] == [str(part) for part in calls[1][3:]]
+
+
+def test_resolve_prints_the_command_that_repeats_a_write_that_did_not_land(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    from test_quality_row_task_type import _drive_to_resolved
+    monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
+    leaf = tmp_path / "t.md"
+    leaf.write_text(_with_estimate(minutes=30, usd=3.0), encoding="utf-8")
+    monkeypatch.setattr(cli_plan, "_ensure_understanding_arming", _closed_understanding_at_classify(leaf))
+    monkeypatch.setattr(understanding_pricing, "subprocess_runner",
+                        lambda argv: SimpleNamespace(returncode=2, stdout="", stderr="no route"))
+
+    done = _drive_to_resolved(store, "wb-3", str(venued_fixtures_dir / "plan_two_stage.toml"))
+    assert done.ok, done.detail
+    retry = done.data["understanding_actual"]["retry"]
+    assert f"repeat it with: {retry}" in done.detail and "--kind actual" in retry
+    stored = store.load("wb-3").effort_segments["understanding_actual"]
+    assert stored == done.data["understanding_actual"]
+
+
+def test_a_session_resolved_with_its_order_never_agreed_writes_no_actual_and_says_so(
+        ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.6, minutes=4)
+    before = leaf.read_text(encoding="utf-8")
+    state = ostore.load(SESSION)
+    assert _understanding(ostore)["closed_at"] is None
+
+    outcome = cli_final._write_understanding_actual(state, None)
+    assert outcome["written"] == [] and "still open" in outcome["skipped"] and outcome["retry"] is None
+    assert state.effort_segments["understanding_actual"] == outcome
+    assert leaf.read_text(encoding="utf-8") == before
+
+
+def test_a_reset_into_a_small_change_discards_the_open_arming_with_the_old_state(
+        ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.6, minutes=4)
+    before = leaf.read_text(encoding="utf-8")
+    reset = cli_session.cmd_reset(SimpleNamespace(
+        session=SESSION, task="small-one", goal="g", done_criterion="dc", criterion_type="measurable",
+        recursion_depth=0, force=True), store=ostore)
+    assert reset.ok, reset.detail
+    assert _classify(ostore, changed_lines=5, files=1, wall_clock_min=3, architectural=False).ok
+    assert _understanding(ostore) is None
+    assert cli_final._write_understanding_actual(ostore.load(SESSION), None) is None
+    assert leaf.read_text(encoding="utf-8") == before
+
+
+def test_the_next_order_of_a_type_is_priced_from_the_latest_actual_a_resolved_session_wrote(
+        ostore, armed_env, tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    record = _new(project, "reading-an-order", "an order of this type was read")
+    monkeypatch.setattr(cli_order, "LEAVES_ROOT", project / ".claude" / "agent-memory")
+    ref = record.stem
+    sides = SIDES.replace(TYPE_REF, ref).replace('kind = "regularity"', 'kind = "experience"')
+    path = _draft(tmp_path, sides=sides)
+
+    _start_session(ostore)
+    assert _classify(ostore).ok
+    assert _submit(ostore, path).ok
+    assert _understanding(ostore)["budget"] == _default()
+    _book(ostore, usd=0.6, minutes=4)
+    _agreed_order(ostore, tmp_path, path)
+    assert cli_final._write_understanding_actual(ostore.load(SESSION), None)["written"] == ["actual", "estimate"]
+    block = understanding_effort.parse(record.read_text(encoding="utf-8"))
+    (first_actual,) = block["actuals"]
+    assert block["estimate"]["usd"] == pytest.approx(0.6) and block["estimate"]["author"] == SESSION
+
+    _start_session(ostore, session="second-session")
+    assert _classify(ostore, session="second-session").ok
+    assert _submit(ostore, path, session="second-session").ok
+    arming = next(a for a in ostore.load("second-session").effort_segments["armings"]
+                  if a["segment"] == effort_segments.UNDERSTANDING)
+    assert arming["budget"] == {USD: pytest.approx(0.6), MINUTES: pytest.approx(first_actual["minutes"])}
+    assert (arming["budget_source"], arming["author"]) == ("type-record", SESSION)
+    assert arming["pricing"]["type"]["path"] == str(record)
+
+    _book_for(ostore, "second-session", usd=0.2, minutes=1)
+    arming = next(a for a in ostore.load("second-session").effort_segments["armings"]
+                  if a["segment"] == effort_segments.UNDERSTANDING)
+    state = ostore.load("second-session")
+    effort_segments.close_arming(state.effort_segments, arming["arming_id"], effort_segments.ACT_ORDER_AGREE,
+                                 time.time(), 5.0)
+    assert understanding_pricing.write_back(
+        [a for a in state.effort_segments["armings"] if a["segment"] == effort_segments.UNDERSTANDING],
+        session="second-session")["written"] == ["actual", "estimate"]
+    block = understanding_effort.parse(record.read_text(encoding="utf-8"))
+    assert len(block["actuals"]) == 2
+    assert block["estimate"]["author"] == "second-session" and block["estimate"]["usd"] == pytest.approx(0.2)
+
+
+def _book_for(store, session: str, usd: float = 0.0, minutes: float = 0.0) -> None:
+    state = store.load(session)
+    effort_segments.book(state.effort_segments, time.time(), usd, minutes, "test")
+    store.save(state)
+
+
+def test_a_renewed_understanding_arming_does_not_lose_its_actual_at_write_back(tmp_path, monkeypatch):
+    leaf = tmp_path / "t.md"
+    leaf.write_text(_with_estimate(minutes=30, usd=3.0), encoding="utf-8")
+    type_ref = {"kind": "regularity", "ref": "t", "path": str(leaf)}
+    before = _closed(pricing={"type": type_ref}, booked={USD: 0.6, MINUTES: 4.0})
+    after = _closed(pricing={"type": type_ref}, booked={USD: 0.3, MINUTES: 2.0})
+    outcome = understanding_pricing.write_back([before, after], session="s9")
+    assert outcome["written"] == ["actual", "estimate"]
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    (row,) = block["actuals"]
+    assert (row["usd"], row["minutes"]) == (pytest.approx(0.9), pytest.approx(6.0))
+    assert block["estimate"]["usd"] == pytest.approx(0.9)
+
+
+def test_an_arming_still_open_is_not_written_as_a_final_actual(tmp_path):
+    leaf = tmp_path / "t.md"
+    leaf.write_text("# t\n", encoding="utf-8")
+    open_one = _closed(pricing={"type": {"kind": "regularity", "ref": "t", "path": str(leaf)}},
+                       booked={USD: 1.0, MINUTES: 1.0}, closed_at=None)
+    outcome = understanding_pricing.write_back([open_one], session="s")
+    assert outcome["written"] == [] and "still open" in outcome["skipped"] and outcome["retry"] is None
     assert leaf.read_text(encoding="utf-8") == "# t\n"
 
 
@@ -951,9 +1130,12 @@ def test_resolve_writes_the_understanding_actual_to_the_pricing_type(
 
     done = _drive_to_resolved(store, "wb-1", str(venued_fixtures_dir / "plan_two_stage.toml"))
     assert done.ok, done.detail
-    assert done.data["understanding_actual"] == {"written": ["actual"], "skipped": None}
-    (row,) = understanding_effort.parse(leaf.read_text(encoding="utf-8"))["actuals"]
+    assert done.data["understanding_actual"] == {"written": ["actual", "estimate"], "skipped": None, "retry": None}
+    assert store.load("wb-1").effort_segments["understanding_actual"] == done.data["understanding_actual"]
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    (row,) = block["actuals"]
     assert (row["session"], row["usd"], row["minutes"]) == ("wb-1", 0.8, 6.0)
+    assert (block["estimate"]["usd"], block["estimate"]["minutes"], block["estimate"]["author"]) == (0.8, 6.0, "wb-1")
 
 
 def test_resolve_of_a_session_without_an_understanding_arming_writes_nothing(
@@ -962,3 +1144,32 @@ def test_resolve_of_a_session_without_an_understanding_arming_writes_nothing(
     monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
     done = _drive_to_resolved(store, "wb-2", str(venued_fixtures_dir / "plan_two_stage.toml"))
     assert done.ok and "understanding_actual" not in done.data
+
+
+def _fired_understanding(store, tmp_path, monkeypatch, record: str, usd: float = 3.0):
+    """A classified session whose order, typed by a record, has overrun the understanding budget."""
+    _, path = _classified(store, tmp_path, monkeypatch, record)
+    _book(store, usd=_overrun(usd))
+    submitted = _submit(store, path)
+    assert submitted.ok, submitted.detail
+    assert _understanding(store)["fire"] is not None
+    return path
+
+
+@pytest.mark.parametrize("decision", ["continue", "revise"])
+def test_a_user_acknowledging_an_understanding_fire_renews_the_arming(
+        ostore, armed_env, tmp_path, monkeypatch, decision):
+    _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    first = _understanding(ostore)
+    acknowledged = cli_replan.cmd_fire_acknowledge(
+        SimpleNamespace(session=SESSION, by="user", decision=decision, note="go on"), store=ostore)
+    assert acknowledged.ok, acknowledged.detail
+    state = ostore.load(SESSION)
+    renewed = effort_segments.open_arming_of(state.effort_segments, effort_segments.UNDERSTANDING)
+    assert renewed is not None and renewed["arming_id"] != first["arming_id"]
+    assert renewed["budget"] == {USD: 3.0, MINUTES: 30.0}
+    assert (renewed["budget_source"], renewed["author"]) == ("type-record", "the typing agent")
+    assert renewed["pricing"] == first["pricing"]
+    assert renewed["fire"] is None
+    assert effort_segments.arming_actual(renewed) == {USD: 0.0, MINUTES: 0.0}
+    assert state.effort_fires[-1]["ack"]["decision"] == decision

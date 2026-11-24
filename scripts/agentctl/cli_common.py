@@ -811,6 +811,8 @@ def _next_arming_terms(state: SessionState, arming: dict, thr: Thresholds) -> tu
                      effort_segments.SCALE_MINUTES: float(agreed["active_minutes"])},
                     effort_segments.SOURCE_AGREED, None)
         return _planning_fallback(thr), effort_segments.SOURCE_FALLBACK, None
+    if segment == effort_segments.UNDERSTANDING:
+        return dict(arming["budget"]), arming["budget_source"], None
     ledger = state.effort_segments
     uid = segment.removeprefix(effort_segments.STAGE_PREFIX)
     unfold = ledger.get("unfolds", {}).get(uid)
@@ -851,6 +853,9 @@ def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, ac
     renewed["declared_tier"] = tier
     renewed["title"] = arming.get("title")
     renewed["tier_ladder"] = effort.tier_ladder(thr)
+    if arming["segment"] == effort_segments.UNDERSTANDING:
+        renewed["author"] = arming.get("author")
+        renewed["pricing"] = arming.get("pricing")
     if user_budget is not None:
         renewed["user_budget"] = user_budget
     return renewed

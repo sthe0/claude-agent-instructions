@@ -587,11 +587,12 @@ def _understanding_budget_never_repriced(mp):
 
 
 def _actual_not_written_back(mp):
-    """The understanding actual is never written to the pricing type's record at closure."""
+    """The understanding actual is never written to the pricing type's record at resolve."""
     from agentctl import understanding_pricing
 
     mp.setattr(understanding_pricing, "write_back",
-               lambda arming, *, session, runner=None: {"written": [], "skipped": "mutant"}, raising=True)
+               lambda armings, *, session, runner=None: {"written": [], "skipped": "mutant", "retry": None},
+               raising=True)
 
 
 MUTANTS = {

@@ -888,17 +888,18 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
 
 
 def _write_understanding_actual(state: SessionState, runner: Runner | None) -> dict | None:
-    """Record what understanding the order cost on the type record that priced it. None for a
-    session that never had an understanding segment (no order, small change, exempt host); fail-open
-    like the other effects after the resolution is saved."""
-    arming = next((a for a in reversed(state.effort_segments.get("armings") or ())
-                   if a["segment"] == effort_segments.UNDERSTANDING), None)
-    if arming is None:
+    """Record what understanding the order cost on the type record that priced it, and keep the
+    outcome in the session's ledger. None for a session that never had an understanding segment (no
+    order, small change, exempt host); fail-open, since the resolution does not depend on it."""
+    armings = [a for a in state.effort_segments.get("armings") or () if a["segment"] == effort_segments.UNDERSTANDING]
+    if not armings:
         return None
     try:
-        return understanding_pricing.write_back(arming, session=state.session_id, runner=runner)
+        outcome = understanding_pricing.write_back(armings, session=state.session_id, runner=runner)
     except Exception as exc:  # noqa: BLE001 - fail-open by design
-        return {"written": [], "skipped": f"the write failed: {exc}"}
+        outcome = {"written": [], "skipped": f"the write failed: {exc}", "retry": None}
+    state.effort_segments["understanding_actual"] = outcome
+    return outcome
 
 
 def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -933,6 +934,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     _rows = _cost_rows(args)
     _refresh_spend(state, store, _rows, state.plan_path)
     _switch_window(state, store, args, args.by, "resolve")
+    understanding_actual = _write_understanding_actual(state, runner)
     cost_surface: dict = {}
     if state.cost is not None:
         cost_surface = {
@@ -1041,7 +1043,6 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     except Exception as exc:  # noqa: BLE001 - fail-open by design
         marker_status = {"channel": None, "key": tracker_key, "stamped": False,
                           "skipped_reason": str(exc)}
-    understanding_actual = _write_understanding_actual(state, runner)
     # Same shape as the marker stamp: resolution is already saved, so a cleanup fault
     # is reported, never allowed to undo it. Runs last of the post-resolve effects that
     # act on the working directory, because it may remove the very directory the engine
@@ -1062,7 +1063,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if understanding_actual is not None:
         data["understanding_actual"] = understanding_actual
         if understanding_actual["skipped"]:
-            detail += f" (the understanding actual was not recorded on a type record: {understanding_actual['skipped']})"
+            detail += f" (the understanding actual was not recorded on a type record: {understanding_actual['skipped']}"
+            if understanding_actual["retry"]:
+                detail += f"; repeat it with: {understanding_actual['retry']}"
+            detail += ")"
     # Bypass visibility: the resolution summary surfaces every acceptance judge bypass
     # verbatim, so a resolved task's record shows which acceptance passes were unjudged
     # (kill switch) or overridden — never hidden behind a clean COMPLETED.

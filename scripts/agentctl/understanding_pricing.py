@@ -4,9 +4,10 @@ The understanding segment opens at classify priced at the configured default. An
 a record; when that record carries an estimate (`lib.understanding_effort`), `price` re-prices the segment
 per scale from it, and a scale the record does not carry keeps the configured default. A record that
 carries no estimate, a malformed block, or no record at all prices at the default and says why: the
-order's submission is never refused for it. At closure `write_back` records the segment's actual on the
-record that priced it, through `record-experience.py understanding-effort` (so the worktree route and
-the edit-ledger stamp apply), and puts an estimate taken from that actual on a record that had none.
+order's submission is never refused for it. At resolve `write_back` records the session's whole
+understanding actual on the record that priced it, through `record-experience.py understanding-effort`
+(so the worktree route and the edit-ledger stamp apply), and makes that actual the record's estimate:
+the next order of the type is priced from the latest actual.
 With `CLAUDE_DRY_RUN` set it writes nothing, as the repo's other dry-run seams do.
 
 One mapping joins an `Estimate` (`confirmer == ""` while nobody agreed) and the block's estimate row
@@ -17,6 +18,7 @@ Callers reach every seam as `understanding_pricing.<name>` so a control can repl
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,40 +126,64 @@ def _figure_args(figures: dict) -> list[str]:
     return args
 
 
-def write_back(arming: dict, *, session: str, runner: Runner | None = None) -> dict:
-    """Record the closed understanding arming's actual on the record that priced it. Returns what was
-    done: `{"written": [...], "skipped": reason}`; a failed write is reported, never raised, since the
-    order is already agreed and the record can be written by hand."""
+def session_actual(armings: list[dict]) -> dict:
+    """What the session spent understanding its order: every understanding arming it held, the ones a
+    user act renewed included."""
+    total = {scale: 0.0 for scale in effort_segments.SCALES}
+    for arming in armings:
+        for scale, amount in effort_segments.arming_actual(arming).items():
+            total[scale] += amount
+    return total
+
+
+def _outcome(written: list, skipped: str | None, retry: list[str] | None = None, session: str | None = None) -> dict:
+    """`retry` is the argv tail of the `record-experience.py understanding-effort` call that did not
+    land; it is printed as the exact command that repeats it."""
+    command = None
+    if retry is not None:
+        argv = ["python3", str(RECORD_EXPERIENCE), "understanding-effort", *retry]
+        command = shlex.join(argv + (["--session", session] if session else []))
+    return {"written": written, "skipped": skipped, "retry": command}
+
+
+def write_back(armings: list[dict], *, session: str, runner: Runner | None = None) -> dict:
+    """Record the session's understanding actual on the record that priced it, and make that actual the
+    record's estimate: the next order of the type is priced from the latest actual. Returns what was done:
+    `{"written": [...], "skipped": reason, "retry": the command that repeats a write that did not land}`;
+    a failed write is reported, never raised, since the order is already agreed and the record can be
+    written by hand. An arming still open (the order never reached agreement) is no final actual: nothing
+    is written for it."""
+    if any(arming["closed_at"] is None for arming in armings):
+        return _outcome([], "an understanding arming is still open, so no final actual exists to write; "
+                            "it is written at the resolve of a session whose order was agreed")
     if os.environ.get(DRY_RUN_ENV):
-        return {"written": [], "skipped": f"{DRY_RUN_ENV} is set: a dry run writes nothing to a type record"}
+        return _outcome([], f"{DRY_RUN_ENV} is set: a dry run writes nothing to a type record")
     run = runner or subprocess_runner
-    type_ref = (arming.get("pricing") or {}).get("type")
+    type_ref = next(((a.get("pricing") or {}).get("type") for a in reversed(armings)
+                     if (a.get("pricing") or {}).get("type")), None)
     if not type_ref:
-        return {"written": [], "skipped": "the order's type entry names no record to write the actual to"}
-    actual = effort_segments.arming_actual(arming)
+        return _outcome([], "the order's type entry names no record to write the actual to")
+    actual = session_actual(armings)
     figures = _figure_args(actual)
     if not figures:
-        return {"written": [], "skipped": "nothing was measured for understanding the order"}
+        return _outcome([], "nothing was measured for understanding the order")
     leaf = type_ref["path"]
-    written = []
     try:
-        text = Path(leaf).read_text(encoding="utf-8")
-        has_estimate = not understanding_effort.problems(text) and understanding_effort.estimate_of(text) is not None
+        Path(leaf).read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:
-        return {"written": [], "skipped": f"the type record cannot be read: {exc}"}
-    ok, said = _run(run, ["--leaf", leaf, "--kind", "actual", "--actual-session", session, *figures], session)
+        return _outcome([], f"the type record cannot be read: {exc}")
+    written = []
+    args = ["--leaf", leaf, "--kind", "actual", "--actual-session", session, *figures]
+    ok, said = _run(run, args, session)
     if not ok:
-        return {"written": written, "skipped": f"the actual was not written: {said}"}
+        return _outcome(written, f"the actual was not written: {said}", args, session)
     written.append("actual")
-    if not has_estimate:
-        stood_in = estimate_from_actual(actual, session)
-        row = to_row(stood_in)
-        args = ["--leaf", leaf, "--kind", "estimate", "--author", stood_in.author, *_figure_args(
-            {effort_segments.SCALE_MINUTES: row.get("minutes"), effort_segments.SCALE_USD: row.get("usd")})]
-        if stood_in.agreed:
-            args += ["--confirmer", stood_in.confirmer]
-        ok, said = _run(run, args, session)
-        if not ok:
-            return {"written": written, "skipped": f"the estimate from the actual was not written: {said}"}
-        written.append("estimate")
-    return {"written": written, "skipped": None}
+    stood_in = estimate_from_actual(actual, session)
+    row = to_row(stood_in)
+    args = ["--leaf", leaf, "--kind", "estimate", "--author", stood_in.author, *_figure_args(
+        {effort_segments.SCALE_MINUTES: row.get("minutes"), effort_segments.SCALE_USD: row.get("usd")})]
+    ok, said = _run(run, args, session)
+    if not ok:
+        return _outcome(written, f"the estimate from the actual was not written: {said}", args, session)
+    written.append("estimate")
+    return _outcome(written, None)
