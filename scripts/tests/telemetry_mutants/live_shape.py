@@ -144,7 +144,7 @@ MUTANTS = [
      "tests": [_T + "test_import_only_pre_emitter_bound_by_pr1_landing"]},
     # code-review fixes: judge usage, check-events, snapshot import
     {"name": "grounding_judge_usage_unstructured", "file": "scripts/agentctl/grounding_judge.py",
-     "anchor": "_JUDGE_MODEL, lean=False, structured_output=True)", "replacement": "_JUDGE_MODEL, lean=False)",
+     "anchor": "            lean=False, structured_output=True)", "replacement": "            lean=False)",
      "tests": [_T + "test_grounding_judge_usage_recorded_with_structured_output"]},
     {"name": "check_events_passes_zero_live", "file": _REPORT,
      "anchor": "        if start is not None and ms is not None and ms < start - slack:\n",
