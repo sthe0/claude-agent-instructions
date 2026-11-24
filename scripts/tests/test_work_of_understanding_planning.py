@@ -1846,24 +1846,132 @@ def test_agent_revise_writes_no_correction(real_stage):
     assert real_stage.ack(by="user", decision="continue")["ok"]
 
 
-def test_executor_line_fire_agent_acknowledged(real_stage, monkeypatch):
-    """A fire at the difficulty line only, in a session with a user-approved order: the route, the
-    fire record's `acknowledged_by` and the verb the engine accepts all say the agent, and the agent
-    may only revise."""
-    executing_overspent(real_stage, usd=10.0)
-    real_stage.agreed_stage(usd=1.0, approved_usd=3.0)
+def _real_stage_in(tmp_path, monkeypatch, name):
+    """A stage harness of its own whose estimates are written by the real `estimate-correct`,
+    its agent home beside its state."""
+    base = _own_dir(tmp_path, name)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(base / "home"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return _RealStageEng(base)
+
+
+def test_executor_line_fire_agent_acknowledged(ostore, armed_env, fire_env, tmp_path, monkeypatch):
+    """The acknowledgment is the user's when the fire is at the user line, past the user-approved
+    estimate (R10), and the agent's when it is at the difficulty line only, past the last agreed
+    estimate, and then only as a revise. Walked on understanding, planning, an old-form stage and a
+    new-form stage, each by the verbs the engine accepts: the route, the fire record's
+    `acknowledged_by`, the refusal of the other actor, the correction's authority, and no fire
+    again after the next judging act."""
+    agent, user = effort_segments.AUTHORITY_AGENT, effort_segments.AUTHORITY_USER
+
+    # understanding: the fire is at the difficulty line, so only the agent's revise closes it
+    _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    fire = gates.open_fire_record(ostore.load(SESSION))
+    assert effort_segments.line_acknowledged_by(fire) == agent
+    _difficulty_cycle(ostore)
+    assert _agent_acknowledges(ostore, "continue").ok is False
+    assert gates.open_fire_record(ostore.load(SESSION)) is not None
+    assert _agent_acknowledges(ostore, "revise").ok
+    assert gates.open_fire_record(ostore.load(SESSION)) is None
+
+    _unarmed(monkeypatch)
     patch_cli_name(monkeypatch, "_ledgered_order_key", lambda state: "an-order")
-    failed = real_stage.failed("s")
-    fire = gates.open_fire_record(real_stage.state("s"))
-    assert effort_segments.line_acknowledged_by(fire) == effort_segments.AUTHORITY_AGENT
-    assert failed["data"]["agent_route"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
-    refusal = real_stage.run("dispatch", session="s")
-    assert refusal["data"]["effort_fire"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
-    assert refusal["data"]["agent_route"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
-    real_stage.cycle()
-    assert real_stage.ack(by="agent", decision="continue")["ok"] is False
-    assert real_stage.ack(by="agent", decision="revise")["ok"]
-    assert gates.open_fire_record(real_stage.state("s")) is None
+
+    # planning: past the user's line, so the agent's revise is refused and the user's continue closes it
+    planning = PlanningEng(_own_dir(tmp_path, "planning"))
+    planning.planning()
+    planning.book(usd=OVERSPENT_USD)
+    planning.run("submit_plan", session="s", plan=planning.write())
+    fire = gates.open_fire_record(planning.state())
+    assert effort_segments.line_acknowledged_by(fire) == user
+    planning.cycle()
+    refused = planning.ack(by="agent", decision="revise")
+    assert refused["ok"] is False and "fire is at the user line" in refused["detail"]
+    assert gates.open_fire_record(planning.state()) is not None
+    assert planning.ack(by="user", decision="continue")["ok"]
+    assert gates.open_fire_record(planning.state()) is None
+
+    # an old-form stage: its fire carries no line and is read by its scale, the user's
+    old = StageEng(_own_dir(tmp_path, "old"))
+    executing_overspent(old, usd=30.0)
+    old.failed("s")
+    state = old.state("s")
+    fire = gates.open_fire_record(state)
+    fire.pop("line", None)
+    old.store.save(state)
+    assert effort_segments.line_acknowledged_by(fire) == user
+    assert cli_common._fire_acknowledger(state, fire) == user
+    assert old.ack(by="agent", decision="revise")["ok"] is False
+    assert gates.open_fire_record(old.state("s")) is not None
+    assert old.ack(by="user", decision="revise")["ok"]
+    assert gates.open_fire_record(old.state("s")) is None and sub_plan.held_figure(old.state("s"), 1) is None
+
+    # a new-form stage at the difficulty line, inside the margin: the agent's correction, the user's line unmoved
+    inside = _real_stage_in(tmp_path, monkeypatch, "inside")
+    executing_overspent(inside, usd=10.0)
+    inside.agreed_stage(usd=1.0, approved_usd=3.0)
+    failed = inside.failed("s")
+    fire = gates.open_fire_record(inside.state("s"))
+    assert effort_segments.line_acknowledged_by(fire) == agent
+    assert failed["data"]["agent_route"]["acknowledged_by"] == agent
+    refusal = inside.run("dispatch", session="s")
+    assert refusal["data"]["effort_fire"]["acknowledged_by"] == agent
+    assert refusal["data"]["agent_route"]["acknowledged_by"] == agent
+    inside.cycle()
+    assert inside.ack(by="agent", decision="continue")["ok"] is False
+    assert inside.ack(by="agent", decision="revise")["ok"]
+    state = inside.state("s")
+    [correction] = inside.corrections()
+    assert (correction["by"], correction["authority"]) == ("agent", "agent")
+    assert sub_plan.user_figure(state, 1)["usd"] == 3.0, "an agent's correction never moves the user's line"
+    assert stage_arming(state, 1)["budget"][effort_segments.SCALE_USD] == 10.0
+    assert gates.open_fire_record(state) is None
+    inside.run("dispatch", session="s")
+    after = inside.state("s")
+    assert len(after.effort_fires) == len(state.effort_fires) and gates.open_fire_record(after) is None, \
+        "the next judging act raises no fire at the repriced figure"
+
+    # the same fire with a figure past the margin: held for the user, nothing written, the fire open;
+    # the user's marked answer and correction, then the agent's re-run closes it with the user's authority
+    past = _real_stage_in(tmp_path, monkeypatch, "past")
+    executing_overspent(past, usd=10.0)
+    past.agreed_stage(usd=1.0, approved_usd=3.0)
+    past.failed("s")
+    past.cycle()
+    held = past.ack(by="agent", decision="revise", usd=40)
+    marker = _correction_marker(held)
+    assert held["ok"] is False and held["marker"] == "ESCALATE_TO_USER" and marker in held["detail"]
+    assert sub_plan.held_figure(past.state("s"), 1)["usd"] == 40.0
+    assert past.corrections() == [] and gates.open_fire_record(past.state("s")) is not None
+    _user_choice(marker, session="s")
+    assert past.correct(minutes=held["data"]["figure"]["minutes"], usd=40, basis="the user's call", by="user")["ok"]
+    assert past.ack(by="agent", decision="revise", usd=40)["ok"]
+    [only] = past.corrections()
+    assert (only["by"], only["authority"]) == ("user", "user")
+    assert sub_plan.user_figure(past.state("s"), 1)["usd"] == 40.0
+
+    # a fire at the user line after an upward correction: past the user's new line, the user's again;
+    # the user's own revise raised the line and does not fire again at the next judging act
+    upward = _real_stage_in(tmp_path, monkeypatch, "upward")
+    executing_overspent(upward, usd=30.0)
+    upward.agreed_stage()
+    upward.failed("s")
+    assert effort_segments.line_acknowledged_by(gates.open_fire_record(upward.state("s"))) == user
+    refused = upward.ack(by="user", decision="revise")
+    _user_choice(_correction_marker(refused), session="s")
+    assert upward.ack(by="user", decision="revise")["ok"]
+    state = upward.state("s")
+    assert sub_plan.user_figure(state, 1)["usd"] == 30.0 and gates.open_fire_record(state) is None
+    upward.run("dispatch", session="s")
+    assert len(upward.state("s").effort_fires) == len(state.effort_fires), "the user's revise does not fire again"
+    upward.overspend("s", usd=500.0)
+    upward.run("dispatch", session="s")
+    fire = gates.open_fire_record(upward.state("s"))
+    assert fire is not None and effort_segments.line_acknowledged_by(fire) == user
+    refused = upward.ack(by="agent", decision="revise")
+    assert refused["ok"] is False and "fire is at the user line" in refused["detail"]
+    assert upward.corrections()[-1]["authority"] == "user" and len(upward.corrections()) == 1
+    assert upward.ack(by="user", decision="continue")["ok"]
 
 
 def test_a_difficulty_line_fire_of_a_session_with_no_ledgered_order_is_the_users_in_route_record_and_verb(

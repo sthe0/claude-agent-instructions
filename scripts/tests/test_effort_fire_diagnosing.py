@@ -335,3 +335,142 @@ def test_an_agents_revise_past_the_margin_is_held_for_the_user_and_walks_the_way
     assert sub_plan.user_figure(real.state("s"), 1)["usd"] == 40.0
     [only] = real.corrections()
     assert (only["by"], only["authority"]) == ("user", "user"), "the re-run adds no second correction"
+
+
+# --- a revise closes the fire only when a figure moved; a held figure ends with the user's continue ----
+
+
+def _overspent_agreed_stage_in_its_cycle(real):
+    """Stage 1 agreed at 25 min / 1 usd (the user approved 3 usd), 10 usd spent: the fire is at the
+    difficulty line and its difficulty record is done, so only the acknowledgment is owed."""
+    executing_overspent(real, usd=10.0)
+    real.agreed_stage(usd=1.0, approved_usd=3.0)
+    real.failed("s")
+    real.cycle()
+
+
+def _revise_to_the_agreed_figure(real, by):
+    return real.ack(by=by, decision="revise", minutes=25, usd=1)
+
+
+def _fire_is_open_and_unwritten(real):
+    state = real.state("s")
+    fire = gates.open_fire_record(state)
+    assert fire is not None and fire.get("ack") is None
+    assert real.corrections() == [] and sub_plan.held_figure(state, 1) is None
+
+
+def test_an_agents_revise_to_the_agreed_figure_is_refused_and_walks_both_ways_on(real):
+    _overspent_agreed_stage_in_its_cycle(real)
+    refused = _revise_to_the_agreed_figure(real, "agent")
+    assert refused["ok"] is False and refused["marker"] == "ESCALATE_TO_USER"
+    assert "already has agreed" in refused["detail"] and "stays open" in refused["detail"]
+    assert "fire-acknowledge --decision continue" in refused["detail"]
+    assert refused["data"]["figure"] == {"minutes": 25.0, "usd": 1.0}
+    _fire_is_open_and_unwritten(real)
+    again = _revise_to_the_agreed_figure(real, "agent")
+    assert again["ok"] is False, "asking again does not close it either"
+    done = real.ack(by="agent", decision="revise", usd=10)
+    assert done["ok"], done
+    assert gates.open_fire_record(real.state("s")) is None
+    [correction] = real.corrections()
+    assert (correction["by"], correction["to"]["usd"]) == ("agent", 10.0)
+
+
+def test_an_agents_revise_to_the_agreed_figure_is_closed_by_the_users_continue(real):
+    _overspent_agreed_stage_in_its_cycle(real)
+    assert _revise_to_the_agreed_figure(real, "agent")["ok"] is False
+    done = real.ack(by="user", decision="continue")
+    assert done["ok"], done
+    assert gates.open_fire_record(real.state("s")) is None
+    assert real.corrections() == [] and sub_plan.agreed_figure(real.state("s"), 1)["usd"] == 1.0
+
+
+def test_a_users_revise_to_the_agreed_figure_is_refused_and_walks_both_ways_on(real):
+    _overspent_agreed_stage_in_its_cycle(real)
+    refused = _revise_to_the_agreed_figure(real, "user")
+    assert refused["ok"] is False and refused["marker"] is None
+    assert "already has agreed" in refused["detail"]
+    assert "fire-acknowledge --session s --decision continue --by user" in refused["detail"]
+    _fire_is_open_and_unwritten(real)
+    assert real.ack(by="user", decision="continue")["ok"]
+    assert gates.open_fire_record(real.state("s")) is None
+
+
+def test_a_users_revise_to_the_agreed_figure_names_a_different_figure_as_the_other_way_on(real):
+    _overspent_agreed_stage_in_its_cycle(real)
+    assert _revise_to_the_agreed_figure(real, "user")["ok"] is False
+    refused = real.ack(by="user", decision="revise", minutes=25, usd=40)
+    marker = _marker_of(refused)
+    assert refused["ok"] is False and marker in refused["detail"], "the other figure needs the user's marked answer"
+    _user_choice(marker, session="s")
+    assert real.ack(by="user", decision="revise", minutes=25, usd=40)["ok"]
+    assert sub_plan.user_figure(real.state("s"), 1)["usd"] == 40.0
+    assert gates.open_fire_record(real.state("s")) is None
+
+
+def test_a_correction_written_before_the_fire_does_not_stand_for_the_revise(real):
+    """The figure the stage already had agreed when the fire was raised is no revision, even
+    though an older correction of the stage names it."""
+    _overspent_agreed_stage_in_its_cycle(real)
+    state = real.state("s")
+    fire = gates.open_fire_record(state)
+    sub_plan.add_correction(state, 1, {"from": {"minutes": 20.0, "usd": 0.5}, "to": {"minutes": 25.0, "usd": 1.0},
+                                       "basis": "earlier", "by": "user", "agreer": "s",
+                                       "authority": "user", "at": fire["ts"] - 60.0})
+    real.store.save(state)
+    for by in ("agent", "user"):
+        assert _revise_to_the_agreed_figure(real, by)["ok"] is False
+    assert gates.open_fire_record(real.state("s")) is not None
+    assert len(real.corrections()) == 1
+
+
+def _held_past_the_margin_after_the_fire(real):
+    _overspent_agreed_stage_in_its_cycle(real)
+    held = real.ack(by="agent", decision="revise", usd=40)
+    assert held["ok"] is False and sub_plan.held_figure(real.state("s"), 1)["usd"] == 40.0
+    state = real.state("s")
+    state.stage(1).expected_minutes = None
+    real.store.save(state)
+    state = real.state("s")
+    assert state.stage(1).place is not None and gates.stage_above_threshold(state.stage(1), Thresholds())
+
+
+def _dispatch_blockers(real):
+    state = real.state("s")
+    return gates.estimate_dispatch_blockers(state, state.stage(1), None)
+
+
+def test_the_users_continue_declines_a_figure_the_agent_held_past_the_margin_after_the_fire(real):
+    _held_past_the_margin_after_the_fire(real)
+    [blocker] = _dispatch_blockers(real)
+    assert "held past the allowed overrun" in blocker and estimate_correction_marker(1, 25.0, 40.0) in blocker
+    done = real.ack(by="user", decision="continue")
+    assert done["ok"], done
+    state = real.state("s")
+    assert sub_plan.held_figure(state, 1) is None and gates.open_fire_record(state) is None
+    assert sub_plan.agreed_figure(state, 1)["usd"] == 1.0 and real.corrections() == []
+    assert _dispatch_blockers(real) == []
+    assert any(event.get("event") == "held_figure_declined" for event in state.history), "the decline is logged"
+
+
+@pytest.mark.parametrize("held_at, escalated", [(-60.0, False), (60.0, True)], ids=["held-before-the-fire", "child-escalated"])
+def test_the_users_continue_keeps_a_held_figure_that_is_not_the_agents_after_the_fire(real, held_at, escalated):
+    _overspent_agreed_stage_in_its_cycle(real)
+    state = real.state("s")
+    fire = gates.open_fire_record(state)
+    state.stage(1).expected_minutes = None
+    sub_plan.hold_figure(state, 1, minutes=25, usd=40, basis="held", author="", at=fire["ts"] + held_at,
+                         escalated=escalated)
+    real.store.save(state)
+    assert real.ack(by="user", decision="continue")["ok"]
+    assert sub_plan.held_figure(real.state("s"), 1)["usd"] == 40.0
+    assert len(_dispatch_blockers(real)) == 1
+
+
+def test_the_agent_cannot_decline_the_figure_it_held(real):
+    _held_past_the_margin_after_the_fire(real)
+    refused = real.ack(by="agent", decision="continue")
+    assert refused["ok"] is False
+    assert sub_plan.held_figure(real.state("s"), 1)["usd"] == 40.0
+    assert gates.open_fire_record(real.state("s")) is not None

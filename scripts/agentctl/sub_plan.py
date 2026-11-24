@@ -445,6 +445,12 @@ def hold_figure(state, stage_index: int, *, minutes, usd, basis: str, author: st
     return slot
 
 
+def drop_held(state, stage_index: int) -> None:
+    """Forget the figure held for the user, unapplied: the user's decision to keep the agreed
+    figure (`fire-acknowledge --decision continue`) declines it."""
+    _copy_slot(state, stage_index)["held"] = None
+
+
 def mark_frozen_in(state, stage_index: int, contributes: dict) -> None:
     """Record what the task estimate the user approved (`order_effort_frozen`) already holds of
     the stage: the composed estimate then counts only a figure's change since."""

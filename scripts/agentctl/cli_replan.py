@@ -1912,20 +1912,59 @@ def _revised_figure(args, state: SessionState, fire: dict, stage) -> dict:
             "usd": scale("usd", effort_segments.SCALE_USD, 100)}
 
 
+def _correction_since_fire_made(state: SessionState, stage, fire: dict, figure: dict) -> bool:
+    """Whether a correction of the stage written after `fire` was raised moved it to `figure`."""
+    from . import sub_plan
+    raised = float(fire.get("ts") or 0.0)
+    corrections = sub_plan.estimate_copy(state, stage.index).get("corrections") or []
+    return any(float(c.get("at") or 0.0) > raised
+               and all(float((c.get("to") or {}).get(scale) or 0.0) == float(figure[scale] or 0.0)
+                       for scale in figure)
+               for c in corrections)
+
+
+def _no_revision_refusal(args, state: SessionState, fire: dict, stage, figure: dict, by: str) -> Directive:
+    """The refusal of a `revise` whose figure is the one already agreed and that no correction
+    since the fire produced: nothing is revised, so the fire stays open. It names the way on the
+    engine accepts of that actor: the agent hands the decision to the user, the user keeps the
+    figure (`continue`) or names a different one."""
+    from . import sub_plan
+    is_agent = by.casefold() == AGENT_ACTOR
+    way = ("run it again with a figure other than the agreed one (`--minutes` / `--usd`), or hand "
+           "the decision to the user (this `ESCALATE:`): the user accepts the overrun with "
+           "`fire-acknowledge --decision continue` or names another figure with `--decision revise`"
+           if is_agent else
+           f"`fire-acknowledge --session {args.session} --decision continue --by {by}` accepts "
+           f"the overrun at the agreed figure, or run `--decision revise` with a figure other "
+           f"than the agreed one")
+    return Directive(
+        False, state.node, "fire_acknowledge",
+        f"fire-acknowledge --decision revise by {by} refused: the figure "
+        f"{sub_plan.figure_args(figure)} is the one stage {stage.index} already has agreed and no "
+        f"correction since the fire moved it, so nothing is revised and the fire stays open; {way}.",
+        marker=DIRECTIVE_ESCALATE_TO_USER if is_agent else None,
+        data={"figure": figure, "effort_fire": _effort_fire_escalation_data(state)})
+
+
 def _revise_stage_estimate(args, state: SessionState, store: StateStore, fire: dict,
                            stage, by: str) -> Directive | None:
     """A revise of a new-form stage's fire writes the stage's correction through
     `estimate-correct`, the only writer of the correction and its agreer: with authority agent
     inside the margin of the figure the user approved, with authority user on the user's marked
-    answer. None when it was written or the figure already stands as agreed (the user's own
-    `estimate-correct` decided it), else the refusal to hand back, naming the verb to run again."""
+    answer. None when it was written, or when a correction written after the fire was raised
+    already put the stage at this very figure (the user's own `estimate-correct`, which the
+    agent's re-run then takes up); else the refusal to hand back, naming the verb to run again.
+    A figure equal to the agreed one that no correction since the fire produced revises
+    nothing, so it is refused and the fire stays open (`_no_revision_refusal`)."""
     from types import SimpleNamespace
     from . import sub_plan
     from .cli_approval import cmd_estimate_correct
     figure = _revised_figure(args, state, fire, stage)
     agreed = sub_plan.agreed_figure(state, stage.index) or {}
     if all(float(figure[scale] or 0.0) == float(agreed.get(scale) or 0.0) for scale in figure):
-        return None
+        if _correction_since_fire_made(state, stage, fire, figure):
+            return None
+        return _no_revision_refusal(args, state, fire, stage, figure, by)
     basis = (getattr(args, "note", None) or "").strip() or (
         f"revised on the {fire.get('scale')} fire of stage {stage.index}")
     result = cmd_estimate_correct(
@@ -1939,10 +1978,27 @@ def _revise_stage_estimate(args, state: SessionState, store: StateStore, fire: d
         f"fire-acknowledge --decision revise by {by} refused: the stage's correction was not "
         f"written. {result.detail}\nOnce that is done, run `fire-acknowledge --session "
         f"{args.session} --decision revise --by {by} {sub_plan.figure_args(figure)}` again"
-        + ("." if by.casefold() == AGENT_ACTOR else
+        + ("; the user's `fire-acknowledge --decision continue` keeps the agreed figure instead and "
+           "drops any figure held past the margin." if by.casefold() == AGENT_ACTOR else
            "; `--decision continue` accepts the overrun without a new figure."),
         marker=DIRECTIVE_ESCALATE_TO_USER if by.casefold() == AGENT_ACTOR else None,
         data={"figure": figure, "estimate": (result.data or {}).get("estimate")})
+
+
+def _decline_held_figure(state: SessionState, fire: dict) -> None:
+    """The user's `continue` on a stage's fire keeps the agreed figure, so the figure the agent
+    held past the margin after the fire (and put to the user with it) is declined and no longer
+    blocks the stage's dispatch. A figure a child escalated, or one held before the fire, is the
+    user's separate decision and stays."""
+    from . import sub_plan
+    stage = _fire_stage(state, fire)
+    if stage is None:
+        return
+    held = sub_plan.held_figure(state, stage.index)
+    if (held and not held.get("escalated")
+            and float(held.get("at") or 0.0) > float(fire.get("ts") or 0.0)):
+        sub_plan.drop_held(state, stage.index)
+        state.log("held_figure_declined", stage=stage.index)
 
 
 def _after_acknowledgment(state: SessionState) -> str:
@@ -1973,7 +2029,9 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
       change: the fire's own diagnose transition has put the session in DIAGNOSING (a fire the
       prompt-boundary stamp raised waits at EXECUTING until the next engine act moves it); the
       coordinator proceeds through the declare/investigate/critique/normalize cycle next. The
-      directive's action names the step actually next (`_after_acknowledgment`).
+      directive's action names the step actually next (`_after_acknowledgment`). The user's
+      `continue` on a stage's fire also declines a figure the agent held past the margin after
+      the fire (`_decline_held_figure`), so the agreed figure stands and dispatch is not blocked.
     - "abandon": the order no longer warrants continuing. Parks the session at
       BLOCKED — the same bypass-transition() idiom cmd_block itself uses — rather
       than RESOLVED: a mid-execution fire routinely fires with stages still
@@ -1983,9 +2041,13 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
       ordinary block.
     - "revise": the plan itself needs to change in response to the overrun. On a new-form
       stage's fire it writes the stage's correction through `estimate-correct` (the user's on
-      their marked answer, the agent's inside the margin of the figure the user approved), and
-      refuses without acknowledging when that is not written. On an understanding fire it
-      renews the arming with its budget, source, pricing and author.
+      their marked answer, the agent's inside the margin of the figure the user approved).
+      A revise closes the fire only when a figure really moved after the fire was raised, by
+      this very call or by a correction written since (the user's own `estimate-correct`); it
+      refuses and leaves the fire open when the correction is not written, and when the figure
+      is the one already agreed and nothing since the fire moved it (`_no_revision_refusal`).
+      On an understanding fire it renews the arming with its budget, source, pricing and
+      author.
 
     An acknowledgment that leaves the arming open renews it (`_renew_arming`) so a later
     overrun of the figure fires again.
@@ -2046,15 +2108,18 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
         _acked_arming["fire"]["ack"] = last["ack"]
     if (_acked_arming is not None and _acked_arming["closed_at"] is None
             and decision != "abandon" and (corrected or by_agent)):
-        # The correction moved the figure the arming is judged against; the arming goes on
-        # with a fresh fire so a later overrun of the new figure fires again. An agent's revise
-        # of an understanding fire renews the arming with its budget, source, pricing and author.
+        # `corrected` is only set once a correction after this fire moved the figure the arming
+        # is judged against, so the arming goes on with a fresh fire and a later overrun of the
+        # new figure fires again. An agent's revise of an understanding fire renews the arming
+        # with its budget, source, pricing and author.
         if corrected:
             _acked_arming["fire"] = None
         elif effort_segments.phase_of(_acked_arming["segment"]) == "understanding":
             _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_AGENT, args.by)
     elif not by_agent and decision != "abandon" and _acked_arming is not None and _acked_arming["closed_at"] is None:
         _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_USER, args.by)
+    if decision == "continue" and not by_agent:
+        _decline_held_figure(state, last)
     state.log("fire_acknowledge", by=args.by, decision=decision)
     _record_backstop_crossing(state, crossing)
     _clear_since_user_decision(state, args.by)
