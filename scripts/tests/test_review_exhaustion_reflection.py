@@ -841,7 +841,7 @@ def test_spend_and_wall_clock_fires_stay_the_users_with_a_complete_record(eng):
     eng.diagnose("a1")
     refused = ack(eng)
     assert refused["ok"] is False
-    assert "owed to the user" in refused["detail"]
+    assert "the fire is at the user line" in refused["detail"]
 
 
 def test_backstops_sit_above_the_replan_ceiling_and_match_the_arming_record():

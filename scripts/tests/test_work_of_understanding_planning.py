@@ -1488,3 +1488,98 @@ def test_the_whole_understanding_effort_across_a_renewal_is_what_resolve_hands_t
     (row,) = block["actuals"]
     assert row["usd"] == pytest.approx(whole[USD]) and row.get("minutes", 0.0) == pytest.approx(whole[MINUTES])
     assert written["replaced_confirmed"] == {"confirmer": "user", "minutes": 30.0, "usd": 3.0}
+
+
+def _presented_and_overrun(store, tmp_path, monkeypatch):
+    """An order presented and answered but not agreed, whose understanding ran past its budget after
+    the last act that judges it: the agreement is the one that meets the overrun."""
+    _, path = _classified(store, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(store, path).ok
+    assert _review(store).ok
+    assert _present(store, tmp_path).ok
+    _confirm_delivery(store)
+    assert _user_answers(_marker_of(path)) == 1
+    _book(store, usd=_overrun(3.0))
+    assert gates.open_fire_record(store.load(SESSION)) is None
+    return path
+
+
+def test_the_agreement_does_not_discharge_an_open_understanding_fire(
+        ostore, armed_env, tmp_path, monkeypatch):
+    """The agreement closes the segment at its multiple, which would clear the fire unseen. It is
+    refused instead, the fire stays open, and the way on is the difficulty cycle and the agent's
+    acknowledgment: every understanding fire is the agent's to acknowledge."""
+    _presented_and_overrun(ostore, tmp_path, monkeypatch)
+    refused = _agree(ostore)
+    state = ostore.load(SESSION)
+    assert refused.ok is False
+    assert gates.open_fire_record(state) is not None
+    assert state.order_agreement is None or not getattr(state.order_agreement, "agreed", False)
+    assert "declare" in refused.detail or "fire-acknowledge" in refused.detail, refused.detail
+
+
+def test_a_user_line_acknowledgment_of_an_understanding_fire_is_not_the_agents_and_the_way_on_is_walked(
+        ostore, armed_env, tmp_path, monkeypatch):
+    """The sequence a user could take around the refusal: the agent's acknowledgment is refused
+    before the difficulty cycle is complete, then the cycle, the acknowledgment and the return."""
+    path = _presented_and_overrun(ostore, tmp_path, monkeypatch)
+    assert _agree(ostore).ok is False
+    assert ostore.load(SESSION).node == "DIAGNOSING"
+    early = _agent_acknowledges(ostore)
+    assert early.ok is False or gates.open_fire_record(ostore.load(SESSION)) is None
+    _difficulty_cycle(ostore)
+    acknowledged = _agent_acknowledges(ostore)
+    assert acknowledged.ok, acknowledged.detail
+    assert acknowledged.action in ("order_submit", "order-submit", "submit"), acknowledged.action
+    returned = _submit(ostore, path)
+    assert returned.ok, returned.detail
+    assert ostore.load(SESSION).node == "ROUTED"
+
+
+def test_an_agents_revise_of_an_understanding_fire_keeps_the_renewed_armings_budget_source_pricing_and_author(
+        ostore, armed_env, tmp_path, monkeypatch):
+    _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    first = _understanding(ostore)
+    _difficulty_cycle(ostore)
+    acknowledged = _agent_acknowledges(ostore)
+    assert acknowledged.ok, acknowledged.detail
+    renewed = _understanding(ostore)
+    assert renewed["arming_id"] != first["arming_id"] and renewed["fire"] is None
+    assert renewed["budget"] == first["budget"] == {USD: 3.0, MINUTES: 30.0}
+    assert (renewed["budget_source"], renewed["author"], renewed["pricing"]) == (
+        first["budget_source"], first["author"], first["pricing"])
+
+
+def test_an_agent_continue_on_an_understanding_fire_is_refused_and_renews_nothing(
+        ostore, armed_env, tmp_path, monkeypatch):
+    """The agent acknowledges an understanding fire only with revise; a continue is refused, the
+    arming and its fire stay as they were, and the revise is the way on."""
+    _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    first = _understanding(ostore)
+    _difficulty_cycle(ostore)
+    refused = _agent_acknowledges(ostore, "continue")
+    assert refused.ok is False and "revise" in refused.detail, refused.detail
+    again = _understanding(ostore)
+    assert again["arming_id"] == first["arming_id"] and not again["fire"].get("ack")
+    assert _agent_acknowledges(ostore, "revise").ok
+
+
+def test_an_understanding_difficulty_carries_met_in_and_closes_to_the_order_draft(
+        ostore, armed_env, tmp_path, monkeypatch):
+    path = _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    state = ostore.load(SESSION)
+    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "understanding"
+    assert gates.open_fire_record(state)["difficulty_uid"] == state.difficulty.uid
+    _difficulty_cycle(ostore)
+    assert _agent_acknowledges(ostore).ok
+    assert _submit(ostore, path).ok
+    assert ostore.load(SESSION).node == "ROUTED"
+
+
+def test_the_order_submit_directive_names_the_verb_and_the_authority_of_a_fire(
+        ostore, armed_env, tmp_path, monkeypatch):
+    _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    _book(ostore, usd=_overrun(3.0))
+    submitted = _submit(ostore, path)
+    assert submitted.ok
+    assert "fire-acknowledge" in submitted.detail and "agent" in submitted.detail, submitted.detail

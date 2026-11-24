@@ -763,13 +763,14 @@ def test_spend_and_wall_clock_fires_go_to_user(eng):
     eng.spend_fire("a1", plan)
     spend = eng.run("fire_acknowledge", session="a1", decision="revise", by="agent")
     assert spend["ok"] is False
-    assert "owed to the user" in spend["detail"]
+    assert "the fire is at the user line" in spend["detail"]
+    assert "fire-acknowledge --by <user>" in spend["detail"]
     state = eng.state("a1")
     state.effort_fires[-1]["scale"] = effort.SCALE_WALL_CLOCK
     eng.store.save(state)
     wall = eng.run("fire_acknowledge", session="a1", decision="revise", by="agent")
     assert wall["ok"] is False
-    assert "owed to the user" in wall["detail"]
+    assert "the fire is at the user line" in wall["detail"]
 
 
 # --- the replans-scale fire: the agent's own planning-difficulty cycle -----------------

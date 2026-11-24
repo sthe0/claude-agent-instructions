@@ -262,8 +262,10 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
     Refuses a draft whose order is incomplete or ill-formed, and a draft that already
     carries stages while the session has no agreement; otherwise records the draft's
     path and the engine's digest of its understanding for `plan-review --scope order`
-    and `present-plan --kind order` to bind to. Only records: `plan_path` is untouched
-    and the node never moves, so a session that never calls it is unchanged."""
+    and `present-plan --kind order` to bind to. `plan_path` is untouched, and the node moves in
+    two cases only: an understanding fire this submission raises takes ROUTED to DIAGNOSING, and
+    a submission after the fire's difficulty cycle (and the agent's acknowledgment) returns it to
+    ROUTED. A session that never calls it is unchanged."""
     state = _require(store, args.session)
     try:
         doc, staged = load_order_draft(args.plan)

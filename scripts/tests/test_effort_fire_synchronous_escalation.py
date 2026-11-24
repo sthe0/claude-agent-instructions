@@ -271,3 +271,27 @@ def test_dispatch_and_submit_plan_and_replan_all_unblocked_once_acknowledged(sto
     ):
         d = cmd(ns(session=sid, **kwargs), store=store)
         assert d.marker != "ESCALATE_TO_USER"
+
+
+def test_a_stage_fire_is_the_users_and_an_agent_cannot_acknowledge_it(store, venued_fixtures_dir, tmp_path):
+    """The stage's spend fire sits at the user line: the gate on the next verb is the same, the fire
+    names the user as the acknowledger, and an agent's acknowledgment is refused with the fire still
+    open — the user's `continue` is the way on."""
+    from agentctl import effort_segments as seg
+
+    sid = "stage-fire-user-line"
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
+    fire = gates.open_fire_record(store.load(sid))
+    assert seg.line_acknowledged_by(fire) == seg.AUTHORITY_USER
+
+    refused = cli.cmd_fire_acknowledge(
+        ns(session=sid, by="agent", decision="continue", note=None), store=store,
+    )
+    assert refused.ok is False
+    assert gates.open_fire_record(store.load(sid)) is not None
+
+    done = cli.cmd_fire_acknowledge(
+        ns(session=sid, by="user", decision="continue", note=None), store=store,
+    )
+    assert done.ok is True
+    assert gates.open_fire_record(store.load(sid)) is None

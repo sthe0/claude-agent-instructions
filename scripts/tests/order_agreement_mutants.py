@@ -596,7 +596,42 @@ def _actual_not_written_back(mp):
                raising=True)
 
 
+def _overrun_reported_only(mp):
+    """An effort fire is raised and refuses the act, but takes the session into no difficulty: the
+    node stays where the act found it and no record is opened."""
+    from agentctl import cli_common, cli_order
+
+    mp.setattr(cli_common, "_enter_effort_diagnosis", lambda state: None, raising=True)
+    mp.setattr(cli_order, "_enter_effort_diagnosis", lambda state: None, raising=True)
+
+
+def _understanding_fire_unrouted(mp):
+    """A fire on understanding the order (the node ROUTED) is refused but takes no route into a
+    difficulty, while planning and stage fires still do."""
+    from agentctl import cli_common, cli_order
+    from agentctl.state import Node
+
+    real = cli_common._enter_effort_diagnosis
+
+    def enter(state):
+        return None if state.node == Node.ROUTED.value else real(state)
+
+    mp.setattr(cli_common, "_enter_effort_diagnosis", enter, raising=True)
+    mp.setattr(cli_order, "_enter_effort_diagnosis", enter, raising=True)
+
+
+def _agent_acknowledges_user_line(mp):
+    """Every fire is the agent's to acknowledge, whichever line it was raised at."""
+    from agentctl import effort_segments
+
+    mp.setattr(effort_segments, "line_acknowledged_by",
+               lambda fire: effort_segments.AUTHORITY_AGENT, raising=True)
+
+
 MUTANTS = {
+    "overrun_reported_only": _overrun_reported_only,
+    "understanding_fire_unrouted": _understanding_fire_unrouted,
+    "agent_acknowledges_user_line": _agent_acknowledges_user_line,
     "understanding_budget_never_repriced": _understanding_budget_never_repriced,
     "actual_not_written_back": _actual_not_written_back,
     "met_in_dropped": _met_in_dropped,

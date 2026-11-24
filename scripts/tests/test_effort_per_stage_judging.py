@@ -397,8 +397,17 @@ def test_fire_record_names_identity_title_arming_budget_actual_and_multiple(eng)
 
 def test_an_arming_fires_at_most_once_per_scale():
     built = arming(usd=30.0)
-    seg.note_fire(built, [seg.SCALE_USD], 1.0)
+    seg.note_fire(built, [seg.SCALE_USD], 1.0, seg.LINE_USER)
     assert seg.scales_to_fire(built, seg.ACT_DISPATCH, 5.0, FLOOR) == []
+
+
+def test_an_old_difficulty_line_fire_on_a_coinciding_arming_fires_again_at_the_user_line():
+    """Known residual of the line split: an arming with no figure of its own for the user is judged
+    at the user line only, so a fire an old state file noted at the difficulty line there is not
+    counted, and the same crossing fires once more, at the user line."""
+    built = arming(usd=30.0)
+    seg.note_fire(built, [seg.SCALE_USD], 1.0)
+    assert seg.scales_to_fire(built, seg.ACT_DISPATCH, 5.0, FLOOR) == [seg.SCALE_USD]
 
 
 def test_medium_stage_at_5x_fires_both_scales_in_one_record(eng):
