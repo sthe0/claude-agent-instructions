@@ -897,7 +897,8 @@ def _write_understanding_actual(state: SessionState, runner: Runner | None) -> d
     try:
         outcome = understanding_pricing.write_back(armings, session=state.session_id, runner=runner)
     except Exception as exc:  # noqa: BLE001 - fail-open by design
-        outcome = {"written": [], "skipped": f"the write failed: {exc}", "retry": None}
+        outcome = {"written": [], "skipped": f"the write failed: {exc}", "retry": None, "already_there": False,
+                   "replaced_confirmed": None}
     state.effort_segments["understanding_actual"] = outcome
     return outcome
 
@@ -1067,6 +1068,13 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             if understanding_actual["retry"]:
                 detail += f"; repeat it with: {understanding_actual['retry']}"
             detail += ")"
+        if understanding_actual.get("already_there"):
+            detail += " (this session's understanding actual was on the type record already; no second row was added)"
+        replaced = understanding_actual.get("replaced_confirmed")
+        if replaced:
+            detail += (f" (the type record's estimate, confirmed by {replaced['confirmer']} at minutes "
+                       f"{replaced.get('minutes')}, usd {replaced.get('usd')}, was replaced by this session's actual, "
+                       "which nobody has confirmed)")
     # Bypass visibility: the resolution summary surfaces every acceptance judge bypass
     # verbatim, so a resolved task's record shows which acceptance passes were unjudged
     # (kill switch) or overridden — never hidden behind a clean COMPLETED.

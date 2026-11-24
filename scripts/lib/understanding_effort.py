@@ -119,15 +119,21 @@ def _row(**fields) -> dict:
 
 
 def set_estimate(text: str, *, author: str, minutes: float | None = None, usd: float | None = None,
-                 confirmer: str | None = None) -> str:
-    """Set the estimate. A scale left out keeps the figure the leaf already holds; the confirmer is
-    never carried over, since it agreed to the figures it saw. An empty confirmer is no confirmer."""
+                 confirmer: str | None = None, keep_held: bool = True) -> str:
+    """Set the estimate. A scale left out keeps the figure the leaf already holds, unless `keep_held` is
+    False: then the estimate holds exactly the scales given. The confirmer is never carried over,
+    since it agreed to the figures it saw. An empty confirmer is no confirmer."""
     block = parse(text) or {}
-    held = block.get("estimate", {})
+    held = block.get("estimate", {}) if keep_held else {}
     block["estimate"] = _row(minutes=held.get("minutes") if minutes is None else minutes,
                              usd=held.get("usd") if usd is None else usd,
                              author=author, confirmer=confirmer or None)
     return _replace(text, block)
+
+
+def has_actual(text: str, session: str) -> bool:
+    block = parse(text) or {}
+    return any(row.get("session") == session for row in block.get("actuals", []))
 
 
 def add_actual(text: str, *, session: str, date: str, minutes: float | None = None,

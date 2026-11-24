@@ -657,7 +657,8 @@ def cmd_understanding_effort(a) -> int:
         sys.exit("refusing to write: the leaf's block is malformed already — "
                  + "; ".join(held) + " — repair it by hand first")
     other_kind = ([("--actual-session", a.actual_session)] if a.kind == "estimate"
-                  else [("--author", a.author), ("--confirmer", a.confirmer)])
+                  else [("--author", a.author), ("--confirmer", a.confirmer),
+                        ("--replace", True if a.replace else None)])
     stray = [flag for flag, value in other_kind if value is not None]
     if stray:
         sys.exit(f"{', '.join(stray)} belongs to the other kind of record; --kind {a.kind} does not take "
@@ -667,10 +668,14 @@ def cmd_understanding_effort(a) -> int:
             sys.exit("an estimate names who authored it (--author); --confirmer names who agreed to "
                      "it and is left out while nobody has")
         new_text = understanding_effort.set_estimate(
-            text, author=a.author, minutes=a.minutes, usd=a.usd, confirmer=a.confirmer)
+            text, author=a.author, minutes=a.minutes, usd=a.usd, confirmer=a.confirmer,
+            keep_held=not a.replace)
     else:
         if not a.actual_session:
             sys.exit("an actual names the session it was met in (--actual-session)")
+        if understanding_effort.has_actual(text, a.actual_session):
+            print(f"actual of session {a.actual_session} is already recorded on {path}; nothing added")
+            return 0
         new_text = understanding_effort.add_actual(
             text, session=a.actual_session, date=a.date, minutes=a.minutes, usd=a.usd)
     found = understanding_effort.problems(new_text)
@@ -1872,8 +1877,11 @@ def build_parser() -> argparse.ArgumentParser:
     ue.add_argument("--usd", type=float, default=None, help="effort in dollars (one of --minutes/--usd at least)")
     ue.add_argument("--author", help="estimate: who authored the figure")
     ue.add_argument("--confirmer", help="estimate: who confirmed it; omit (or give empty) while nobody has")
+    ue.add_argument("--replace", action="store_true",
+                    help="estimate: hold exactly the scales given, dropping a held scale that is left out "
+                         "(without it a left-out scale keeps the held figure)")
     ue.add_argument("--actual-session", dest="actual_session",
-                    help="actual: the session the effort was met in")
+                    help="actual: the session the effort was met in; a session already recorded adds no second row")
     ue.add_argument("--date", default=today())
     ue.add_argument("--session", default=None,
                     help="ledger session_id for the edit-ledger stamp of this write")

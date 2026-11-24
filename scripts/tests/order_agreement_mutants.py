@@ -591,7 +591,8 @@ def _actual_not_written_back(mp):
     from agentctl import understanding_pricing
 
     mp.setattr(understanding_pricing, "write_back",
-               lambda armings, *, session, runner=None: {"written": [], "skipped": "mutant", "retry": None},
+               lambda armings, *, session, runner=None: {"written": [], "skipped": "mutant", "retry": None,
+                                                         "already_there": False, "replaced_confirmed": None},
                raising=True)
 
 

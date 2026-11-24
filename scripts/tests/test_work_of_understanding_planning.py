@@ -849,7 +849,8 @@ def test_actual_goes_to_pricing_type(ostore, armed_env, tmp_path, monkeypatch):
     _book(ostore, usd=0.6, minutes=4)
     _agreed_order(ostore, tmp_path, path)
     written = cli_final._write_understanding_actual(ostore.load(SESSION), None)
-    assert written == {"written": ["actual", "estimate"], "skipped": None, "retry": None}
+    assert written == {"written": ["actual", "estimate"], "skipped": None, "retry": None, "already_there": False,
+                       "replaced_confirmed": None}
     text = leaf.read_text(encoding="utf-8")
     block = understanding_effort.parse(text)
     (row,) = block["actuals"]
@@ -926,9 +927,147 @@ def test_a_write_that_did_not_land_is_printed_as_the_command_that_repeats_it(
     outcome = cli_final._write_understanding_actual(ostore.load(SESSION), second_write_refused)
     assert outcome["written"] == ["actual"] and "the estimate from the actual was not written" in outcome["skipped"]
     command = outcome["retry"]
-    assert command.startswith("python3 ") and "record-experience.py understanding-effort" in command
-    assert f"--leaf {leaf}" in command and "--kind estimate" in command and f"--session {SESSION}" in command
-    assert command.split()[3:] == [str(part) for part in calls[1][3:]]
+    actual_command, estimate_command = command.split(" && ")
+    for part in (actual_command, estimate_command):
+        assert part.startswith("python3 ") and "record-experience.py understanding-effort" in part
+        assert f"--leaf {leaf}" in part and f"--session {SESSION}" in part
+    assert "--kind actual" in actual_command and "--kind estimate" in estimate_command
+    assert "--replace" in estimate_command
+    assert estimate_command.split()[3:] == [str(part) for part in calls[1][3:]]
+
+
+def _run_printed(command: str) -> None:
+    """Run the printed repeat command the way a shell would: each `&&` part through the verb."""
+    import shlex
+    for part in command.split(" && "):
+        argv = shlex.split(part)
+        assert RE.main(argv[argv.index("understanding-effort"):]) == 0
+
+
+def _first_call_lands_second_refused(calls):
+    def runner(argv):
+        calls.append(argv)
+        if len(calls) == 2:
+            return SimpleNamespace(returncode=2, stdout="", stderr="busy")
+        return understanding_pricing.subprocess_runner(argv)
+    return runner
+
+
+def test_the_printed_repeat_after_a_failed_actual_repairs_the_actual_and_the_estimate(
+        ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0, confirmer="user"))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.6, minutes=4)
+    _agreed_order(ostore, tmp_path, path)
+    before = leaf.read_text(encoding="utf-8")
+
+    outcome = cli_final._write_understanding_actual(
+        ostore.load(SESSION), lambda argv: SimpleNamespace(returncode=2, stdout="", stderr="busy"))
+    assert outcome["written"] == [] and "the actual was not written" in outcome["skipped"]
+    assert leaf.read_text(encoding="utf-8") == before
+    _run_printed(outcome["retry"])
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    (row,) = block["actuals"]
+    assert row["session"] == SESSION and row["usd"] == pytest.approx(0.6)
+    assert block["estimate"]["author"] == SESSION and block["estimate"]["usd"] == pytest.approx(0.6)
+    assert "confirmer" not in block["estimate"]
+
+
+def test_the_printed_repeat_after_a_partial_success_leaves_one_actual_row(
+        ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.6, minutes=4)
+    _agreed_order(ostore, tmp_path, path)
+    calls = []
+
+    outcome = understanding_pricing.write_back(
+        [a for a in ostore.load(SESSION).effort_segments["armings"] if a["segment"] == effort_segments.UNDERSTANDING],
+        session=SESSION, runner=_first_call_lands_second_refused(calls))
+    assert outcome["written"] == ["actual"] and outcome["retry"]
+    assert len(understanding_effort.parse(leaf.read_text(encoding="utf-8"))["actuals"]) == 1
+    _run_printed(outcome["retry"])
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    (row,) = block["actuals"]
+    assert row["session"] == SESSION
+    assert block["estimate"]["author"] == SESSION and block["estimate"]["usd"] == pytest.approx(0.6)
+
+
+def test_the_verb_adds_no_second_actual_row_for_a_session_already_recorded(tmp_path, capsys):
+    leaf = _new(tmp_path, "alpha", "the order was read twice")
+    actual = ["--kind", "actual", "--actual-session", "s1", "--minutes", "5"]
+    assert _effort(leaf, *actual) == 0
+    after_first = leaf.read_text(encoding="utf-8")
+    capsys.readouterr()
+    assert _effort(leaf, *actual) == 0
+    assert "already recorded" in capsys.readouterr().out
+    assert leaf.read_text(encoding="utf-8") == after_first
+    assert _effort(leaf, "--kind", "actual", "--actual-session", "s2", "--minutes", "5") == 0
+    assert [row["session"] for row in understanding_effort.parse(leaf.read_text(encoding="utf-8"))["actuals"]] == [
+        "s1", "s2"]
+
+
+def test_a_resolve_repeated_after_the_record_was_written_leaves_one_actual_row_and_says_so(
+        ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.6, minutes=4)
+    _agreed_order(ostore, tmp_path, path)
+    state = ostore.load(SESSION)
+    first = cli_final._write_understanding_actual(state, None)
+    assert first["written"] == ["actual", "estimate"] and first["already_there"] is False
+    # the state was not saved after the first resolve, so the repeat starts from the same ledger
+    repeated = cli_final._write_understanding_actual(ostore.load(SESSION), None)
+    assert repeated["written"] == ["actual", "estimate"] and repeated["already_there"] is True
+    assert repeated["skipped"] is None
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    assert [row["session"] for row in block["actuals"]] == [SESSION]
+    assert block["estimate"]["usd"] == pytest.approx(0.6)
+
+
+def test_a_confirmed_estimate_is_replaced_by_the_actual_without_crediting_what_was_not_measured(
+        ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch,
+                             _with_estimate(minutes=30, usd=3.0, author="the typing agent", confirmer="the customer"))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.0, minutes=4)
+    _agreed_order(ostore, tmp_path, path)
+    outcome = cli_final._write_understanding_actual(ostore.load(SESSION), None)
+    assert outcome["written"] == ["actual", "estimate"]
+    assert outcome["replaced_confirmed"] == {"confirmer": "the customer", "minutes": 30.0, "usd": 3.0}
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    assert block["estimate"]["author"] == SESSION
+    assert "confirmer" not in block["estimate"] and "usd" not in block["estimate"]
+    assert block["estimate"]["minutes"] >= 4
+    assert understanding_effort.problems(leaf.read_text(encoding="utf-8")) == []
+
+
+def test_an_estimate_replaced_keeps_only_the_scales_given_and_a_kept_one_otherwise(tmp_path):
+    text = understanding_effort.set_estimate("# leaf\n", author="agent", minutes=10, usd=1.5, confirmer="user")
+    replaced = understanding_effort.set_estimate(text, author="s", minutes=4, keep_held=False)
+    assert understanding_effort.estimate_of(replaced) == {"minutes": 4, "author": "s"}
+    assert understanding_effort.estimate_of(
+        understanding_effort.set_estimate(text, author="s", minutes=4))["usd"] == 1.5
+    leaf = _new(tmp_path, "alpha", "the order was read twice")
+    assert _effort(leaf, "--kind", "estimate", "--minutes", "10", "--usd", "2", "--author", "a") == 0
+    assert _effort(leaf, "--kind", "estimate", "--minutes", "4", "--author", "s", "--replace") == 0
+    assert understanding_effort.estimate_of(leaf.read_text(encoding="utf-8")) == {"minutes": 4, "author": "s"}
+    _refused(leaf, "belongs to the other kind", "--kind", "actual", "--minutes", "5", "--actual-session", "s1",
+             "--replace")
+
+
+def test_a_session_whose_last_arming_names_no_record_writes_nothing_and_says_so(tmp_path):
+    leaf = tmp_path / "t.md"
+    leaf.write_text("# t\n", encoding="utf-8")
+    typed = _closed(pricing={"type": {"kind": "regularity", "ref": "t", "path": str(leaf)}},
+                    booked={USD: 1.0, MINUTES: 1.0})
+    untyped = _closed(pricing={"type": None}, booked={USD: 0.5, MINUTES: 1.0})
+    outcome = understanding_pricing.write_back([typed, untyped], session="s")
+    assert outcome["written"] == [] and "names no record" in outcome["skipped"]
+    assert leaf.read_text(encoding="utf-8") == "# t\n"
+    assert "names no record" in understanding_pricing.write_back([], session="s")["skipped"]
+
+
 
 
 def test_resolve_prints_the_command_that_repeats_a_write_that_did_not_land(
@@ -1130,12 +1269,47 @@ def test_resolve_writes_the_understanding_actual_to_the_pricing_type(
 
     done = _drive_to_resolved(store, "wb-1", str(venued_fixtures_dir / "plan_two_stage.toml"))
     assert done.ok, done.detail
-    assert done.data["understanding_actual"] == {"written": ["actual", "estimate"], "skipped": None, "retry": None}
+    assert done.data["understanding_actual"] == {
+        "written": ["actual", "estimate"], "skipped": None, "retry": None, "already_there": False,
+        "replaced_confirmed": None}
     assert store.load("wb-1").effort_segments["understanding_actual"] == done.data["understanding_actual"]
     block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
     (row,) = block["actuals"]
     assert (row["session"], row["usd"], row["minutes"]) == ("wb-1", 0.8, 6.0)
     assert (block["estimate"]["usd"], block["estimate"]["minutes"], block["estimate"]["author"]) == (0.8, 6.0, "wb-1")
+
+
+def test_resolve_says_a_confirmed_estimate_was_replaced_and_whose_confirmation_it_carried(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    from test_quality_row_task_type import _drive_to_resolved
+    monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
+    leaf = tmp_path / "t.md"
+    leaf.write_text(_with_estimate(minutes=30, usd=3.0, confirmer="the customer"), encoding="utf-8")
+    monkeypatch.setattr(cli_plan, "_ensure_understanding_arming", _closed_understanding_at_classify(leaf))
+
+    done = _drive_to_resolved(store, "wb-5", str(venued_fixtures_dir / "plan_two_stage.toml"))
+    assert done.ok, done.detail
+    replaced = done.data["understanding_actual"]["replaced_confirmed"]
+    assert replaced == {"confirmer": "the customer", "minutes": 30.0, "usd": 3.0}
+    assert "confirmed by the customer" in done.detail and "was replaced by this session's actual" in done.detail
+    assert store.load("wb-5").effort_segments["understanding_actual"]["replaced_confirmed"] == replaced
+
+
+def test_resolve_says_the_actual_was_on_the_record_already_and_adds_no_second_row(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    from test_quality_row_task_type import _drive_to_resolved
+    monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
+    leaf = tmp_path / "t.md"
+    leaf.write_text(understanding_effort.add_actual(_with_estimate(minutes=30, usd=3.0), session="wb-6", date=DATE,
+                                                    usd=0.8, minutes=6.0), encoding="utf-8")
+    monkeypatch.setattr(cli_plan, "_ensure_understanding_arming", _closed_understanding_at_classify(leaf))
+
+    done = _drive_to_resolved(store, "wb-6", str(venued_fixtures_dir / "plan_two_stage.toml"))
+    assert done.ok, done.detail
+    assert done.data["understanding_actual"]["already_there"] is True
+    assert "on the type record already; no second row was added" in done.detail
+    assert [row["session"] for row in understanding_effort.parse(leaf.read_text(encoding="utf-8"))["actuals"]] == [
+        "wb-6"]
 
 
 def test_resolve_of_a_session_without_an_understanding_arming_writes_nothing(
@@ -1173,3 +1347,40 @@ def test_a_user_acknowledging_an_understanding_fire_renews_the_arming(
     assert renewed["fire"] is None
     assert effort_segments.arming_actual(renewed) == {USD: 0.0, MINUTES: 0.0}
     assert state.effort_fires[-1]["ack"]["decision"] == decision
+
+
+def test_the_whole_understanding_effort_across_a_renewal_is_what_resolve_hands_to_the_record(
+        ostore, armed_env, tmp_path, monkeypatch):
+    """Fire, a user's acknowledgment, more work, a second fire, the agreement, then the write-back
+    `cmd_resolve` runs: the figures handed to the record are the effort of both armings."""
+    path = _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0, confirmer="user"))
+    leaf = Path(_understanding(ostore)["pricing"]["type"]["path"])
+    assert cli_replan.cmd_fire_acknowledge(
+        SimpleNamespace(session=SESSION, by="user", decision="continue", note="go on"), store=ostore).ok
+    _book(ostore, usd=_overrun(3.0))
+    assert _submit(ostore, path).ok
+    assert _understanding(ostore)["fire"] is not None
+    _agreed_order(ostore, tmp_path, path)
+
+    armings = [a for a in ostore.load(SESSION).effort_segments["armings"]
+               if a["segment"] == effort_segments.UNDERSTANDING]
+    assert len(armings) == 2 and all(a["closed_at"] is not None for a in armings)
+    per_arming = [effort_segments.arming_actual(a) for a in armings]
+    assert all(figures[USD] >= _overrun(3.0) for figures in per_arming)
+    whole = {scale: sum(figures[scale] for figures in per_arming) for scale in (USD, MINUTES)}
+
+    calls = []
+
+    def recording(argv):
+        calls.append(argv)
+        return understanding_pricing.subprocess_runner(argv)
+
+    outcome = cli_final._write_understanding_actual(ostore.load(SESSION), recording)
+    assert outcome["written"] == ["actual", "estimate"] and outcome["skipped"] is None
+    actual_call = next(argv for argv in calls if "actual" in argv)
+    assert float(actual_call[actual_call.index("--usd") + 1]) == pytest.approx(whole[USD])
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    (row,) = block["actuals"]
+    assert row["usd"] == pytest.approx(whole[USD]) and row.get("minutes", 0.0) == pytest.approx(whole[MINUTES])
+    assert ("--minutes" in actual_call) == (whole[MINUTES] > 0)
+    assert outcome["replaced_confirmed"] == {"confirmer": "user", "minutes": 30.0, "usd": 3.0}

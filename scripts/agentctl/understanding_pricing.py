@@ -128,7 +128,9 @@ def _figure_args(figures: dict) -> list[str]:
 
 def session_actual(armings: list[dict]) -> dict:
     """What the session spent understanding its order: every understanding arming it held, the ones a
-    user act renewed included."""
+    user act renewed included. The carried counts are summed with the booked ones: an understanding
+    arming never carries across a link today (`effort_segments.conserve` sums booked only), so the
+    carried part is zero here and counted for the day one does."""
     total = {scale: 0.0 for scale in effort_segments.SCALES}
     for arming in armings:
         for scale, amount in effort_segments.arming_actual(arming).items():
@@ -136,31 +138,49 @@ def session_actual(armings: list[dict]) -> dict:
     return total
 
 
-def _outcome(written: list, skipped: str | None, retry: list[str] | None = None, session: str | None = None) -> dict:
-    """`retry` is the argv tail of the `record-experience.py understanding-effort` call that did not
-    land; it is printed as the exact command that repeats it."""
+def _outcome(written: list, skipped: str | None, retry: list[list[str]] | None = None, session: str | None = None,
+             *, already_there: bool = False, replaced_confirmed: dict | None = None) -> dict:
+    """`retry` holds the argv tails of every `record-experience.py understanding-effort` call still owed;
+    they are printed as the exact command that repeats them (the actual call is safe to repeat: a session
+    already recorded adds no second row). `replaced_confirmed` names the confirmed estimate the
+    write-back replaced, `already_there` that the session's actual row was on the record already."""
     command = None
-    if retry is not None:
-        argv = ["python3", str(RECORD_EXPERIENCE), "understanding-effort", *retry]
-        command = shlex.join(argv + (["--session", session] if session else []))
-    return {"written": written, "skipped": skipped, "retry": command}
+    if retry:
+        tail = ["--session", session] if session else []
+        command = " && ".join(shlex.join(["python3", str(RECORD_EXPERIENCE), "understanding-effort", *args, *tail])
+                              for args in retry)
+    return {"written": written, "skipped": skipped, "retry": command, "already_there": already_there,
+            "replaced_confirmed": replaced_confirmed}
+
+
+def _held_estimate(leaf: str, session: str) -> tuple[dict | None, bool]:
+    """The estimate the record holds and whether it holds the session's actual row already; (None, False)
+    for a block the verb will refuse anyway."""
+    try:
+        text = Path(leaf).read_text(encoding="utf-8")
+        if understanding_effort.problems(text):
+            return None, False
+        return understanding_effort.estimate_of(text), understanding_effort.has_actual(text, session)
+    except (OSError, ValueError):
+        return None, False
 
 
 def write_back(armings: list[dict], *, session: str, runner: Runner | None = None) -> dict:
-    """Record the session's understanding actual on the record that priced it, and make that actual the
-    record's estimate: the next order of the type is priced from the latest actual. Returns what was done:
-    `{"written": [...], "skipped": reason, "retry": the command that repeats a write that did not land}`;
-    a failed write is reported, never raised, since the order is already agreed and the record can be
-    written by hand. An arming still open (the order never reached agreement) is no final actual: nothing
-    is written for it."""
+    """Record the session's understanding actual on the record that priced the understanding as it stood
+    last, and make that actual the record's estimate: the next order of the type is priced from the latest
+    actual, and a scale the actual did not measure is left to the configured default. Returns what was
+    done: `{"written": [...], "skipped": reason, "retry": the command that repeats what is owed,
+    "already_there": ..., "replaced_confirmed": ...}`; a failed write is reported, never raised, since
+    the order is already agreed and the record can be written by hand. An arming still open (the order
+    never reached agreement) is no final actual: nothing is written for it. A session whose last arming
+    names no record writes nothing."""
     if any(arming["closed_at"] is None for arming in armings):
         return _outcome([], "an understanding arming is still open, so no final actual exists to write; "
                             "it is written at the resolve of a session whose order was agreed")
     if os.environ.get(DRY_RUN_ENV):
         return _outcome([], f"{DRY_RUN_ENV} is set: a dry run writes nothing to a type record")
     run = runner or subprocess_runner
-    type_ref = next(((a.get("pricing") or {}).get("type") for a in reversed(armings)
-                     if (a.get("pricing") or {}).get("type")), None)
+    type_ref = (armings[-1].get("pricing") or {}).get("type") if armings else None
     if not type_ref:
         return _outcome([], "the order's type entry names no record to write the actual to")
     actual = session_actual(armings)
@@ -172,18 +192,24 @@ def write_back(armings: list[dict], *, session: str, runner: Runner | None = Non
         Path(leaf).read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:
         return _outcome([], f"the type record cannot be read: {exc}")
-    written = []
-    args = ["--leaf", leaf, "--kind", "actual", "--actual-session", session, *figures]
-    ok, said = _run(run, args, session)
-    if not ok:
-        return _outcome(written, f"the actual was not written: {said}", args, session)
-    written.append("actual")
+    held, already_there = _held_estimate(leaf, session)
+    actual_args = ["--leaf", leaf, "--kind", "actual", "--actual-session", session, *figures]
     stood_in = estimate_from_actual(actual, session)
     row = to_row(stood_in)
-    args = ["--leaf", leaf, "--kind", "estimate", "--author", stood_in.author, *_figure_args(
+    estimate_args = ["--leaf", leaf, "--kind", "estimate", "--author", stood_in.author, "--replace", *_figure_args(
         {effort_segments.SCALE_MINUTES: row.get("minutes"), effort_segments.SCALE_USD: row.get("usd")})]
-    ok, said = _run(run, args, session)
+    owed = [actual_args, estimate_args]
+    written = []
+    ok, said = _run(run, actual_args, session)
     if not ok:
-        return _outcome(written, f"the estimate from the actual was not written: {said}", args, session)
+        return _outcome(written, f"the actual was not written: {said}", owed, session, already_there=already_there)
+    written.append("actual")
+    ok, said = _run(run, estimate_args, session)
+    if not ok:
+        return _outcome(written, f"the estimate from the actual was not written: {said}", owed, session,
+                        already_there=already_there)
     written.append("estimate")
-    return _outcome(written, None)
+    replaced = None
+    if held and held.get("confirmer"):
+        replaced = {"confirmer": held["confirmer"], "minutes": held.get("minutes"), "usd": held.get("usd")}
+    return _outcome(written, None, already_there=already_there, replaced_confirmed=replaced)
