@@ -515,7 +515,8 @@ def test_directive_data_carries_closing_arming_figures_with_or_without_a_fire(en
     assert figures["open_fire"] is not None and figures["actual"][seg.SCALE_USD] == 30.0
 
 
-def test_fire_raised_in_a_replan_cycle_stays_open_until_the_replans_approval(eng):
+def test_a_fire_raised_in_a_replan_cycle_survives_the_agents_approve_in_diagnosing_and_the_users_acknowledgment_clears_it(
+        eng):
     eng.executing()
     eng.critiqued()
     plan = eng.replanned(review=False)

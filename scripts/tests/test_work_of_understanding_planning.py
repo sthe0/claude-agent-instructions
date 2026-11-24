@@ -22,15 +22,22 @@ from types import SimpleNamespace
 import pytest
 
 from agentctl import (
-    cli, cli_common, cli_difficulty, cli_final, cli_order, cli_replan, cli_session, delivery_channel, effort,
-    effort_segments, gates, runtime_host, understanding_pricing)
+    cli, cli_common, cli_difficulty, cli_final, cli_order, cli_replan, cli_session, cost, delivery_channel, effort,
+    effort_segments, gates, runtime_host, sub_plan, understanding_pricing)
 from agentctl import cli_plan
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
-from agentctl.state import Declaration, Difficulty, Node, SessionState
+from agentctl.state import EFFORT_FIRE_FINISHED_WORK, Declaration, Difficulty, Node, SessionState
+from agentctl.state import estimate_correction_marker
 from agentctl.sub_plan import Estimate
+from conftest import patch_cli_name
 from lib import difficulty_phase, markdown_sections, understanding_effort
 from order_agreement_mutants import mutant, script_module  # noqa: F401  (autouse fixture)
+from test_effort_fire_diagnosing import Eng as PlanningEng
+from test_effort_fire_diagnosing import StageEng, _RealStageEng, _stamp_raised_fire
+from test_effort_per_stage_judging import executing_overspent, seed_replans, stage_arming
+from test_effort_planning_segment import OVERSPENT_USD
+from test_stage_estimates import _user_choice
 from test_order_agreement import (  # noqa: F401  (home, ostore and armed_env are fixtures)
     SESSION, _agree, _classify, _confirm_delivery, _marker_of, _plan, _user_answers, _wire_answer_hook, armed_env,
     home, ostore)
@@ -1512,28 +1519,82 @@ def test_the_agreement_does_not_discharge_an_open_understanding_fire(
     _presented_and_overrun(ostore, tmp_path, monkeypatch)
     refused = _agree(ostore)
     state = ostore.load(SESSION)
-    assert refused.ok is False
+    assert refused.ok is False and refused.action == "planning_difficulty"
     assert gates.open_fire_record(state) is not None
-    assert state.order_agreement is None or not getattr(state.order_agreement, "agreed", False)
-    assert "declare" in refused.detail or "fire-acknowledge" in refused.detail, refused.detail
+    assert state.order_agreement is None
+    steps = refused.data["agent_route"]["steps"]
+    assert steps[0] == "declare" and "fire-acknowledge --decision revise --by agent" in steps
 
 
-def test_a_user_line_acknowledgment_of_an_understanding_fire_is_not_the_agents_and_the_way_on_is_walked(
+def test_the_agent_may_not_acknowledge_an_understanding_fire_before_the_difficulty_record_is_complete(
         ostore, armed_env, tmp_path, monkeypatch):
-    """The sequence a user could take around the refusal: the agent's acknowledgment is refused
-    before the difficulty cycle is complete, then the cycle, the acknowledgment and the return."""
+    """The agreement met the fire and the session is in the difficulty cycle: the agent's
+    acknowledgment is refused while the record is incomplete, the fire stays open, and the way on is
+    the cycle, the acknowledgment and the return by `order-submit`."""
     path = _presented_and_overrun(ostore, tmp_path, monkeypatch)
     assert _agree(ostore).ok is False
     assert ostore.load(SESSION).node == "DIAGNOSING"
     early = _agent_acknowledges(ostore)
-    assert early.ok is False or gates.open_fire_record(ostore.load(SESSION)) is None
+    assert early.ok is False
+    assert gates.open_fire_record(ostore.load(SESSION)) is not None
     _difficulty_cycle(ostore)
     acknowledged = _agent_acknowledges(ostore)
     assert acknowledged.ok, acknowledged.detail
-    assert acknowledged.action in ("order_submit", "order-submit", "submit"), acknowledged.action
+    assert acknowledged.action == "order-submit"
     returned = _submit(ostore, path)
     assert returned.ok, returned.detail
     assert ostore.load(SESSION).node == "ROUTED"
+
+
+def test_order_agree_in_an_understanding_difficulty_cycle_is_refused_naming_order_submit_and_the_session_goes_on(
+        ostore, armed_env, tmp_path, monkeypatch):
+    """The reviewer's four steps: a fire at `order-submit`; `order-agree` (refused, naming
+    `order-submit`, nothing changed); the difficulty cycle and the agent's acknowledgment; the revised
+    draft's `order-submit` back to ROUTED, the agreement, and a plan submitted."""
+    path = _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    before = ostore.load(SESSION)
+    assert before.node == "DIAGNOSING" and before.difficulty.met_in == "understanding"
+
+    refused = _agree(ostore)
+    after = ostore.load(SESSION)
+    assert refused.ok is False and "order-submit" in refused.detail, refused.detail
+    assert (after.node, after.order_agreement, after.effort_fires) == (
+        before.node, before.order_agreement, before.effort_fires)
+    assert gates.open_fire_record(after) is not None
+
+    _difficulty_cycle(ostore)
+    acknowledged = _agent_acknowledges(ostore)
+    assert acknowledged.ok and acknowledged.action == "order-submit", acknowledged.detail
+    still = _agree(ostore)
+    assert still.ok is False and "order-submit" in still.detail
+    assert ostore.load(SESSION).node == "DIAGNOSING"
+
+    assert _submit(ostore, path).ok
+    assert ostore.load(SESSION).node == "ROUTED"
+    _agreed_order(ostore, tmp_path, path)
+    plan = _plan(tmp_path)
+    assert cli.cmd_plan(SimpleNamespace(session=SESSION), store=ostore).ok
+    submitted = cli.cmd_submit_plan(SimpleNamespace(session=SESSION, plan=plan), store=ostore)
+    assert submitted.ok, (submitted.detail, submitted.data)
+    assert ostore.load(SESSION).node == "PLAN_READY"
+
+
+def test_the_understanding_cycle_guard_meets_only_the_cycle_an_understanding_fire_opened():
+    """Every other state is exempt: a session not in DIAGNOSING, and a difficulty met in another
+    phase or in none."""
+    def state(node, met_in):
+        built = SessionState(session_id="s", task_id="t", node=node)
+        if met_in != "no difficulty":
+            built.difficulty = Difficulty(met_in=met_in)
+        return built
+
+    for node, met_in in ((Node.ROUTED.value, "no difficulty"), (Node.DIAGNOSING.value, "planning"),
+                         (Node.DIAGNOSING.value, "stage"), (Node.DIAGNOSING.value, None),
+                         (Node.DIAGNOSING.value, "no difficulty"), (Node.PLANNING.value, "understanding")):
+        assert cli_common._understanding_cycle_refusal(state(node, met_in), "record the agreement") is None
+    inside = cli_common._understanding_cycle_refusal(
+        state(Node.DIAGNOSING.value, "understanding"), "record the agreement")
+    assert inside is not None and inside.startswith("cannot record the agreement:") and "order-submit" in inside
 
 
 def test_an_agents_revise_of_an_understanding_fire_keeps_the_renewed_armings_budget_source_pricing_and_author(
@@ -1564,16 +1625,30 @@ def test_an_agent_continue_on_an_understanding_fire_is_refused_and_renews_nothin
     assert _agent_acknowledges(ostore, "revise").ok
 
 
-def test_an_understanding_difficulty_carries_met_in_and_closes_to_the_order_draft(
-        ostore, armed_env, tmp_path, monkeypatch):
-    path = _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+def test_seeded_difficulty_carries_met_in(ostore, armed_env, tmp_path, monkeypatch):
+    """The difficulty an understanding fire opens is seeded with the phase it was met in, and the
+    fire names that difficulty."""
+    _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
     state = ostore.load(SESSION)
     assert state.node == "DIAGNOSING" and state.difficulty.met_in == "understanding"
     assert gates.open_fire_record(state)["difficulty_uid"] == state.difficulty.uid
+
+
+def test_understanding_difficulty_closes_to_order_draft(ostore, armed_env, tmp_path, monkeypatch):
+    """The cycle, the agent's acknowledgment and the revised draft's `order-submit` close the
+    difficulty (the record is filed, not open) and return the session to ROUTED by the machine's
+    edge `understanding_return`."""
+    path = _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    uid = ostore.load(SESSION).difficulty.uid
     _difficulty_cycle(ostore)
     assert _agent_acknowledges(ostore).ok
+    assert ostore.load(SESSION).node == "DIAGNOSING", "the acknowledgment does not leave the cycle"
     assert _submit(ostore, path).ok
-    assert ostore.load(SESSION).node == "ROUTED"
+    state = ostore.load(SESSION)
+    assert state.node == "ROUTED" and state.difficulty is None
+    assert gates.open_fire_record(state) is None
+    assert [filed["uid"] for filed in state.closed_difficulties] == [uid]
+    assert state.closed_difficulties[0]["met_in"] == "understanding"
 
 
 def test_the_order_submit_directive_names_the_verb_and_the_authority_of_a_fire(
@@ -1582,4 +1657,237 @@ def test_the_order_submit_directive_names_the_verb_and_the_authority_of_a_fire(
     _book(ostore, usd=_overrun(3.0))
     submitted = _submit(ostore, path)
     assert submitted.ok
-    assert "fire-acknowledge" in submitted.detail and "agent" in submitted.detail, submitted.detail
+    assert ("this submission raised an effort-divergence fire on understanding the order" in submitted.detail
+            and "Every understanding fire is the agent's" in submitted.detail
+            and "`fire-acknowledge --by agent --decision revise`" in submitted.detail
+            and "order-submit (the revised order draft)" in submitted.detail), submitted.detail
+    assert submitted.data["route"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
+    assert submitted.data["effort_fire"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
+
+
+# --- a fire on planning or a stage enters DIAGNOSING, and its line says who acknowledges it ----------------
+# The planning and stage harnesses are those of test_effort_fire_diagnosing.py, whose fixtures the
+# understanding cases above do not use: `fire_env` is what they run under, not autouse here.
+
+
+@pytest.fixture
+def fire_env(monkeypatch, tmp_path):
+    """The environment of the planning and stage harnesses: no replan authorization and their own
+    cost log."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    monkeypatch.setattr(cost, "COST_LOG", tmp_path / "costs.jsonl")
+
+
+def _unarmed(monkeypatch) -> None:
+    """The harnesses classify their sessions with the answer hook unwired, as the suite at large
+    does, so no order agreement is armed; this module opts out of that default."""
+    monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
+
+
+@pytest.fixture
+def planning_eng(fire_env, tmp_path, monkeypatch):
+    _unarmed(monkeypatch)
+    return PlanningEng(tmp_path)
+
+
+@pytest.fixture
+def stage_eng(fire_env, tmp_path, monkeypatch):
+    _unarmed(monkeypatch)
+    return StageEng(tmp_path)
+
+
+@pytest.fixture
+def real_stage(fire_env, tmp_path, monkeypatch):
+    """The stage harness under an agent home, so `estimate-correct` runs for real."""
+    _unarmed(monkeypatch)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return _RealStageEng(tmp_path)
+
+
+def _own_dir(tmp_path, name: str) -> Path:
+    path = tmp_path / name
+    path.mkdir()
+    return path
+
+
+def _correction_marker(refused: dict) -> str:
+    figure = refused["data"]["figure"]
+    return estimate_correction_marker(1, figure["minutes"], figure["usd"])
+
+
+def test_planning_difficulty_before_first_plan_closes_by_submit_plan(planning_eng):
+    planning_eng.planning()
+    planning_eng.book(usd=OVERSPENT_USD)
+    plan = planning_eng.write()
+    planning_eng.run("submit_plan", session="s", plan=plan)
+    blocked = planning_eng.run("submit_plan", session="s", plan=plan)
+    assert blocked["ok"] is False and planning_eng.state().node == "DIAGNOSING"
+    planning_eng.cycle()
+    still = planning_eng.run("submit_plan", session="s", plan=plan)
+    assert still["ok"] is False, "the fire is the user's, so the difficulty alone does not close it"
+    assert planning_eng.ack(decision="continue")["ok"]
+    returned = planning_eng.run("submit_plan", session="s", plan=plan)
+    assert returned["ok"], returned
+    assert planning_eng.state().node == "PLAN_READY"
+
+
+@pytest.mark.parametrize("booked, scale", [("usd", effort.SCALE_SPEND), ("minutes", effort.SCALE_WALL_CLOCK)])
+def test_every_scale_opens_difficulty_on_all_three(
+        ostore, armed_env, fire_env, tmp_path, monkeypatch, booked, scale):
+    """Understanding, planning and a stage each take the session into DIAGNOSING on either scale,
+    with the difficulty met in that phase and the fire naming the scale."""
+    _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    _book(ostore, **{booked: 100000.0})
+    assert _submit(ostore, path).ok
+    _unarmed(monkeypatch)
+    planning = PlanningEng(_own_dir(tmp_path, "planning"))
+    planning.planning()
+    planning.book(**{booked: 100000.0})
+    planning.run("submit_plan", session="s", plan=planning.write())
+    stage = StageEng(_own_dir(tmp_path, "stage"))
+    executing_overspent(stage, **{booked: 100000.0})
+    _stamp_raised_fire(stage)
+    stage.passed("s")
+    for phase, state in (("understanding", ostore.load(SESSION)), ("planning", planning.state()),
+                         ("stage", stage.state("s"))):
+        assert state.node == "DIAGNOSING" and state.difficulty.met_in == phase, phase
+        assert gates.open_fire_record(state)["scale"] == scale, phase
+
+
+def test_finished_work_fire_enters_diagnosing(stage_eng):
+    """The finished-work fire of the stage-3 plan: no path raises a fire with the finished-work
+    disposition now, and the reachable form is the fire the prompt-boundary stamp raised on a stage
+    whose passing result is the next act. That result meets the fire, is refused, and takes the session
+    into DIAGNOSING with the fire's ordinary disposition instead of leaving the node unchanged."""
+    executing_overspent(stage_eng, usd=30.0)
+    _stamp_raised_fire(stage_eng)
+    refused = stage_eng.passed("s")
+    state = stage_eng.state("s")
+    assert refused["ok"] is False
+    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "stage"
+    assert state.stage(1).outcome.status != "passed"
+    assert gates.open_fire_record(state).get("disposition") != EFFORT_FIRE_FINISHED_WORK
+
+
+def test_old_session_stage_fire_enters_diagnosing(stage_eng):
+    """A session whose stage arming and fire are in the old form (no tier, user budget, author or
+    pricing on the arming, no line on the fire) meets the same edge into DIAGNOSING; its fire is read
+    by scale, and a spend fire is the user's."""
+    executing_overspent(stage_eng, usd=30.0)
+    state = stage_eng.state("s")
+    arming = stage_arming(state, 1)
+    for key in ("user_budget", "author", "pricing", "declared_tier"):
+        arming.pop(key, None)
+    stage_eng.store.save(state)
+    _stamp_raised_fire(stage_eng)
+    state = stage_eng.state("s")
+    fire = gates.open_fire_record(state)
+    fire.pop("line", None)
+    stage_eng.store.save(state)
+    assert effort_segments.line_acknowledged_by(fire) == effort_segments.AUTHORITY_USER
+    stage_eng.passed("s")
+    state = stage_eng.state("s")
+    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "stage"
+    assert gates.open_fire_record(state)["difficulty_uid"] == state.difficulty.uid
+
+
+def test_old_form_stage_fire_ack_revise_renews_arming(stage_eng):
+    """An old-form stage has no figure to correct: the user's revise writes none, acknowledges the
+    fire and renews the arming from zero."""
+    executing_overspent(stage_eng, usd=30.0)
+    state = stage_eng.state("s")
+    assert state.stage(1).place is None
+    stage_eng.failed("s")
+    first = stage_arming(stage_eng.state("s"), 1)
+    done = stage_eng.ack(by="user", decision="revise")
+    assert done["ok"], done
+    state = stage_eng.state("s")
+    renewed = stage_arming(state, 1)
+    assert renewed["arming_id"] != first["arming_id"] and renewed["fire"] is None
+    assert gates.open_fire_record(state) is None
+    assert sub_plan.held_figure(state, 1) is None
+
+
+def test_fire_acknowledge_revise_writes_correction(real_stage):
+    """A user's revise without the marked ledger answer is refused with the verb that is the way on;
+    with the answer, the one writer (`estimate-correct`) writes the user's correction, moves the user's
+    line and the open arming, and the fire is acknowledged."""
+    executing_overspent(real_stage, usd=30.0)
+    real_stage.agreed_stage()
+    real_stage.failed("s")
+    refused = real_stage.ack(by="user", decision="revise")
+    marker = _correction_marker(refused)
+    assert refused["ok"] is False and marker in refused["detail"]
+    figure = refused["data"]["figure"]
+    assert (f"fire-acknowledge --session s --decision revise --by user "
+            f"--minutes {figure['minutes']} --usd {figure['usd']}") in refused["detail"]
+    assert real_stage.corrections() == [] and gates.open_fire_record(real_stage.state("s")) is not None
+    _user_choice(marker, session="s")
+    done = real_stage.ack(by="user", decision="revise")
+    assert done["ok"], done
+    [correction] = real_stage.corrections()
+    assert (correction["by"], correction["authority"], correction["agreer"]) == ("user", "user", "s")
+    state = real_stage.state("s")
+    assert gates.open_fire_record(state) is None
+    assert sub_plan.user_figure(state, 1)["usd"] == correction["to"]["usd"] == 30.0
+    assert stage_arming(state, 1)["budget"][effort_segments.SCALE_USD] == 30.0
+
+
+def test_agent_revise_writes_no_correction(real_stage):
+    """A fire at the user line is the user's: the agent's revise is refused, writes no correction
+    and holds no figure, and the user's `continue` is the way on."""
+    executing_overspent(real_stage, usd=30.0)
+    real_stage.agreed_stage()
+    real_stage.failed("s")
+    refused = real_stage.ack(by="agent", decision="revise")
+    assert refused["ok"] is False and "fire is at the user line" in refused["detail"]
+    assert real_stage.corrections() == [] and sub_plan.held_figure(real_stage.state("s"), 1) is None
+    assert real_stage.ack(by="user", decision="continue")["ok"]
+
+
+def test_executor_line_fire_agent_acknowledged(real_stage, monkeypatch):
+    """A fire at the difficulty line only, in a session with a user-approved order: the route, the
+    fire record's `acknowledged_by` and the verb the engine accepts all say the agent, and the agent
+    may only revise."""
+    executing_overspent(real_stage, usd=10.0)
+    real_stage.agreed_stage(usd=1.0, approved_usd=3.0)
+    patch_cli_name(monkeypatch, "_ledgered_order_key", lambda state: "an-order")
+    failed = real_stage.failed("s")
+    fire = gates.open_fire_record(real_stage.state("s"))
+    assert effort_segments.line_acknowledged_by(fire) == effort_segments.AUTHORITY_AGENT
+    assert failed["data"]["agent_route"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
+    refusal = real_stage.run("dispatch", session="s")
+    assert refusal["data"]["effort_fire"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
+    assert refusal["data"]["agent_route"]["acknowledged_by"] == effort_segments.AUTHORITY_AGENT
+    real_stage.cycle()
+    assert real_stage.ack(by="agent", decision="continue")["ok"] is False
+    assert real_stage.ack(by="agent", decision="revise")["ok"]
+    assert gates.open_fire_record(real_stage.state("s")) is None
+
+
+def test_a_difficulty_line_fire_of_a_session_with_no_ledgered_order_is_the_users_in_route_record_and_verb(
+        stage_eng, monkeypatch):
+    """The same fire with no user-approved version of the order to continue within (the ledger holds
+    none: the stage harness's approval is stubbed away): the route, the fire record's `acknowledged_by`
+    and the verb the engine accepts agree that it is the user's, though the fire's own line says
+    agent (here the replans scale)."""
+    stage_eng.executing("s")
+    seed_replans(stage_eng, "s", Thresholds().effort_replan_absolute())
+    patch_cli_name(monkeypatch, "_ledgered_order_key", lambda state: None)
+    failed = stage_eng.failed("s")
+    state = stage_eng.state("s")
+    fire = gates.open_fire_record(state)
+    assert effort_segments.line_acknowledged_by(fire) == effort_segments.AUTHORITY_AGENT
+    assert cli_common._fire_acknowledger(state, fire) == effort_segments.AUTHORITY_USER
+    assert "agent_route" not in failed["data"]
+    assert failed["data"]["effort_divergence"]["scale"] == effort.SCALE_REPLANS
+    refusal = stage_eng.run("dispatch", session="s")
+    assert refusal["data"]["effort_fire"]["acknowledged_by"] == effort_segments.AUTHORITY_USER
+    assert refusal["data"]["route"]["acknowledged_by"] == effort_segments.AUTHORITY_USER
+    stage_eng.cycle()
+    refused = stage_eng.ack(by="agent", decision="revise")
+    assert refused["ok"] is False and "no user-approved version" in refused["detail"]
+    assert gates.open_fire_record(stage_eng.state("s")) is not None
+    assert stage_eng.ack(by="user", decision="continue")["ok"]
+    assert gates.open_fire_record(stage_eng.state("s")) is None

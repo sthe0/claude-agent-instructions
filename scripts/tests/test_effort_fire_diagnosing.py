@@ -1,21 +1,23 @@
 """An effort fire on understanding, planning or a stage enters DIAGNOSING through a machine edge, and the
 difficulty it opens is closed by one of two returns. Who may acknowledge the fire follows the fire's line
-(`effort_segments.line_acknowledged_by`), and a user's `revise` writes stage 7's correction. The
-understanding half of these tests is in test_work_of_understanding_planning.py, where its harness is."""
+(`effort_segments.line_acknowledged_by`), and a revise writes stage 7's correction through the real
+`estimate-correct`. The harnesses are defined here; the understanding half of these tests, and the cases
+the stage-3 verify command names, are in test_work_of_understanding_planning.py, which imports them."""
 import contextlib
 import io
 import json
 
 import pytest
 
-from agentctl import cli, cli_approval, cli_common, effort, gates
+from agentctl import cli, cli_common, effort, gates, sub_plan
 from agentctl import effort_segments as seg
 from agentctl.config import Thresholds
-from agentctl.directive import Directive
 from agentctl.machine import TRANSITIONS
 from agentctl.own_contour import OWN_CONTOUR_VERBS
-from agentctl.state import EFFORT_FIRE_FINISHED_WORK
+from agentctl.state import EFFORT_FIRE_FINISHED_WORK, estimate_correction_marker
+from agentctl.store import FileStateStore
 from order_agreement_mutants import mutant  # noqa: F401  (autouse fixture)
+from test_stage_estimates import _user_choice
 from test_effort_per_stage_judging import (  # noqa: F401  (_env is autouse)
     Eng as StageBase, _env, executing_overspent, link_child, seed_replans, stage_arming,
 )
@@ -99,22 +101,6 @@ def test_planning_fire_enters_diagnosing(eng):
     assert fire["difficulty_uid"] == state.difficulty.uid
 
 
-def test_planning_difficulty_before_first_plan_closes_by_submit_plan(eng):
-    eng.planning()
-    eng.book(usd=OVERSPENT_USD)
-    plan = eng.write()
-    eng.run("submit_plan", session="s", plan=plan)
-    blocked = eng.run("submit_plan", session="s", plan=plan)
-    assert blocked["ok"] is False and eng.state().node == "DIAGNOSING"
-    eng.cycle()
-    still = eng.run("submit_plan", session="s", plan=plan)
-    assert still["ok"] is False, "the fire is the user's, so the difficulty alone does not close it"
-    assert eng.ack(decision="continue")["ok"]
-    returned = eng.run("submit_plan", session="s", plan=plan)
-    assert returned["ok"], returned
-    assert eng.state().node == "PLAN_READY"
-
-
 def test_fire_acknowledge_names_the_step_that_is_actually_next(eng):
     """Before the difficulty's phases are done the acknowledgment answers the missing phase, never
     `next_stage`; with the cycle done it answers the return verb."""
@@ -150,38 +136,35 @@ def test_every_scale_opens_a_difficulty_on_planning(eng, scale):
 # --- a stage ----------------------------------------------------------------------------------
 
 
-def test_stage_fire_enters_diagnosing(stage):
-    executing_overspent(stage, usd=30.0)
-    stage.failed("s")
-    state = stage.state("s")
-    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "stage"
-    assert gates.open_fire_record(state) is not None
-
-
-@pytest.mark.parametrize("scale", ["usd", "minutes"])
-def test_every_scale_opens_a_difficulty_on_a_stage(stage, scale):
-    executing_overspent(stage, **{scale: 100000.0})
-    stage.failed("s")
-    state = stage.state("s")
-    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "stage"
-
-
-def test_a_fire_the_stamp_raised_enters_diagnosing_at_the_passing_record_result(stage):
-    """The prompt-boundary stamp judges without refusing anything, so its fire is open at EXECUTING;
-    the stage's passing result is the next act and meets it: the stage goes back to PENDING and the
-    session into DIAGNOSING rather than being refused with the node unchanged."""
-    executing_overspent(stage, usd=30.0)
+def _stamp_raised_fire(stage):
+    """The fire the prompt-boundary stamp raises on the stage's segment: open at EXECUTING, with
+    the node unchanged, until the next engine act meets it."""
     first = cli_common._utcnow()
     assert cli_common.stamp_and_judge("s", first, store=stage.store) is True
     assert cli_common.stamp_and_judge("s", first + 1.0, store=stage.store) is True
     assert stage.state("s").node == "EXECUTING"
     assert gates.open_fire_record(stage.state("s")) is not None
-    refused = stage.passed("s")
+
+
+def test_stage_fire_enters_diagnosing(stage):
+    """A passing result meets the fire the stamp raised: a result that fails would enter DIAGNOSING
+    with or without a fire, so only a passing one shows the fire is what moves the node."""
+    executing_overspent(stage, usd=30.0)
+    _stamp_raised_fire(stage)
+    stage.passed("s")
     state = stage.state("s")
-    assert refused["ok"] is False
     assert state.node == "DIAGNOSING" and state.difficulty.met_in == "stage"
-    assert state.stage(1).outcome.status != "passed"
     assert gates.open_fire_record(state)["difficulty_uid"] == state.difficulty.uid
+
+
+@pytest.mark.parametrize("booked, scale", [("usd", effort.SCALE_SPEND), ("minutes", effort.SCALE_WALL_CLOCK)])
+def test_every_scale_opens_a_difficulty_on_a_stage(stage, booked, scale):
+    executing_overspent(stage, **{booked: 100000.0})
+    _stamp_raised_fire(stage)
+    stage.passed("s")
+    state = stage.state("s")
+    assert state.node == "DIAGNOSING" and state.difficulty.met_in == "stage"
+    assert gates.open_fire_record(state)["scale"] == scale
 
 
 def test_a_recorded_finished_work_fire_is_still_exempt_from_the_gate(stage):
@@ -256,54 +239,99 @@ def test_a_childs_user_line_fire_goes_to_its_parent_and_the_child_stays_put(stag
 # --- a user's revise writes stage 7's correction, an agent's writes none ---------------------------
 
 
+class _RealStageEng(StageEng):
+    """The stage harness with its state under the agent home the answer ledger is read beside, so
+    `estimate-correct` runs for real: no spy stands in for the writer of the correction."""
+
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        self.root = tmp_path / "home" / "agentctl" / "state"
+        self.store = FileStateStore(self.root)
+
+    def agreed_stage(self, *, minutes=25.0, usd=3.0, approved_usd=None):
+        """Stage 1 made new-form with its first figure agreed (below the size line, so no sub-plan
+        record carries it) and the user's line set to `approved_usd`; the open arming is priced
+        from it."""
+        state = self.state("s")
+        stage = state.stage(1)
+        stage.place = "p"
+        stage.expected_minutes = 5
+        sub_plan.agree_copy(
+            state, 1, minutes=minutes, usd=usd, basis="sized by the test", author="",
+            agreer="s", authority=sub_plan.AUTHORITY_USER,
+            user_approved={"minutes": minutes, "usd": usd if approved_usd is None else approved_usd})
+        cli_common._reprice_open_arming(state, stage)
+        self.store.save(state)
+
+    def correct(self, **flags):
+        return self.run("estimate_correct", session="s", stage=1, **flags)
+
+    def corrections(self):
+        return sub_plan.estimate_copy(self.state("s"), 1).get("corrections") or []
+
+
 @pytest.fixture
-def corrections(monkeypatch):
-    calls = []
-
-    def spy(args, *, store, runner=None):
-        calls.append((args.stage, args.by, args.minutes, args.usd))
-        return Directive(True, "DIAGNOSING", "noop", "written", data={"estimate": "agreed"})
-
-    monkeypatch.setattr(cli_approval, "cmd_estimate_correct", spy)
-    return calls
+def real(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return _RealStageEng(tmp_path)
 
 
-def _new_form(stage):
-    """The fixture plan's stages are old-form (no knowledge place); a new-form one is what a revise
-    writes a correction for."""
-    state = stage.state("s")
+def _marker_of(refused):
+    figure = refused["data"]["figure"]
+    return estimate_correction_marker(1, figure["minutes"], figure["usd"])
+
+
+def test_a_users_revise_on_a_stage_with_no_agreed_figure_names_continue_as_the_way_on(real):
+    executing_overspent(real, usd=30.0)
+    state = real.state("s")
     state.stage(1).place = "p"
-    stage.store.save(state)
+    real.store.save(state)
+    real.failed("s")
+    refused = real.ack(by="user", decision="revise")
+    assert refused["ok"] is False and "first figure is not agreed yet" in refused["detail"]
+    assert gates.open_fire_record(real.state("s")) is not None
+    assert real.ack(by="user", decision="continue")["ok"]
 
 
-def test_fire_acknowledge_revise_writes_the_stage_correction(stage, corrections):
-    executing_overspent(stage, usd=30.0)
-    stage.failed("s")
-    _new_form(stage)
-    done = stage.ack(by="user", decision="revise", minutes=40, usd=12.5)
+def test_an_agents_revise_within_the_margin_writes_the_agents_correction_and_keeps_the_user_line(real):
+    executing_overspent(real, usd=10.0)
+    real.agreed_stage(usd=1.0, approved_usd=3.0)
+    real.failed("s")
+    fire = gates.open_fire_record(real.state("s"))
+    assert seg.line_acknowledged_by(fire) == seg.AUTHORITY_AGENT
+    real.cycle()
+    done = real.ack(by="agent", decision="revise")
     assert done["ok"], done
-    assert corrections == [(1, "user", 40.0, 12.5)]
-    assert gates.open_fire_record(stage.state("s")) is None
+    [correction] = real.corrections()
+    assert (correction["by"], correction["authority"]) == ("agent", "agent")
+    state = real.state("s")
+    assert sub_plan.user_figure(state, 1)["usd"] == 3.0, "an agent's correction never moves the user's line"
+    assert stage_arming(state, 1)["budget"][seg.SCALE_USD] == 10.0
+    assert gates.open_fire_record(state) is None
 
 
-def test_a_refused_correction_leaves_the_fire_open_and_names_the_way_on(stage, monkeypatch):
-    executing_overspent(stage, usd=30.0)
-    stage.failed("s")
-    _new_form(stage)
-    monkeypatch.setattr(cli_approval, "cmd_estimate_correct",
-                        lambda args, *, store, runner=None: Directive(
-                            False, "DIAGNOSING", "estimate_correct",
-                            "stage 1's first figure is not agreed yet: agree it first"))
-    refused = stage.ack(by="user", decision="revise")
-    assert refused["ok"] is False and "not agreed yet" in refused["detail"]
-    assert gates.open_fire_record(stage.state("s")) is not None
-    assert stage.ack(by="user", decision="continue")["ok"], "continue is the way on when no figure is agreed"
-
-
-def test_agent_revise_of_a_user_line_stage_fire_writes_no_correction(stage, corrections):
-    executing_overspent(stage, usd=30.0)
-    stage.failed("s")
-    refused = stage.ack(by="agent", decision="revise")
-    assert refused["ok"] is False
-    assert corrections == []
-    assert stage.ack(by="user", decision="continue")["ok"]
+def test_an_agents_revise_past_the_margin_is_held_for_the_user_and_walks_the_way_on(real):
+    executing_overspent(real, usd=10.0)
+    real.agreed_stage(usd=1.0, approved_usd=3.0)
+    real.failed("s")
+    real.cycle()
+    refused = real.ack(by="agent", decision="revise", usd=40)
+    marker = _marker_of(refused)
+    assert refused["ok"] is False and refused["marker"] == "ESCALATE_TO_USER"
+    assert marker in refused["detail"] and "estimate-correct" in refused["detail"]
+    assert "fire-acknowledge --session s --decision revise --by agent" in refused["detail"]
+    state = real.state("s")
+    assert sub_plan.held_figure(state, 1)["usd"] == 40.0
+    assert real.corrections() == [] and gates.open_fire_record(state) is not None
+    _user_choice(marker, session="s")
+    decided = real.correct(minutes=refused["data"]["figure"]["minutes"], usd=40, basis="the user's call",
+                           by="user")
+    assert decided["ok"], decided
+    assert gates.open_fire_record(real.state("s")) is not None, "the correction does not acknowledge the fire"
+    done = real.ack(by="agent", decision="revise", usd=40)
+    assert done["ok"], done
+    assert gates.open_fire_record(real.state("s")) is None
+    assert sub_plan.user_figure(real.state("s"), 1)["usd"] == 40.0
+    [only] = real.corrections()
+    assert (only["by"], only["authority"]) == ("user", "user"), "the re-run adds no second correction"

@@ -66,6 +66,8 @@ from .cli_common import (
     _snapshot_approved_plan,
     _replan_baseline_path,
     _ledgered_order_key,
+    _fire_acknowledger,
+    _fire_phase,
     _effort_cross_totals,
     _flush_order_effort,
     _order_customer_id,
@@ -210,13 +212,15 @@ def _agent_fire_ack_refusal(
 ) -> tuple[str | None, dict | None]:
     """(refusal, crossing) of an agent-authored fire-acknowledge: a refusal when it may not
     proceed, else None and the backstop crossing it would be (None below the backstop)."""
-    if effort_segments.line_acknowledged_by(last) != effort_segments.AUTHORITY_AGENT:
+    if _fire_acknowledger(state, last) != effort_segments.AUTHORITY_AGENT:
+        if effort_segments.line_acknowledged_by(last) == effort_segments.AUTHORITY_AGENT:
+            return ("the order has no user-approved version to continue within; the fire is the "
+                    "user's decision. Ask them, then run fire-acknowledge --by <user> --decision "
+                    "continue|revise|abandon on their marked answer"), None
         return ("the fire is at the user line, the figure the user approved: the decision is the "
                 "user's. Ask them, then run fire-acknowledge --by <user> --decision "
                 "continue|revise|abandon on their marked answer"), None
-    understanding = effort_segments.phase_of(last.get("segment")) == "understanding"
-    if not understanding and _ledgered_order_key(state) is None:
-        return "the order has no user-approved version; the fire is the user's decision", None
+    understanding = _fire_phase(state, last) == "understanding"
     if decision != "revise":
         return (f"decision {decision!r} on a fire is the user's; the agent may only revise. "
                 "A fire at the difficulty line spends no approved money or time, so do not ask "
@@ -1913,10 +1917,15 @@ def _revise_stage_estimate(args, state: SessionState, store: StateStore, fire: d
     """A revise of a new-form stage's fire writes the stage's correction through
     `estimate-correct`, the only writer of the correction and its agreer: with authority agent
     inside the margin of the figure the user approved, with authority user on the user's marked
-    answer. None when it was written, else the refusal to hand back."""
+    answer. None when it was written or the figure already stands as agreed (the user's own
+    `estimate-correct` decided it), else the refusal to hand back, naming the verb to run again."""
     from types import SimpleNamespace
+    from . import sub_plan
     from .cli_approval import cmd_estimate_correct
     figure = _revised_figure(args, state, fire, stage)
+    agreed = sub_plan.agreed_figure(state, stage.index) or {}
+    if all(float(figure[scale] or 0.0) == float(agreed.get(scale) or 0.0) for scale in figure):
+        return None
     basis = (getattr(args, "note", None) or "").strip() or (
         f"revised on the {fire.get('scale')} fire of stage {stage.index}")
     result = cmd_estimate_correct(
@@ -1928,7 +1937,10 @@ def _revise_stage_estimate(args, state: SessionState, store: StateStore, fire: d
     return Directive(
         False, state.node, "fire_acknowledge",
         f"fire-acknowledge --decision revise by {by} refused: the stage's correction was not "
-        f"written. {result.detail}",
+        f"written. {result.detail}\nOnce that is done, run `fire-acknowledge --session "
+        f"{args.session} --decision revise --by {by} {sub_plan.figure_args(figure)}` again"
+        + ("." if by.casefold() == AGENT_ACTOR else
+           "; `--decision continue` accepts the overrun without a new figure."),
         marker=DIRECTIVE_ESCALATE_TO_USER if by.casefold() == AGENT_ACTOR else None,
         data={"figure": figure, "estimate": (result.data or {}).get("estimate")})
 
@@ -1953,13 +1965,15 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     """The synchronous decision `gates.effort_fire_blockers` refuses dispatch/replan/
     submit_plan without: appends an "ack" onto the LAST entry of state.effort_fires
     (never deletes — the append-only audit trail is preserved) recording who decided
-    and what. Three decisions:
+    and what. Who may decide follows the fire's line (`_fire_acknowledger`): the agent
+    acknowledges a fire at the difficulty line, and only with `revise`; the user decides a fire
+    at the user line, and any fire of a session with no user-approved order. Three decisions:
 
-    - "continue": accept the overrun and keep executing the current plan as-is. No
-      node change — whatever node the fire's own diagnose transition already put the
-      session in (always DIAGNOSING, since every record_fire call site forces that
-      transition in the same call) is left untouched; the coordinator proceeds
-      through the ordinary declare/investigate/critique/normalize/replan cycle next.
+    - "continue": accept the overrun and keep executing the current plan as-is. No node
+      change: the fire's own diagnose transition has put the session in DIAGNOSING (a fire the
+      prompt-boundary stamp raised waits at EXECUTING until the next engine act moves it); the
+      coordinator proceeds through the declare/investigate/critique/normalize cycle next. The
+      directive's action names the step actually next (`_after_acknowledgment`).
     - "abandon": the order no longer warrants continuing. Parks the session at
       BLOCKED — the same bypass-transition() idiom cmd_block itself uses — rather
       than RESOLVED: a mid-execution fire routinely fires with stages still
@@ -1967,10 +1981,14 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
       PASSED, so RESOLVED would be a lie for exactly the sessions this decision
       exists to stop. cmd_unblock remains the (audited) way back in, same as an
       ordinary block.
-    - "revise": the plan itself needs to change in response to the overrun. No node
-      change needed for the same reason as "continue" (already DIAGNOSING); the
-      difference is purely in the human decision recorded, informing what the
-      coordinator does next.
+    - "revise": the plan itself needs to change in response to the overrun. On a new-form
+      stage's fire it writes the stage's correction through `estimate-correct` (the user's on
+      their marked answer, the agent's inside the margin of the figure the user approved), and
+      refuses without acknowledging when that is not written. On an understanding fire it
+      renews the arming with its budget, source, pricing and author.
+
+    An acknowledgment that leaves the arming open renews it (`_renew_arming`) so a later
+    overrun of the figure fires again.
     """
     state = _require(store, args.session)
     if not state.effort_fires:

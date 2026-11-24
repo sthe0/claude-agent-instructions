@@ -827,8 +827,10 @@ def _next_arming_terms(state: SessionState, arming: dict, thr: Thresholds) -> tu
 
 
 def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, act: str, by: str) -> dict | None:
-    """A user act that approves no plan version, on the segment it concerns: book, close the
-    arming, open the next from zero. A migrated window or the closing segment opens nothing."""
+    """An act that approves no plan version, on the segment it concerns: book, close the arming,
+    open the next from zero. The user's acknowledgment of a fire or agreement of an order is one;
+    so is the agent's acknowledgment of a fire at the difficulty line (`act` and `by` say which).
+    A migrated window or the closing segment opens nothing."""
     ledger = state.effort_segments
     if effort_segments.window_arming(ledger) is not None:
         if act == effort_segments.ACT_FIRE_ACK_BY_USER or (
@@ -1887,15 +1889,23 @@ def _done_criterion_or_handoff(state: SessionState) -> str:
     return str(lineage[-1].get("done_criterion") or "") if lineage else ""
 
 
+def _fire_acknowledger(state: SessionState, fire: dict) -> str:
+    """Who acknowledges `fire` in this session: the one its line names (`line_acknowledged_by`),
+    except that a fire at the difficulty line outside understanding is the user's while the session
+    has no user-approved order version to continue within. The route, the fire record's
+    `acknowledged_by` and `fire-acknowledge` all read this one answer."""
+    by_line = effort_segments.line_acknowledged_by(fire)
+    if (by_line == effort_segments.AUTHORITY_AGENT and _fire_phase(state, fire) != "understanding"
+            and _ledgered_order_key(state) is None):
+        return effort_segments.AUTHORITY_USER
+    return by_line
+
+
 def _agent_replans_fire_route(state: SessionState) -> dict | None:
-    """The agent's own route for an unacknowledged fire at the difficulty line only
-    (`line_acknowledged_by`): a difficulty cycle, not a question to the user. Understanding fires
-    are always the agent's, before any plan exists; any other needs a user-approved order version
-    (without one the fire is the user's). None for a fire at the user line."""
+    """The agent's own route for an unacknowledged fire it acknowledges (`_fire_acknowledger`): a
+    difficulty cycle, not a question to the user. None for a fire the user acknowledges."""
     last = gates.open_fire_record(state)
-    if last is None or effort_segments.line_acknowledged_by(last) != effort_segments.AUTHORITY_AGENT:
-        return None
-    if _fire_phase(state, last) != "understanding" and _ledgered_order_key(state) is None:
+    if last is None or _fire_acknowledger(state, last) != effort_segments.AUTHORITY_AGENT:
         return None
     return _effort_fire_route(state, last)
 
@@ -3146,7 +3156,7 @@ def _effort_fire_escalation_data(state: SessionState) -> dict:
         "title": fire.get("title"),
         "ts": fire.get("ts"),
         "line": fire.get("line"),
-        "acknowledged_by": effort_segments.line_acknowledged_by(fire) if fire else None,
+        "acknowledged_by": _fire_acknowledger(state, fire) if fire else None,
         "met_in": _fire_phase(state, fire) if fire else None,
     }
 
@@ -3220,6 +3230,18 @@ def _effort_return_blockers(state: SessionState, phase: str) -> list[str] | None
     return [*gates.difficulty_blockers(state), *gates.effort_fire_blockers(state)]
 
 
+def _understanding_cycle_refusal(state: SessionState, what: str) -> str | None:
+    """Why `what` may not run while the session is in the difficulty cycle an understanding fire
+    opened (None when it is not): the order is not agreed from there, the way out is the revised
+    draft's `order-submit` over the edge `understanding_return`."""
+    blockers = _effort_return_blockers(state, "understanding")
+    if blockers is None:
+        return None
+    still_open = f"; still open: {'; '.join(blockers)}" if blockers else ""
+    return (f"cannot {what}: the session is in the difficulty cycle an understanding fire opened"
+            f"{still_open}. Return from it with {_fire_return_step(state, 'understanding')}")
+
+
 def _effort_return(state: SessionState, event: str) -> None:
     """Leave the difficulty cycle by the return edge `event`, filing the difficulty record."""
     _archive_difficulty(state)
@@ -3227,11 +3249,11 @@ def _effort_return(state: SessionState, event: str) -> None:
 
 
 def _effort_fire_route(state: SessionState, fire: dict | None) -> dict:
-    """The named way on of an open fire, by who may acknowledge it (`line_acknowledged_by`): the
+    """The named way on of an open fire, by who acknowledges it (`_fire_acknowledger`): the
     agent's difficulty cycle ending in its own `fire-acknowledge --decision revise --by agent`,
     or the user's `fire-acknowledge` on the figures the ask states."""
     exit_step = _fire_return_step(state, _fire_phase(state, fire))
-    if fire is not None and effort_segments.line_acknowledged_by(fire) == effort_segments.AUTHORITY_AGENT:
+    if fire is not None and _fire_acknowledger(state, fire) == effort_segments.AUTHORITY_AGENT:
         return {
             "route": "agent_planning_difficulty_cycle",
             "acknowledged_by": effort_segments.AUTHORITY_AGENT,

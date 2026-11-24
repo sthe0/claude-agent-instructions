@@ -40,7 +40,7 @@ from .submission import (
 from .cli_common import (
     REPO_ROOT, _book_and_judge, _close_understanding, _effort_fire_escalation_data, _effort_fire_refusal,
     _effort_fire_route, _effort_return, _effort_return_blockers, _enter_effort_diagnosis, _fire_return_step,
-    _order_draft_customer_id, _renew_order_agreement, _require,
+    _order_draft_customer_id, _renew_order_agreement, _require, _understanding_cycle_refusal,
 )
 
 LEAVES_ROOT = REPO_ROOT / "memory-global" / "leaves"
@@ -377,6 +377,9 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     def refuse(msg: str, **data) -> Directive:
         return Directive(False, state.node, "noop", msg, data=data)
 
+    in_cycle = _understanding_cycle_refusal(state, "record the agreement")
+    if in_cycle is not None:
+        return refuse(in_cycle)
     path = state.order_draft_path
     blockers = gates.order_review_blockers(state, path)
     if blockers:
