@@ -1025,7 +1025,7 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
                                    durations=junit_durations(run.junit_path, passing),
                                    clean_tree=lambda kind, file: plan.digests[(kind, file)])
                 history = json.loads(store.get_meta(ALWAYS_RERUN_HISTORY_META) or "[]")
-                warning = reuse_share_warning(always, len(ran), history)
+                warning = reuse_share_warning(always, len(ran) + len(reused), history)
                 store.set_meta(ALWAYS_RERUN_HISTORY_META, json.dumps((history + [always])[-5:]))
                 tree = core_tree(plan.core)
                 set_tagged_meta(store, result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)), tree)
