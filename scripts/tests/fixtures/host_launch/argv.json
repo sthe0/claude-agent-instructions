@@ -1,0 +1,766 @@
+{
+  "claude": {
+    "scripts/agentctl/advisor.py:_judge_user_text": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:acceptance_judge": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:enumerate_claims": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:enumerate_subprocess_runner": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_approval_ask": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_binary_ask": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_code_effects": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_deferring_disposition": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_feedback_signal": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_landing_discipline_ask": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_outage_escalation": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_published_attachment": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_published_text_rules": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_question_materiality": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_same_difficulty": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_silent_closure": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/conditions.py:judge_restatement": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/gates.py:_semantic_invariants_coverage": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/grounding_judge.py:_ask": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/procedure.py:judge_collapse": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/result_image.py:judge_echo": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/lib/marker_extract.py:extract": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "<arg>"
+        ],
+        "binary": "claude"
+      },
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "<arg>"
+        ],
+        "binary": "claude"
+      },
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "<arg>"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/mandate_cycle/driver.py:real_judge": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ]
+  },
+  "cursor": {
+    "scripts/agentctl/advisor.py:_judge_user_text": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:acceptance_judge": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:enumerate_claims": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:enumerate_subprocess_runner": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_approval_ask": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_binary_ask": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_code_effects": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_deferring_disposition": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_feedback_signal": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_landing_discipline_ask": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_outage_escalation": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_published_attachment": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_published_text_rules": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_question_materiality": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_same_difficulty": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/advisor.py:judge_silent_closure": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/agentctl/conditions.py:judge_restatement": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/gates.py:_semantic_invariants_coverage": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/grounding_judge.py:_ask": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/procedure.py:judge_collapse": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/agentctl/result_image.py:judge_echo": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "haiku",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ],
+    "scripts/lib/marker_extract.py:extract": [
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text",
+          "<arg>"
+        ],
+        "binary": "agent"
+      },
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text",
+          "<arg>"
+        ],
+        "binary": "agent"
+      },
+      {
+        "argv": [
+          "-p",
+          "--trust",
+          "--force",
+          "--approve-mcps",
+          "--output-format",
+          "text",
+          "<arg>"
+        ],
+        "binary": "agent"
+      }
+    ],
+    "scripts/mandate_cycle/driver.py:real_judge": [
+      {
+        "argv": [
+          "-p",
+          "--model",
+          "sonnet",
+          "--system-prompt",
+          "You are a strict binary classifier. Follow the user's instructions exactly.",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--output-format",
+          "json"
+        ],
+        "binary": "claude"
+      }
+    ]
+  }
+}
