@@ -131,9 +131,12 @@ def set_estimate(text: str, *, author: str, minutes: float | None = None, usd: f
     return _replace(text, block)
 
 
-def has_actual(text: str, session: str) -> bool:
+def has_actual(text: str, session: str, minutes: float | None = None, usd: float | None = None) -> bool:
+    """Whether the block holds this very actual: the same session and the same figures. A session id alone
+    is no key, since one engine session can resolve a second task or reopen one."""
     block = parse(text) or {}
-    return any(row.get("session") == session for row in block.get("actuals", []))
+    return any(row.get("session") == session and row.get("minutes") == minutes and row.get("usd") == usd
+               for row in block.get("actuals", []))
 
 
 def add_actual(text: str, *, session: str, date: str, minutes: float | None = None,

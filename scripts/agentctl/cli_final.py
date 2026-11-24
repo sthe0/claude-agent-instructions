@@ -1066,10 +1066,11 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         if understanding_actual["skipped"]:
             detail += f" (the understanding actual was not recorded on a type record: {understanding_actual['skipped']}"
             if understanding_actual["retry"]:
-                detail += f"; repeat it with: {understanding_actual['retry']}"
+                detail += (f"; repeat it with: {understanding_actual['retry']} (run it before the next resolve "
+                           "of this type: it replaces the type record's estimate)")
             detail += ")"
         if understanding_actual.get("already_there"):
-            detail += " (this session's understanding actual was on the type record already; no second row was added)"
+            detail += " (this understanding actual was on the type record already; no second row was added)"
         replaced = understanding_actual.get("replaced_confirmed")
         if replaced:
             detail += (f" (the type record's estimate, confirmed by {replaced['confirmer']} at minutes "

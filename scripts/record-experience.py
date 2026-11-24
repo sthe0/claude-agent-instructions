@@ -673,8 +673,9 @@ def cmd_understanding_effort(a) -> int:
     else:
         if not a.actual_session:
             sys.exit("an actual names the session it was met in (--actual-session)")
-        if understanding_effort.has_actual(text, a.actual_session):
-            print(f"actual of session {a.actual_session} is already recorded on {path}; nothing added")
+        if understanding_effort.has_actual(text, a.actual_session, a.minutes, a.usd):
+            print(f"actual of session {a.actual_session} with these figures is already recorded on {path}; "
+                  "nothing added")
             return 0
         new_text = understanding_effort.add_actual(
             text, session=a.actual_session, date=a.date, minutes=a.minutes, usd=a.usd)
@@ -1881,7 +1882,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="estimate: hold exactly the scales given, dropping a held scale that is left out "
                          "(without it a left-out scale keeps the held figure)")
     ue.add_argument("--actual-session", dest="actual_session",
-                    help="actual: the session the effort was met in; a session already recorded adds no second row")
+                    help="actual: the session the effort was met in; the same session with the same figures "
+                         "already recorded adds no second row")
     ue.add_argument("--date", default=today())
     ue.add_argument("--session", default=None,
                     help="ledger session_id for the edit-ledger stamp of this write")

@@ -993,7 +993,7 @@ def test_the_printed_repeat_after_a_partial_success_leaves_one_actual_row(
     assert block["estimate"]["author"] == SESSION and block["estimate"]["usd"] == pytest.approx(0.6)
 
 
-def test_the_verb_adds_no_second_actual_row_for_a_session_already_recorded(tmp_path, capsys):
+def test_the_verb_adds_no_second_actual_row_for_the_same_session_and_figures(tmp_path, capsys):
     leaf = _new(tmp_path, "alpha", "the order was read twice")
     actual = ["--kind", "actual", "--actual-session", "s1", "--minutes", "5"]
     assert _effort(leaf, *actual) == 0
@@ -1007,7 +1007,38 @@ def test_the_verb_adds_no_second_actual_row_for_a_session_already_recorded(tmp_p
         "s1", "s2"]
 
 
-def test_a_resolve_repeated_after_the_record_was_written_leaves_one_actual_row_and_says_so(
+def test_the_verb_adds_a_row_for_a_session_already_recorded_whose_figures_differ(tmp_path):
+    leaf = _new(tmp_path, "alpha", "one session resolved two tasks of the type")
+    assert _effort(leaf, "--kind", "actual", "--actual-session", "s1", "--minutes", "12") == 0
+    assert _effort(leaf, "--kind", "actual", "--actual-session", "s1", "--minutes", "40", "--usd", "1.5") == 0
+    assert _effort(leaf, "--kind", "actual", "--actual-session", "s1", "--minutes", "40") == 0
+    rows = understanding_effort.parse(leaf.read_text(encoding="utf-8"))["actuals"]
+    assert [(row["session"], row["minutes"], row.get("usd")) for row in rows] == [
+        ("s1", 12.0, None), ("s1", 40.0, 1.5), ("s1", 40.0, None)]
+
+
+def test_two_tasks_of_one_session_resolved_on_one_type_leave_two_actual_rows(tmp_path):
+    leaf = tmp_path / "t.md"
+    leaf.write_text(_with_estimate(minutes=30, usd=3.0), encoding="utf-8")
+    pricing = {"type": {"kind": "regularity", "ref": "t", "path": str(leaf)}}
+    first_task = _closed(pricing=pricing, booked={USD: 0.5, MINUTES: 12.0})
+    second_task = _closed(pricing=pricing, booked={USD: 1.5, MINUTES: 40.0})
+
+    first = understanding_pricing.write_back([first_task], session="s")
+    second = understanding_pricing.write_back([second_task], session="s")
+    assert first["already_there"] is False and second["already_there"] is False
+    assert second["written"] == ["actual", "estimate"]
+    block = understanding_effort.parse(leaf.read_text(encoding="utf-8"))
+    assert [(row["session"], row["minutes"], row["usd"]) for row in block["actuals"]] == [
+        ("s", 12.0, 0.5), ("s", 40.0, 1.5)]
+    assert (block["estimate"]["minutes"], block["estimate"]["usd"]) == (40.0, 1.5)
+
+    again = understanding_pricing.write_back([second_task], session="s")
+    assert again["already_there"] is True
+    assert len(understanding_effort.parse(leaf.read_text(encoding="utf-8"))["actuals"]) == 2
+
+
+def test_the_write_back_repeated_after_the_record_was_written_leaves_one_actual_row_and_says_so(
         ostore, armed_env, tmp_path, monkeypatch):
     leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
     assert _submit(ostore, path).ok
@@ -1084,6 +1115,7 @@ def test_resolve_prints_the_command_that_repeats_a_write_that_did_not_land(
     assert done.ok, done.detail
     retry = done.data["understanding_actual"]["retry"]
     assert f"repeat it with: {retry}" in done.detail and "--kind actual" in retry
+    assert "run it before the next resolve of this type: it replaces the type record's estimate" in done.detail
     stored = store.load("wb-3").effort_segments["understanding_actual"]
     assert stored == done.data["understanding_actual"]
 

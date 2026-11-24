@@ -153,14 +153,16 @@ def _outcome(written: list, skipped: str | None, retry: list[list[str]] | None =
             "replaced_confirmed": replaced_confirmed}
 
 
-def _held_estimate(leaf: str, session: str) -> tuple[dict | None, bool]:
-    """The estimate the record holds and whether it holds the session's actual row already; (None, False)
-    for a block the verb will refuse anyway."""
+def _held_estimate(leaf: str, session: str, actual: dict) -> tuple[dict | None, bool]:
+    """The estimate the record holds and whether it holds this actual row already (the same session and
+    the same figures); (None, False) for a block the verb will refuse anyway."""
     try:
         text = Path(leaf).read_text(encoding="utf-8")
         if understanding_effort.problems(text):
             return None, False
-        return understanding_effort.estimate_of(text), understanding_effort.has_actual(text, session)
+        there = understanding_effort.has_actual(text, session, actual[effort_segments.SCALE_MINUTES] or None,
+                                                actual[effort_segments.SCALE_USD] or None)
+        return understanding_effort.estimate_of(text), there
     except (OSError, ValueError):
         return None, False
 
@@ -192,7 +194,7 @@ def write_back(armings: list[dict], *, session: str, runner: Runner | None = Non
         Path(leaf).read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:
         return _outcome([], f"the type record cannot be read: {exc}")
-    held, already_there = _held_estimate(leaf, session)
+    held, already_there = _held_estimate(leaf, session, actual)
     actual_args = ["--leaf", leaf, "--kind", "actual", "--actual-session", session, *figures]
     stood_in = estimate_from_actual(actual, session)
     row = to_row(stood_in)
