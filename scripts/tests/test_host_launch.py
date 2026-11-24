@@ -9,13 +9,18 @@ New production modules are imported inside the tests, so this module collects on
 """
 from __future__ import annotations
 
+import ast
+import datetime as dt
+import importlib.util
 import inspect
 import json
 import os
+import pwd
+import shutil
 import stat
 import sys
+import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -27,6 +32,13 @@ GOLDEN = FIXTURES / "argv.json"
 REGEN_ENV = "HOST_LAUNCH_REGEN"
 LONG_ARG = 200
 REPLY = "NO"
+ENGINE = "eng-single-call"
+HARNESS_SESSION = "ses_t"
+OPENCODE_VERSION = "2.3.2"
+PROVIDER_ID = "stub"
+BASE_URL = "http://127.0.0.1:9/v1"
+TIER_MODELS = {"low": "m-low", "medium": "m-medium", "high": "m-high"}
+SITE_KEY = "scripts/agentctl/advisor.py:judge_binary_ask"
 
 STAND_IN = '''#!{python}
 import json, os, select, sys, time
@@ -89,6 +101,9 @@ class Rig:
         monkeypatch.setenv("HOST_LAUNCH_RECORD", str(self.record))
         monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
         monkeypatch.setenv("CURSOR_API_KEY", "stand-in-key")
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(scratch))
 
     def calls(self) -> list:
         if not self.record.exists():
@@ -97,6 +112,47 @@ class Rig:
 
     def mode(self, value: str) -> None:
         self.monkeypatch.setenv("HOST_LAUNCH_MODE", value)
+
+    def ledger(self) -> list:
+        path = self.home / ".local" / "log" / "claude-single-calls.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def ledger_text(self) -> str:
+        path = self.home / ".local" / "log" / "claude-single-calls.jsonl"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def write_state(self, host: str) -> None:
+        directory = self.agent_home / "agentctl" / "state"
+        directory.mkdir(parents=True, exist_ok=True)
+        binds = [{"root_session_id": HARNESS_SESSION, "host": host, "harness_version": OPENCODE_VERSION,
+                  "bound_at": "2026-11-24T00:00:00+00:00"}] if host == "opencode" else []
+        state = {"session_id": ENGINE, "task_id": "t1", "runtime_host": host, "host_binds": binds}
+        (directory / f"{ENGINE}.json").write_text(json.dumps(state), encoding="utf-8")
+
+    def write_settings(self, *, provider: bool = True, models: "dict | None" = None) -> None:
+        lines = []
+        if provider:
+            lines.append(f'opencode-provider = {{ id = "{PROVIDER_ID}", base_url = "{BASE_URL}" }}')
+        for tier, model in (models or TIER_MODELS).items():
+            lines.append(f'opencode-model-{tier} = "{model}"')
+        (self.agent_home / "opencode.local.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def bind(self, host: str = "opencode", *, via: str = "own", provider: bool = True) -> None:
+        """Bind this process to an engine session whose state names `host`: through the linked
+        child's own-session variable, or through the harness conversation the engine last drove."""
+        self.write_state(host)
+        self.write_settings(provider=provider)
+        self.monkeypatch.setenv("AGENTCTL_RUNTIME_HOST_VERSION", OPENCODE_VERSION)
+        if via == "own":
+            self.monkeypatch.setenv("AGENTCTL_OWN_SESSION", ENGINE)
+        else:
+            from lib import engine_session_binding
+
+            engine_session_binding.record_drive(
+                HARNESS_SESSION, ENGINE, dt.datetime(2026, 11, 24, tzinfo=dt.timezone.utc))
+            self.monkeypatch.setenv("AGENTCTL_HARNESS_SESSION_ID", HARNESS_SESSION)
 
 
 @pytest.fixture
@@ -280,3 +336,423 @@ def test_golden_argv_claude_cursor(rig):
         assert [key for key, calls in golden[host].items() if not calls] == []
         for key in golden[host]:
             assert captured[host].get(key) == golden[host][key], (host, key)
+
+
+# --- OpenCode: one seam, one argv shape ----------------------------------------------------------
+
+
+def drive_one(key: str, host: str, rig: Rig) -> None:
+    site_drivers()[key](host, rig)
+
+
+def all_calls(seen: dict) -> list:
+    return [call for calls in seen.values() for call in calls]
+
+
+def foreign_calls(calls: list, allowed: set) -> list:
+    return [call for call in calls if call["binary"] not in allowed]
+
+
+def describe(calls: list) -> str:
+    return "; ".join(f"{call['binary']} {call['argv'][:4]}" for call in calls)
+
+
+def model_of(call: dict) -> str:
+    return call["argv"][call["argv"].index("--model") + 1]
+
+
+def ask_binary(host: str, **kwargs):
+    from agentctl import advisor
+
+    return advisor.judge_binary_ask(SAMPLE_TEXT, advisor.subprocess_runner, runtime_host=host, **kwargs)
+
+
+def test_opencode_argv_uses_run_subcommand(rig):
+    rig.bind()
+    drive_one(SITE_KEY, "claude", rig)
+    [call] = rig.calls()
+    assert call["binary"] == "opencode"
+    assert call["argv"][:5] == ["run", "--standalone", "--auto", "--format", "json"]
+    assert "-p" not in call["argv"]
+    assert model_of(call) in {f"{PROVIDER_ID}/{model}" for model in TIER_MODELS.values()}
+    assert call["env"]["AGENTCTL_RUNTIME_HOST"] == "opencode"
+    assert call["env"]["AGENTCTL_RUNTIME_HOST_VERSION"] == OPENCODE_VERSION
+
+
+def test_toolless_single_call_agent(rig):
+    from lib import opencode_env
+
+    rig.bind()
+    calls = all_calls(drive_all("claude", rig))
+    assert calls
+    for call in calls:
+        assert call["argv"][call["argv"].index("--agent") + 1] == opencode_env.AGENT_NAME, describe([call])
+
+
+def test_toolless_agent_defined_in_generated_config(rig):
+    from lib import opencode_env
+
+    rig.bind()
+    drive_one(SITE_KEY, "claude", rig)
+    [call] = rig.calls()
+    agent = json.loads(call["env"]["OPENCODE_CONFIG_CONTENT"])["agents"][opencode_env.AGENT_NAME]
+    assert agent == opencode_env.agent_definition()
+    assert agent["permissions"] == [{"action": "*", "resource": "*", "effect": "deny"}]
+
+
+def launch_opencode(prompt: str, *, trailing: bool) -> None:
+    from lib import host_llm
+    from lib.runtime_models import HOST_OPENCODE
+
+    argv = host_llm.build_launch_argv(HOST_OPENCODE, f"{PROVIDER_ID}/m-low", structured_output=True)
+    if trailing:
+        host_llm.launch_single_call(argv + [prompt], timeout=30)
+    else:
+        host_llm.launch_single_call(argv, stdin=prompt, timeout=30)
+
+
+def test_prompt_positional_up_to_bound(rig):
+    from lib import host_llm
+
+    rig.bind()
+    prompts = ["short prompt", "x" * host_llm.OPENCODE_PROMPT_ARG_MAX_BYTES]
+    for trailing in (True, False):
+        for prompt in prompts:
+            rig.record.unlink(missing_ok=True)
+            launch_opencode(prompt, trailing=trailing)
+            [call] = rig.calls()
+            assert call["argv"][-1] == prompt and call["stdin"] == "", (trailing, len(prompt))
+            assert call["argv"][-3:-1] == ["--agent", "agent-single-call"]
+
+
+def test_prompt_by_stdin_above_bound(rig):
+    from lib import host_llm
+
+    rig.bind()
+    bound = host_llm.OPENCODE_PROMPT_ARG_MAX_BYTES
+    prompts = ["x" * (bound + 1), "é" * (bound // 2 + 1), "-leading option-like prompt"]
+    for trailing in (True, False):
+        for prompt in prompts:
+            rig.record.unlink(missing_ok=True)
+            launch_opencode(prompt, trailing=trailing)
+            [call] = rig.calls()
+            assert call["stdin"] == prompt, (trailing, prompt[:12], len(prompt))
+            assert call["argv"][-2:] == ["--agent", "agent-single-call"]
+
+
+# --- Claude and Cursor keep their fail-open defaults ---------------------------------------------
+
+
+def test_fail_open_defaults_unchanged_under_claude(rig):
+    for host in ("claude", "cursor"):
+        for mode, outcome in (("error", "error"), ("timeout", "timeout")):
+            rig.mode(mode)
+            verdict, reason = ask_binary(host, timeout=1)
+            assert verdict is False and "fail-open" in reason, (host, mode, reason)
+            row = rig.ledger()[-1]
+            assert (row["host"], row["outcome"]) == (host, outcome)
+
+
+def test_fault_parity_timeout_and_fail_open(rig):
+    seen = {}
+    for label in ("claude", "opencode"):
+        if label == "opencode":
+            rig.bind()
+        seen[label] = []
+        for mode in ("error", "timeout"):
+            rig.mode(mode)
+            verdict, reason = ask_binary("claude", timeout=1)
+            seen[label].append((verdict, "fail-open" in reason, rig.ledger()[-1]["outcome"]))
+    assert seen["claude"] == seen["opencode"] == [(False, True, "error"), (False, True, "timeout")]
+
+
+# --- every site, both hosts, and the tripwires ---------------------------------------------------
+
+
+def test_every_site_exercised_under_both_hosts(rig):
+    from lib import host_llm
+
+    registry = {key for key, entry in host_llm.SINGLE_CALL_SITES.items() if entry["exempt"] is None}
+    drivers = set(site_drivers())
+    assert drivers == registry, (sorted(drivers - registry), sorted(registry - drivers))
+    for label in ("unbound", "bound"):
+        if label == "bound":
+            rig.bind()
+        seen = drive_all("claude", rig)
+        assert [key for key, calls in seen.items() if not calls] == [], label
+
+
+def test_tripwire_no_claude_under_opencode(rig):
+    rig.bind()
+    for requested in ("claude", "cursor", "opencode"):
+        drive_all(requested, rig)
+    assert rig.calls()
+    stray = foreign_calls(rig.calls(), {"opencode"})
+    assert stray == [], f"a host other than OpenCode launched under an OpenCode binding: {describe(stray)}"
+
+
+def test_tripwire_no_opencode_under_claude_or_cursor(rig):
+    for bound in (False, True):
+        if bound:
+            rig.bind("claude")
+        for requested in ("claude", "cursor"):
+            drive_all(requested, rig)
+    assert rig.calls()
+    stray = foreign_calls(rig.calls(), {"claude", "agent"})
+    assert stray == [], f"OpenCode launched under a Claude or Cursor host: {describe(stray)}"
+
+
+SEEDED_SOURCE = (
+    "import subprocess\n\n\n"
+    "def seeded():\n"
+    "    return subprocess.run(['claude', '-p', 'a seeded hard-coded launch'], capture_output=True, text=True)\n"
+)
+
+
+def test_seeded_hard_coded_site_trips(rig, tmp_path):
+    from lib import host_llm
+    from test_llm_prompt_sites import launch_population
+
+    root = tmp_path / "seeded-root"
+    (root / "scripts").mkdir(parents=True)
+    module = root / "scripts" / "seeded_site.py"
+    module.write_text(SEEDED_SOURCE, encoding="utf-8")
+    key = "scripts/seeded_site.py:seeded"
+    assert key in launch_population(root)
+    assert key not in host_llm.SINGLE_CALL_SITES
+    spec = importlib.util.spec_from_file_location("seeded_site", module)
+    seeded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seeded)
+    rig.bind()
+    seeded.seeded()
+    stray = foreign_calls(rig.calls(), {"opencode"})
+    assert [call["binary"] for call in stray] == ["claude"]
+
+
+SWITCH_ALLOWED = {
+    ("scripts/lib/marker_extract.py", "extractor_available"),
+    ("scripts/lib/marker_extract.py", "model"),
+}
+
+
+def host_switches(rel: str) -> list:
+    """(function, line) of every comparison that names OpenCode in the module `rel`."""
+    found: list = []
+    scope: list = []
+
+    class Visitor(ast.NodeVisitor):
+        def _enter(self, node):
+            scope.append(node.name)
+            self.generic_visit(node)
+            scope.pop()
+
+        visit_FunctionDef = visit_AsyncFunctionDef = visit_ClassDef = _enter
+
+        def visit_Compare(self, node):
+            for operand in [node.left, *node.comparators]:
+                for part in ast.walk(operand):
+                    named = isinstance(part, ast.Name) and part.id == "HOST_OPENCODE"
+                    attr = isinstance(part, ast.Attribute) and part.attr == "HOST_OPENCODE"
+                    text = isinstance(part, ast.Constant) and part.value == "opencode"
+                    if named or attr or text:
+                        found.append((scope[-1] if scope else "<module>", node.lineno))
+            self.generic_visit(node)
+
+    Visitor().visit(ast.parse((REPO / rel).read_text(encoding="utf-8")))
+    return found
+
+
+def test_no_per_kind_host_switch():
+    from lib import host_llm
+
+    modules = sorted({key.split(":")[0] for key, entry in host_llm.SINGLE_CALL_SITES.items()
+                      if entry["exempt"] is None})
+    switches = [(rel, function, line) for rel in modules for function, line in host_switches(rel)
+                if (rel, function) not in SWITCH_ALLOWED]
+    assert switches == [], f"a site module decides on the OpenCode host itself: {switches}"
+
+
+def test_fake_binary_is_recording_stand_in(rig):
+    for name in ("claude", "agent", "opencode"):
+        assert shutil.which(name) == str(rig.bin / name)
+    assert "HOST_LAUNCH_RECORD" in (rig.bin / "opencode").read_text(encoding="utf-8")
+    drive_one(SITE_KEY, "claude", rig)
+    [call] = rig.calls()
+    assert call["binary"] == "claude" and call["argv"][0] == "-p"
+
+
+def test_single_calls_share_toolless_seam(rig):
+    from lib import host_llm, opencode_env
+
+    rig.bind()
+    calls = all_calls(drive_all("claude", rig))
+    rows = rig.ledger()
+    assert len(rows) == len(calls) > 0
+    assert {row["site"] for row in rows} <= set(host_llm.SINGLE_CALL_SITES)
+    assert {call["env"]["OPENCODE_CONFIG_CONTENT"] for call in calls} == {opencode_env.config_content()}
+    assert len({call["env"]["XDG_CONFIG_HOME"] for call in calls}) == 1
+    assert {call["env"]["XDG_CONFIG_HOME"] for call in calls} != {str(rig.home / ".config")}
+
+
+# --- provider ------------------------------------------------------------------------------------
+
+
+def generated_config(call: dict) -> dict:
+    return json.loads(Path(call["env"]["OPENCODE_CONFIG"]).read_text(encoding="utf-8"))
+
+
+def test_provider_block_carries_base_url(rig):
+    rig.bind()
+    drive_one(SITE_KEY, "claude", rig)
+    [call] = rig.calls()
+    config = generated_config(call)
+    provider = config["providers"][PROVIDER_ID]
+    assert provider["settings"]["baseURL"] == BASE_URL
+    assert config["enabled_providers"] == [PROVIDER_ID]
+    assert set(provider["models"]) == set(TIER_MODELS.values())
+
+
+def test_provider_read_only_from_user_config(rig):
+    user_dir = rig.home / ".config" / "opencode"
+    user_dir.mkdir(parents=True)
+    user_file = user_dir / "opencode.jsonc"
+    user_file.write_text(
+        '// the user own provider\n{"provider": {"acme": {"options": {"baseURL": "http://acme.invalid/v1"}}},'
+        ' "theme": "dark"}\n', encoding="utf-8")
+    before = (user_file.read_bytes(), user_file.stat().st_mtime_ns)
+    rig.bind()
+    rig.write_settings(provider=False, models={tier: f"acme/{model}" for tier, model in TIER_MODELS.items()})
+    drive_one(SITE_KEY, "claude", rig)
+    [call] = rig.calls()
+    assert generated_config(call) == {"provider": {"acme": {"options": {"baseURL": "http://acme.invalid/v1"}}}}
+    assert model_of(call).startswith("acme/")
+    assert (user_file.read_bytes(), user_file.stat().st_mtime_ns) == before
+    assert call["env"]["XDG_CONFIG_HOME"] != str(rig.home / ".config")
+
+
+# --- ledger --------------------------------------------------------------------------------------
+
+
+def test_single_call_row_written_per_call(rig):
+    rig.bind()
+    drive_one(SITE_KEY, "claude", rig)
+    drive_one(SITE_KEY, "claude", rig)
+    rows = rig.ledger()
+    assert len(rows) == len(rig.calls()) == 2
+    for row in rows:
+        assert set(row) >= {"ts", "site", "session", "host", "harness_version", "models",
+                            "root_session_id", "outcome", "denying", "cost_usd"}
+        assert (row["site"], row["host"], row["outcome"], row["denying"]) == (SITE_KEY, "opencode", "ok", False)
+        assert row["session"] == ENGINE and row["harness_version"] == OPENCODE_VERSION
+        assert row["cost_usd"] is None
+    assert all('"cost_usd": null' in line for line in rig.ledger_text().splitlines())
+
+
+def test_single_call_row_carries_task_key_and_root_session_id(rig):
+    rig.bind(via="harness")
+    drive_one(SITE_KEY, "claude", rig)
+    [call] = rig.calls()
+    [row] = rig.ledger()
+    assert row["session"] == ENGINE and row["root_session_id"] == HARNESS_SESSION
+    assert row["models"] == [model_of(call)]
+    assert row["models"] != [f"{PROVIDER_ID}/{TIER_MODELS['high']}"]
+
+
+def test_denying_site_refuses_and_records(rig, monkeypatch):
+    from agentctl import advisor
+    from lib import host_llm
+
+    refused: list = []
+
+    def runner(argv, **kwargs):
+        try:
+            return advisor.subprocess_runner(argv, **kwargs)
+        except host_llm.SingleCallRefused as exc:
+            refused.append(exc)
+            raise
+
+    key = "scripts/agentctl/advisor.py:judge_deferring_disposition"
+    assert host_llm.site_denying(key) and not host_llm.site_denying(SITE_KEY)
+    rig.bind(provider=False)
+    verdict, reason = advisor.judge_deferring_disposition(SAMPLE_TEXT, runner, timeout=20)
+    assert verdict is False and "fail-open" in reason
+    assert [exc.code for exc in refused] == ["provider_unconfigured"]
+    assert rig.calls() == []
+    [row] = rig.ledger()
+    assert (row["site"], row["outcome"], row["denying"], row["host"]) == (key, "refused", True, "opencode")
+    assert row["reason"]["code"] == "provider_unconfigured" and row["reason"]["detail"]
+
+    verdict, reason = ask_binary("claude", timeout=20)
+    assert verdict is False and "fail-open" in reason
+    assert rig.calls() == []
+    row = rig.ledger()[-1]
+    assert (row["site"], row["outcome"], row["denying"]) == (SITE_KEY, "error", False)
+    assert row["reason"]["code"] == "provider_unconfigured"
+
+    rig.bind()
+    (rig.bin / "opencode").unlink()
+    monkeypatch.setenv("PATH", str(rig.bin))
+    advisor.judge_deferring_disposition(SAMPLE_TEXT, runner, timeout=20)
+    assert [exc.code for exc in refused][-1] == "binary_missing"
+    assert rig.ledger()[-1]["outcome"] == "refused"
+
+
+def load_synthetic_task():
+    spec = importlib.util.spec_from_file_location(
+        "telemetry_synthetic_task", REPO / "scripts" / "telemetry-synthetic-task.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_exempt_site_skipped_with_reason_under_opencode(rig):
+    from lib import host_llm
+
+    key = "scripts/telemetry-synthetic-task.py:run_task"
+    reason = host_llm.SINGLE_CALL_SITES[key]["exempt"]
+    assert reason
+    task = load_synthetic_task()
+    assert task.run_task("a prompt", dict(os.environ)) == 0
+    assert [call["binary"] for call in rig.calls()] == ["claude"] and rig.ledger() == []
+    rig.record.unlink()
+    rig.bind()
+    assert task.run_task("a prompt", dict(os.environ)) == 0
+    assert rig.calls() == []
+    [row] = rig.ledger()
+    assert (row["site"], row["outcome"], row["host"]) == (key, "skipped", "opencode")
+    assert row["reason"] == {"code": "exempt", "detail": reason}
+
+
+# --- the P7 record -------------------------------------------------------------------------------
+
+
+def p7_shape(argv: list) -> list:
+    shape = list(argv)
+    shape[0] = "<binary>"
+    for flag in ("--model", "--agent"):
+        shape[shape.index(flag) + 1] = "<value>"
+    shape[-1] = "<prompt>"
+    return shape
+
+
+def test_argv_matches_latest_p7_record(rig, monkeypatch):
+    import opencode_live
+    from lib import opencode_env
+
+    if "AGENT_OPENCODE_PROBE_STATE" not in os.environ:
+        real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        monkeypatch.setenv("AGENT_OPENCODE_PROBE_STATE", str(real_home / ".local" / "state" / "opencode-probe"))
+    _, record = opencode_live.latest_record("mechanisms")
+    evidence = record["cases"]["P7"]["evidence"]
+    rig.bind()
+    drive_one(SITE_KEY, "claude", rig)
+    [call] = rig.calls()
+    mine = p7_shape(["opencode", *call["argv"]])
+    assert evidence["paths"]
+    assert evidence["agent_definition"]["toolless"] == opencode_env.agent_definition()
+    assert evidence["config_channel"] == "OPENCODE_CONFIG_CONTENT"
+    assert "OPENCODE_CONFIG_CONTENT" in call["env"]
+    for path in evidence["paths"]:
+        assert p7_shape(path["argv"]["toolless"]) == mine, path["id"]
+        assert path["config_channel"] == evidence["config_channel"]
+        assert set(path["env_keys"]) <= set(call["env"]), path["id"]
