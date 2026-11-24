@@ -224,9 +224,13 @@ def _beside_the_planning_cost(state, text: str) -> str:
     """`text` with the session's understanding estimate added to its cost section, as the
     presentation gate requires of a rendering when the session priced an understanding segment."""
     line = gates.understanding_estimate_line(state)
-    if line is None or line in text or ORDER_COST_MARKER not in text:
+    if line is None or line in text:
         return text
-    return text.replace(f"{ORDER_COST_MARKER}\n", f"{ORDER_COST_MARKER}\n\n{line}", 1)
+    lines = text.splitlines()
+    marker_at = next((i for i, each in enumerate(lines) if each.strip() == ORDER_COST_MARKER), None)
+    assert marker_at is not None, f"the rendering has no cost marker line {ORDER_COST_MARKER!r} to add {line!r} under"
+    lines[marker_at + 1:marker_at + 1] = ["", line]
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 
 def _present(store, tmp_path: Path, text=None, *, session=SESSION, bind=True, **kw):

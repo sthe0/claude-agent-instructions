@@ -757,7 +757,8 @@ def test_the_understanding_estimate_in_the_orders_text_is_refused(ostore, armed_
     inside = written.replace(f"\n{ORDER_COST_MARKER}", f"{line}\n\n{ORDER_COST_MARKER}", 1)
     refused = _present_as_written(ostore, tmp_path, inside)
     assert not refused.ok
-    assert any("inside the order's text" in problem for problem in refused.data["problems"])
+    assert any("inside the order's text" in problem and f"below the {ORDER_COST_MARKER!r} marker" in problem
+               for problem in refused.data["problems"])
 
 
 def test_a_session_with_no_understanding_estimate_or_an_old_form_order_is_not_asked_for_one(
@@ -1509,9 +1510,8 @@ def _agent_acknowledges(store, decision: str = "revise"):
         SimpleNamespace(session=SESSION, by="agent", decision=decision, note="the cycle is closed"), store=store)
 
 
-def _planned_and_one_stage_passed(store, tmp_path) -> None:
-    """From an agreed order: a plan submitted, reviewed and approved, and its one stage passed."""
-    from conftest import STAGE_OBSERVATIONS
+def _planned_and_executing(store, tmp_path) -> None:
+    """From an agreed order: a plan submitted, reviewed and approved, and its one stage current."""
     plan = _plan(tmp_path)
     assert cli.cmd_plan(SimpleNamespace(session=SESSION), store=store).ok
     submitted = cli.cmd_submit_plan(SimpleNamespace(session=SESSION, plan=plan), store=store)
@@ -1529,6 +1529,12 @@ def _planned_and_one_stage_passed(store, tmp_path) -> None:
     cli.cmd_partition(SimpleNamespace(session=SESSION, m1=False, m2=False, m3=False, m4=False,
                                       m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(SimpleNamespace(session=SESSION), store=store)
+
+
+def _planned_and_one_stage_passed(store, tmp_path) -> None:
+    """From an agreed order: a plan submitted, reviewed and approved, and its one stage passed."""
+    from conftest import STAGE_OBSERVATIONS
+    _planned_and_executing(store, tmp_path)
     passed = cli.cmd_record_result(SimpleNamespace(
         session=SESSION, status="passed", actual="ok", control="reviewed: ok", observation=STAGE_OBSERVATIONS[0],
         cost_log=None), store=store, runner=_checks_pass)
@@ -1639,6 +1645,33 @@ def test_a_small_task_has_no_phase_segments_and_its_planning_line_keeps_its_shap
     assert [line["segment"] for line in lines] == [effort_segments.PLANNING]
     assert not {"author", "work_item", "pricing"} & set(lines[0])
     assert lines[0]["actual"][USD] == pytest.approx(0.2)
+
+
+def test_a_small_sub_plan_of_an_agreed_order_shows_no_understanding_line_and_keeps_its_spend(
+        ostore, home, armed_env, tmp_path, monkeypatch):
+    from conftest import STAGE_OBSERVATIONS
+    _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.7, minutes=3)
+    _agreed_order(ostore, tmp_path, path)
+    _planned_and_executing(ostore, tmp_path)
+    pushed = cli.cmd_push_subplan(SimpleNamespace(
+        session=SESSION, plan=str(tmp_path / "child.toml"), task=None, originating_stage=1), store=ostore)
+    assert pushed.ok, pushed.detail
+    assert _classify(ostore, changed_lines=5, files=1, wall_clock_min=3, architectural=False).ok
+    assert effort_segments.UNDERSTANDING not in [
+        line["segment"] for line in cli_common._effort_disclosure(ostore.load(SESSION))["lines"]]
+    assert cli.cmd_next_stage(SimpleNamespace(session=SESSION), store=ostore).ok
+    passed = cli.cmd_record_result(SimpleNamespace(
+        session=SESSION, status="passed", actual="ok", control="reviewed: ok", observation=STAGE_OBSERVATIONS[0],
+        cost_log=None), store=ostore, runner=_checks_pass)
+    assert passed.ok, passed.detail[:200]
+    shown = _verify_final(ostore).data["effort"]
+    assert effort_segments.UNDERSTANDING not in [line["segment"] for line in shown["lines"]]
+    assert not any("author" in line or "work_item" in line for line in shown["lines"])
+    assert shown["total"]["actual"][USD] >= 0.7
+    assert shown["total"]["budget"][USD] == pytest.approx(
+        sum(line["budget"][USD] for line in shown["lines"] if line["budget"] is not None))
 
 
 def _presented_and_overrun(store, tmp_path, monkeypatch):
@@ -2095,18 +2128,25 @@ def test_executor_line_fire_agent_acknowledged(ostore, armed_env, fire_env, tmp_
     assert len(after.effort_fires) == len(state.effort_fires) and gates.open_fire_record(after) is None, \
         "the next judging act raises no fire at the repriced figure"
 
-    # the two lines differ and one act crosses both: the fire is at the user line, so the agent's revise
-    # is refused and nothing is written; the user's continue closes it
+    # the two lines differ: the agent's own correction (3 -> 4 USD, inside the margin) moved the
+    # difficulty line to 20 and left the user's at 15; an actual of 17 crosses the user's line only,
+    # and that is enough for a fire at the user line, which the agent can neither revise nor continue
     both = _real_stage_in(tmp_path, monkeypatch, "both")
-    executing_overspent(both, usd=30.0)
-    both.agreed_stage(usd=1.0, approved_usd=3.0)
-    both.failed("s")
+    executing_overspent(both, usd=17.0)
+    both.agreed_stage(usd=3.0)
+    assert both.correct(minutes=25.0, usd=4, basis="the agent's own repricing")["ok"]
+    state = both.state("s")
+    assert sub_plan.user_figure(state, 1)["usd"] == 3.0
+    assert stage_arming(state, 1)["budget"][effort_segments.SCALE_USD] == 4.0
+    assert gates.open_fire_record(state) is None
+    refusal = both.run("dispatch", session="s")
     fire = gates.open_fire_record(both.state("s"))
-    assert effort_segments.line_acknowledged_by(fire) == user
-    both.cycle()
-    refused = both.ack(by="agent", decision="revise")
-    assert refused["ok"] is False and "fire is at the user line" in refused["detail"]
-    assert both.corrections() == [] and gates.open_fire_record(both.state("s")) is not None
+    assert fire is not None and effort_segments.line_acknowledged_by(fire) == user
+    assert refusal["data"]["effort_fire"]["acknowledged_by"] == user
+    for decision in ("revise", "continue"):
+        refused = both.ack(by="agent", decision=decision)
+        assert refused["ok"] is False and "fire is at the user line" in refused["detail"], decision
+    assert len(both.corrections()) == 1 and gates.open_fire_record(both.state("s")) is not None
     assert both.ack(by="user", decision="continue")["ok"]
     assert gates.open_fire_record(both.state("s")) is None
 
@@ -2135,8 +2175,9 @@ def test_executor_line_fire_agent_acknowledged(ostore, armed_env, fire_env, tmp_
     past.run("dispatch", session="s")
     assert len(past.state("s").effort_fires) == fires, "a re-run after the user's own figure raises no fire"
 
-    # a fire at the user line after an upward correction: past the user's new line, the user's again;
-    # the user's own revise raised the line and does not fire again at the next judging act
+    # the user's own revise moves both lines to the figure it writes, so they coincide again: an
+    # overspend past five times that figure fires at the user line, and the revise that raised the
+    # lines does not fire again at the next judging act
     upward = _real_stage_in(tmp_path, monkeypatch, "upward")
     executing_overspent(upward, usd=30.0)
     upward.agreed_stage()

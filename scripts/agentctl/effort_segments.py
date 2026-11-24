@@ -463,8 +463,8 @@ def conserve(ledger: dict) -> dict:
 
 
 def timeline(ledger: dict) -> list[dict]:
-    """The segments in order, planning first and closing last, stages by first opening,
-    each with its armings in opening order."""
+    """The segments in order, understanding then planning first and closing last, stages by first
+    opening, each with its armings in opening order."""
     order: dict[str, list[dict]] = {}
     for arming in sorted(ledger.get("armings") or (), key=lambda a: a["seq"]):
         order.setdefault(arming["segment"], []).append(arming)

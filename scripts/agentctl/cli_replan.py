@@ -1986,10 +1986,11 @@ def _revise_stage_estimate(args, state: SessionState, store: StateStore, fire: d
 
 
 def _decline_held_figure(state: SessionState, fire: dict) -> dict | None:
-    """The user's `continue` on a stage's fire keeps the agreed figure, so the figure the agent
-    held past the margin after the fire (and put to the user with it) is declined and no longer
-    blocks the stage's dispatch. A figure a child escalated, or one held before the fire, is the
-    user's separate decision and stays. Returns the stage and figure declined, None when nothing was."""
+    """The user's `continue` on a stage's fire keeps the agreed figure, so a figure held for the
+    user's decision since the fire (the agent's `estimate-correct` past the margin, or its revise
+    that held one) is declined and no longer blocks the stage's dispatch. A figure a child escalated
+    (`escalated`), or one held before the fire, is the user's separate decision and stays. Returns
+    the stage and figure declined, None when nothing was."""
     from . import sub_plan
     stage = _fire_stage(state, fire)
     if stage is None:

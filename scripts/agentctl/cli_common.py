@@ -1195,10 +1195,13 @@ def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = Non
 
 
 def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> dict | None:
-    """R6: per-segment lines, planning first and closing last, then the session total. Reads
-    booked records only; it never judges. The total's actual sums booked parts (`conserve`), its
-    budget the lines of planning and the stages. `project_switch` shows a migrated window's
-    planning line with the budget the switch would give it."""
+    """R6: per-segment lines, understanding then planning first and closing last, then the session
+    total. Reads booked records only; it never judges. The total's actual sums booked parts
+    (`conserve`), its budget the lines shown: understanding, planning and the stages. A chat or
+    small-change session shows no understanding line and its budget leaves the understanding one
+    out, while whatever it booked before the reclassification stays in the total's actual.
+    `project_switch` shows a migrated window's planning line with the budget the switch would
+    give it."""
     ledger = state.effort_segments
     if not ledger.get("armings"):
         return None
@@ -1209,7 +1212,10 @@ def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> 
     waiting = {uid for stage in state.stages
                if stage.outcome.status == StageStatus.PENDING.value
                and (uid := state.stage_uid(stage.index))}
+    phase_free = _phase_free(state)
     for entry in effort_segments.timeline(ledger):
+        if phase_free and entry["segment"] == effort_segments.UNDERSTANDING:
+            continue
         stage_uid = entry["segment"].removeprefix(effort_segments.STAGE_PREFIX)
         if (entry["segment"].startswith(effort_segments.STAGE_PREFIX) and stage_uid in waiting
                 and not any(effort_segments.open_span_of(a) or any(effort_segments.arming_actual(a).values())
@@ -1218,7 +1224,7 @@ def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> 
         projected = switch is not None and entry["segment"] == effort_segments.PLANNING
         lines.append(_effort_line(entry["segment"], entry["armings"], customer=customer,
                                   budget=switch if projected else None, projected=projected,
-                                  phases=not _phase_free(state)))
+                                  phases=not phase_free))
     booked = effort_segments.conserve(ledger)["total"]
     budgeted = [line["budget"] for line in lines if line["budget"] is not None]
     budget = ({scale: sum(b.get(scale, 0.0) for b in budgeted) for scale in effort_segments.SCALES}

@@ -304,8 +304,10 @@ def _two_sided_order_md(order) -> list[str]:
 def order_cost_block_lines(order, understanding_estimate: str | None = None) -> list[str]:
     """The cost section of a new-form order: its marker, the understanding estimate with its source
     and author when the session priced one (`gates.understanding_estimate_line`), then the planning
-    budget. The one place the section's lines are composed, so the rendering and the way on an
-    order-submit names cannot differ."""
+    budget. The one place the section's lines are composed, so the block `order-submit` hands over
+    (it passes the estimate) and the lines the presentation gate asks for are the same lines.
+    `render_order_md` holds no session and passes none, so a view it renders shows the planning
+    budget only."""
     budget = order.planning_budget
     lines = [ORDER_COST_MARKER, ""]
     if understanding_estimate is not None:

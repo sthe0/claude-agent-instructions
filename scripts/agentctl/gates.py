@@ -3173,7 +3173,8 @@ def _understanding_estimate_problems(state: SessionState, lines: list[str], cost
     if figure is None or cost_at < 0:
         return []
     if figure in lines[:cost_at]:
-        return ["the understanding estimate is inside the order's text"]
+        return ["the understanding estimate is inside the order's text: move the line "
+                f"{figure!r} below the {ORDER_COST_MARKER!r} marker, beside the planning budget"]
     if figure not in lines[cost_at:]:
         return ["the cost section does not show the understanding estimate with its source and "
                 f"author: add the line {figure!r} beside the planning budget"]
