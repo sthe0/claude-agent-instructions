@@ -359,6 +359,9 @@ def run_probe() -> int:
 
 
 def main() -> int:
+    if host_llm.exempt_skip("scripts/verify-judge-isolation.py:_argv_with_json"):
+        print("skipped: exempt under OpenCode")
+        return 1
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--self-test", action="store_true",

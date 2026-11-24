@@ -828,7 +828,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # The facts of the launch-site registry (docs/operations/llm-prompt-sites.md § Single-call registry);
 # the AST fixes which sites exist, this table fixes what is true of each. `consumer` is
 # `hook:<script>:<event>` (denying by that script's integrations/opencode/parity.toml row),
-# `engine:<what>` (the verdict refuses an engine transition, denying by R1) or `advisory:<what>`.
+# `engine:<what>` (the verdict refuses an engine transition, denying by R1) or `advisory:<what>` / `diagnostic:<what>` (never denying).
 # `legacy_host` names a host the site's source hard-codes; under Cursor it keeps launching it.
 # `exempt` is the reason a site is skipped under OpenCode. `timeout` names the source constant.
 SINGLE_CALL_SITES: dict = {}
@@ -866,6 +866,16 @@ _site("scripts/agentctl/result_image.py:judge_echo", "engine:plan submission (ag
 _site("scripts/agentctl/grounding_judge.py:_ask", "engine:grounding verdict (agentctl/grounding_judge.py)", "_JUDGE_TIMEOUT_S", legacy_host="claude")
 _site("scripts/lib/marker_extract.py:extract", "engine:return marker extraction (lib/marker_extract.py)", "_EXTRACT_TIMEOUT_S")
 _site("scripts/mandate_cycle/driver.py:real_judge", "engine:mandate cycle verdict (mandate_cycle/driver.py)", "JUDGE_TIMEOUT_S", legacy_host="claude")
+_CLAUDE_ONLY = "measures the Claude client itself, so it has no form under another host"
+_site("scripts/instruction-sandbox-live.py:build_argv", "diagnostic:instruction sandbox live probe", "DEFAULT_TIMEOUT_S", exempt=f"hand-run probe that {_CLAUDE_ONLY}")
+_site("scripts/instruction-sandbox-live.py:build_hook_probe_argv", "diagnostic:instruction sandbox hook probe", "DEFAULT_TIMEOUT_S", exempt=f"hand-run probe that {_CLAUDE_ONLY}")
+_site("scripts/measure-marker-extractor-latency.py:_one_call", "diagnostic:marker extractor latency measurement", "MEASURE_CAP", exempt=f"hand-run measurement that {_CLAUDE_ONLY}")
+_site("scripts/probe-hook-decision-semantics.py:_allow_cmd", "diagnostic:hook decision probe", "HEADLESS_TIMEOUT_S", exempt=f"hand-run probe that {_CLAUDE_ONLY}")
+_site("scripts/probe-hook-decision-semantics.py:run_add_dir_read_cell", "diagnostic:hook decision probe", "HEADLESS_TIMEOUT_S", exempt=f"hand-run probe that {_CLAUDE_ONLY}")
+_site("scripts/probe-hook-decision-semantics.py:run_add_dir_write_cell", "diagnostic:hook decision probe", "HEADLESS_TIMEOUT_S", exempt=f"hand-run probe that {_CLAUDE_ONLY}")
+_site("scripts/probe-hook-decision-semantics.py:run_headless_cell", "diagnostic:hook decision probe", "HEADLESS_TIMEOUT_S", exempt=f"hand-run probe that {_CLAUDE_ONLY}")
+_site("scripts/telemetry-synthetic-task.py:run_task", "diagnostic:synthetic telemetry task", "MAX_BUDGET_USD", exempt="a synthetic task child that walks the engine under Claude to fill the record, which a bound OpenCode session does not feed")
+_site("scripts/verify-judge-isolation.py:_argv_with_json", "diagnostic:judge isolation check", "CALL_TIMEOUT_S", exempt=f"hand-run check that {_CLAUDE_ONLY}")
 
 
 def consumer_denies(consumer: str) -> bool:

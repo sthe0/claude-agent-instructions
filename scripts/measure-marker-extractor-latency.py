@@ -142,6 +142,9 @@ def _wait_for_idle() -> None:
 
 
 def main() -> None:
+    if host_llm.exempt_skip("scripts/measure-marker-extractor-latency.py:_one_call"):
+        log("skipped: exempt under OpenCode")
+        return
     OUT.parent.mkdir(parents=True, exist_ok=True)
     corpus = _corpus()
     log(f"sampling sizes: {SIZES}")

@@ -76,6 +76,51 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/spawn-specialist.py`:`_resume_for_marker` | none; resumes the child's own session, which already holds the brief `_main` sent it | no plan content | a fixed ask for the return marker |
 | `scripts/telemetry-synthetic-task.py`:`run_task` | none; a fixed one-stage synthetic plan is named by path inside an agentctl command line | no plan content | a fixed list of agentctl command lines |
 
+## Single-call registry
+
+Every place that launches one model turn through `host_llm.launch_single_call`, or is exempt
+from it. The site set is the one the AST of `scripts/**/*.py` yields (tests, the argv builders and
+the spawners excluded); the other columns are `host_llm.SINGLE_CALL_SITES`. `denying` is computed
+from `consumer`: a hook consumer by the event of its `integrations/opencode/parity.toml` row, an
+engine consumer always, an advisory or diagnostic one never. Under OpenCode a denying site that
+cannot launch refuses and writes a `refused` ledger row; an exempt site is skipped with its reason.
+
+| site | denying | consumer | legacy_host | exempt | timeout |
+|---|---|---|---|---|---|
+| `scripts/agentctl/advisor.py`:`_judge_user_text` | no | advisory:no refusing caller (judge_user_question, judge_resolution_confirmation) | - | - | `_USER_QUESTION_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`acceptance_judge` | yes | engine:stage result acceptance (agentctl/cli_results.py) | - | - | `_ACCEPTANCE_JUDGE_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`enumerate_claims` | no | advisory:ledger-enumerate (agentctl/cli_session.py) | - | - | `ENUMERATE_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`enumerate_subprocess_runner` | no | advisory:ledger-enumerate (agentctl/cli_session.py) | - | - | `ENUMERATE_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge` | no | advisory:plan advisories (agentctl/cli_common.py) | - | - | `_ADVISOR_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_approval_ask` | yes | hook:hook-plan-delivery-gate.py:PreToolUse | - | - | `_APPROVAL_ASK_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_binary_ask` | no | hook:hook-turn-end-gate.py:Stop | - | - | `_BINARY_ASK_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_code_effects` | yes | engine:resource grant decision (agentctl/code_effects.py) | claude | - | `code_effects_judge_timeout_s` |
+| `scripts/agentctl/advisor.py`:`judge_deferring_disposition` | yes | hook:hook-deferring-disposition-gate.py:PreToolUse | - | - | `_DEFERRING_DISPOSITION_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_feedback_signal` | no | hook:hook-turn-end-gate.py:Stop | - | - | `_FEEDBACK_SIGNAL_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_landing_discipline_ask` | yes | hook:hook-resolution-reminder.py:PreToolUse | - | - | `_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_outage_escalation` | yes | hook:hook-escalation-diagnosis-gate.py:PreToolUse | - | - | `_OUTAGE_ESCALATION_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_published_attachment` | yes | hook:hook-published-text-writer-gate.py:PreToolUse | - | - | `_PUBLISHED_ATTACHMENT_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_published_text_rules` | yes | hook:hook-published-text-writer-gate.py:PreToolUse | - | - | `_PUBLISHED_TEXT_RULES_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_question_materiality` | yes | engine:premise gate (agentctl/cli_questions.py) | - | - | `_QUESTION_MATERIALITY_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_same_difficulty` | yes | engine:new-leaf guard and semantic join (lib/semantic_join.py) | - | - | `_SAME_DIFFICULTY_TIMEOUT_S` |
+| `scripts/agentctl/advisor.py`:`judge_silent_closure` | no | hook:hook-turn-end-gate.py:Stop | - | - | `_SILENT_CLOSURE_TIMEOUT_S` |
+| `scripts/agentctl/conditions.py`:`judge_restatement` | yes | engine:plan submission (agentctl/submission.py) | claude | - | `_JUDGE_TIMEOUT_S` |
+| `scripts/agentctl/gates.py`:`_semantic_invariants_coverage` | yes | engine:plan lint (agentctl/gates.py) | claude | - | `_ADVISOR_TIMEOUT_S` |
+| `scripts/agentctl/grounding_judge.py`:`_ask` | yes | engine:grounding verdict (agentctl/grounding_judge.py) | claude | - | `_JUDGE_TIMEOUT_S` |
+| `scripts/agentctl/procedure.py`:`judge_collapse` | yes | engine:plan submission (agentctl/submission.py) | claude | - | `_JUDGE_TIMEOUT_S` |
+| `scripts/agentctl/result_image.py`:`judge_echo` | yes | engine:plan submission (agentctl/submission.py) | claude | - | `_JUDGE_TIMEOUT_S` |
+| `scripts/instruction-sandbox-live.py`:`build_argv` | no | diagnostic:instruction sandbox live probe | - | hand-run probe that measures the Claude client itself, so it has no form under another host | `DEFAULT_TIMEOUT_S` |
+| `scripts/instruction-sandbox-live.py`:`build_hook_probe_argv` | no | diagnostic:instruction sandbox hook probe | - | hand-run probe that measures the Claude client itself, so it has no form under another host | `DEFAULT_TIMEOUT_S` |
+| `scripts/lib/marker_extract.py`:`extract` | yes | engine:return marker extraction (lib/marker_extract.py) | - | - | `_EXTRACT_TIMEOUT_S` |
+| `scripts/mandate_cycle/driver.py`:`real_judge` | yes | engine:mandate cycle verdict (mandate_cycle/driver.py) | claude | - | `JUDGE_TIMEOUT_S` |
+| `scripts/measure-marker-extractor-latency.py`:`_one_call` | no | diagnostic:marker extractor latency measurement | - | hand-run measurement that measures the Claude client itself, so it has no form under another host | `MEASURE_CAP` |
+| `scripts/probe-hook-decision-semantics.py`:`_allow_cmd` | no | diagnostic:hook decision probe | - | hand-run probe that measures the Claude client itself, so it has no form under another host | `HEADLESS_TIMEOUT_S` |
+| `scripts/probe-hook-decision-semantics.py`:`run_add_dir_read_cell` | no | diagnostic:hook decision probe | - | hand-run probe that measures the Claude client itself, so it has no form under another host | `HEADLESS_TIMEOUT_S` |
+| `scripts/probe-hook-decision-semantics.py`:`run_add_dir_write_cell` | no | diagnostic:hook decision probe | - | hand-run probe that measures the Claude client itself, so it has no form under another host | `HEADLESS_TIMEOUT_S` |
+| `scripts/probe-hook-decision-semantics.py`:`run_headless_cell` | no | diagnostic:hook decision probe | - | hand-run probe that measures the Claude client itself, so it has no form under another host | `HEADLESS_TIMEOUT_S` |
+| `scripts/telemetry-synthetic-task.py`:`run_task` | no | diagnostic:synthetic telemetry task | - | a synthetic task child that walks the engine under Claude to fill the record, which a bound OpenCode session does not feed | `MAX_BUDGET_USD` |
+| `scripts/verify-judge-isolation.py`:`_argv_with_json` | no | diagnostic:judge isolation check | - | hand-run check that measures the Claude client itself, so it has no form under another host | `CALL_TIMEOUT_S` |
+
 ## Instruction texts
 
 The sentences the engine itself writes into a plan-bearing prompt to tell the model where the

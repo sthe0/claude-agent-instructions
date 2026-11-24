@@ -1190,6 +1190,10 @@ def _allow_plan() -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    if not args.dry_run and host_llm.exempt_skip("scripts/probe-hook-decision-semantics.py:run_headless_cell"):
+        print("skipped: exempt under OpenCode")
+        return 1
+
     if args.dry_run:
         if args.only == "allow":
             planned = _allow_plan()

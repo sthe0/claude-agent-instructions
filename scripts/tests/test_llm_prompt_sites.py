@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import re
 from argparse import Namespace
 from pathlib import Path
@@ -673,3 +674,215 @@ def test_ledger_enumerate_keeps_a_non_plan_artifact_whole(store, tmp_path):
                              store=store, runner=runner)
     assert len(runner.calls) == 1
     assert "latency spiked 3x" in runner.calls[0][1]
+
+
+# --- the single-call launch registry ----------------------------------------------------------
+#
+# `docs/operations/llm-prompt-sites.md` § Single-call registry lists every place that launches one
+# model turn: the sites the `ast` finds, with the facts `lib.host_llm.SINGLE_CALL_SITES` holds for
+# each. The section regenerates from the two (HOST_LLM_SITES_REGEN=1 rewrites it).
+
+REGISTRY_HEADING = "## Single-call registry"
+REGISTRY_INTRO = (
+    "Every place that launches one model turn through `host_llm.launch_single_call`, or is exempt\n"
+    "from it. The site set is the one the AST of `scripts/**/*.py` yields (tests, the argv builders and\n"
+    "the spawners excluded); the other columns are `host_llm.SINGLE_CALL_SITES`. `denying` is computed\n"
+    "from `consumer`: a hook consumer by the event of its `integrations/opencode/parity.toml` row, an\n"
+    "engine consumer always, an advisory or diagnostic one never. Under OpenCode a denying site that\n"
+    "cannot launch refuses and writes a `refused` ledger row; an exempt site is skipped with its reason."
+)
+REGISTRY_HEADER = (
+    "| site | denying | consumer | legacy_host | exempt | timeout |\n"
+    "|---|---|---|---|---|---|"
+)
+LAUNCH_CALLEES = {
+    "build_launch_argv", "build_prompt_argv", "_prompt_argv", "subprocess_runner",
+    "enumerate_subprocess_runner",
+}
+LAUNCH_HEADS = {"claude", "opencode", "agent", "cursor-agent"}
+LAUNCH_SUBCOMMANDS = {"-p", "run"}
+LAUNCH_EXCLUDED_FILES = {
+    "scripts/lib/host_llm.py", "scripts/spawn-specialist.py", "scripts/spawn-cursor-specialist.py",
+    "scripts/spawn-cursor-escape.py",
+}
+LAUNCH_EXCLUDED_KEYS = {
+    "scripts/agentctl/advisor.py:_prompt_argv",
+    "scripts/agentctl/cli_common.py:_venue_tree_identity.run",
+}
+PARITY_TABLE = REPO / "integrations" / "opencode" / "parity.toml"
+REFUSING_EVENTS = {"PreToolUse", "PermissionRequest"}
+
+
+class _Launches(ast.NodeVisitor):
+    def __init__(self, rel: str) -> None:
+        self.rel, self.scope, self.keys = rel, [], set()
+
+    def _enter(self, node) -> None:
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    visit_FunctionDef = visit_AsyncFunctionDef = visit_ClassDef = _enter
+
+    def _key(self) -> str:
+        return f"{self.rel}:{'.'.join(self.scope) or '<module>'}"
+
+    def visit_Call(self, node) -> None:
+        if _callee(node) in LAUNCH_CALLEES:
+            self.keys.add(self._key())
+        self.generic_visit(node)
+
+    def _argv(self, node) -> None:
+        head = _string_elements(node)
+        if len(head) >= 2 and head[0] in LAUNCH_HEADS and head[1] in LAUNCH_SUBCOMMANDS:
+            self.keys.add(self._key())
+        self.generic_visit(node)
+
+    visit_List = visit_Tuple = _argv
+
+
+def launch_population(root: Path = REPO) -> "set[str]":
+    keys: set = set()
+    for path in sorted((root / "scripts").rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith("scripts/tests/") or rel in LAUNCH_EXCLUDED_FILES:
+            continue
+        visitor = _Launches(rel)
+        visitor.visit(ast.parse(path.read_text(encoding="utf-8")))
+        keys |= visitor.keys
+    return keys - LAUNCH_EXCLUDED_KEYS
+
+
+def _facts() -> dict:
+    from lib import host_llm
+
+    return host_llm.SINGLE_CALL_SITES
+
+
+def parity_events(script: str) -> "set[str]":
+    import tomllib
+
+    table = tomllib.loads(PARITY_TABLE.read_text(encoding="utf-8"))
+    return {row["event"] for row in table["row"] if row["script"] == script}
+
+
+def computed_denying(consumer: str, parity=parity_events) -> bool:
+    """The two-source rule: a hook consumer denies when its parity row's event can refuse, an engine
+    consumer denies (R1), anything else does not."""
+    kind, _, rest = consumer.partition(":")
+    if kind == "engine":
+        return True
+    if kind != "hook":
+        return False
+    script, _, event = rest.rpartition(":")
+    if event not in parity(script):
+        raise AssertionError(f"{consumer}: no parity row for {script} on {event}")
+    return event in REFUSING_EVENTS
+
+
+def render_registry() -> str:
+    facts = _facts()
+    lines = [REGISTRY_HEADING, "", REGISTRY_INTRO, "", REGISTRY_HEADER]
+    for key in sorted(launch_population()):
+        entry = facts.get(key)
+        if entry is None:
+            lines.append(f"| `{key.replace(':', '`:`', 1)}` | unregistered | | | | |")
+            continue
+        site, _, func = key.partition(":")
+        lines.append("| " + " | ".join([
+            f"`{site}`:`{func}`", "yes" if computed_denying(entry["consumer"]) and not entry["exempt"]
+            else "no", entry["consumer"], entry["legacy_host"] or "-", entry["exempt"] or "-",
+            f"`{entry['timeout']}`",
+        ]) + " |")
+    return "\n".join(lines)
+
+
+def registry_section(text: str) -> str:
+    _, found, tail = text.partition(REGISTRY_HEADING)
+    assert found, f"{INVENTORY.name} has no `{REGISTRY_HEADING}` section"
+    body, _, _ = (REGISTRY_HEADING + tail).partition(INSTRUCTION_HEADING)
+    return body.rstrip()
+
+
+def registry_doc_rows() -> "dict[str, list]":
+    rows: dict = {}
+    for line in registry_section(inventory_text()).splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 6 and line.startswith("|") and cells[0].startswith("`scripts/"):
+            rows[cells[0].replace("`", "")] = cells
+    return rows
+
+
+def test_registry_regenerates_identically():
+    rendered = render_registry()
+    if os.environ.get("HOST_LLM_SITES_REGEN") == "1":
+        head, _, after = inventory_text().partition(INSTRUCTION_HEADING)
+        head = head.partition(REGISTRY_HEADING)[0]
+        INVENTORY.write_text(f"{head}{rendered}\n\n{INSTRUCTION_HEADING}{after}", encoding="utf-8")
+    assert registry_section(inventory_text()) == rendered
+
+
+def test_registry_population_matches_ast_launches():
+    population, registered = launch_population(), set(_facts())
+    missing, gone = sorted(population - registered), sorted(registered - population)
+    assert not missing, "launch sites without a registry entry:\n" + "\n".join(missing)
+    assert not gone, "registry entries whose launch site is gone:\n" + "\n".join(gone)
+
+
+def test_launch_population_selects_each_rule_on_a_synthetic_tree(tmp_path):
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "m.py").write_text(
+        "def literal():\n    return ['claude', '-p', 'x']\n"
+        "def opencode():\n    return ('opencode', 'run', 'x')\n"
+        "def called():\n    return advisor.subprocess_runner(argv)\n"
+        "def built():\n    return host_llm.build_launch_argv('claude', 'm')\n"
+        "def unrelated():\n    return ['git', 'status']\n"
+        "class K:\n    def method(self):\n        return ['agent', '-p']\n",
+        encoding="utf-8")
+    (scripts / "lib" / "host_llm.py").write_text("def build():\n    return ['claude', '-p']\n",
+                                                 encoding="utf-8")
+    assert launch_population(tmp_path) == {
+        "scripts/m.py:literal", "scripts/m.py:opencode", "scripts/m.py:called",
+        "scripts/m.py:built", "scripts/m.py:K.method",
+    }
+
+
+def test_exempt_sites_carry_reason():
+    exempt = {k: v for k, v in _facts().items() if v["exempt"] is not None}
+    assert exempt, "the registry names at least the diagnostic scripts as exempt"
+    for key, entry in exempt.items():
+        assert isinstance(entry["exempt"], str) and len(entry["exempt"].split()) >= 4, key
+    rows = registry_doc_rows()
+    for key in exempt:
+        assert rows[key][4] == exempt[key]["exempt"], key
+
+
+def test_no_denying_site_exempt():
+    for key, entry in _facts().items():
+        if entry["exempt"] is not None:
+            assert not computed_denying(entry["consumer"]), key
+
+
+def test_denying_field_two_source_rule():
+    from lib import host_llm
+
+    rows = registry_doc_rows()
+    for key, entry in _facts().items():
+        expected = computed_denying(entry["consumer"]) and entry["exempt"] is None
+        assert host_llm.site_denying(key) is expected, key
+        assert rows[key][1] == ("yes" if expected else "no"), key
+        if entry["consumer"].startswith("hook:"):
+            script, _, event = entry["consumer"][5:].rpartition(":")
+            assert event in parity_events(script), key
+    assert computed_denying("hook:hook-a.py:PreToolUse", parity=lambda script: {"PreToolUse"})
+    assert not computed_denying("hook:hook-a.py:PostToolUse", parity=lambda script: {"PostToolUse"})
+    assert not computed_denying("advisory:anything")
+    with pytest.raises(AssertionError):
+        computed_denying("hook:hook-a.py:PreToolUse", parity=lambda script: set())
+
+
+def test_every_timeout_names_a_constant_of_its_source():
+    for key, entry in _facts().items():
+        source = (REPO / key.partition(":")[0]).read_text(encoding="utf-8")
+        assert re.search(rf"\b{re.escape(entry['timeout'])}\b", source), (key, entry["timeout"])

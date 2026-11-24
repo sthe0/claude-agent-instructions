@@ -339,6 +339,9 @@ def run_launch(argv: list[str], env: dict, cwd: Path, timeout: float,
 
 
 def main(argv: list[str] | None = None) -> int:
+    if host_llm.exempt_skip("scripts/instruction-sandbox-live.py:build_argv"):
+        print("UNAVAILABLE exempt-under-opencode")
+        return 3
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
