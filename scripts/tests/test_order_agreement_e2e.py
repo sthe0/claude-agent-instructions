@@ -130,7 +130,7 @@ def _present_order(cli: Cli, tmp_path: Path) -> str:
 
 
 def _present_draft(cli: Cli, tmp_path: Path, draft: Path) -> str:
-    cli.ok("order-submit", "--session", SESSION, "--plan", str(draft))
+    submitted = cli.ok("order-submit", "--session", SESSION, "--plan", str(draft))
     cli.ok("plan-review", "--session", SESSION, "--scope", "order", "--verdict", "pass",
            "--reviewer", "thinker")
     cli.ok("question-raise", "--session", SESSION, "--id", "BC", "--target", "plan.goal",
@@ -140,7 +140,9 @@ def _present_draft(cli: Cli, tmp_path: Path, draft: Path) -> str:
     cli.ok("question-dispose", "--session", SESSION, "--id", "BC", "--to", "escalated",
            "--answer", answer)
     rendering = tmp_path / "order-rendering.txt"
-    rendering.write_text(RENDERING, encoding="utf-8")
+    block = submitted["data"]["order_cost_block"]
+    marker, estimate = block[0], next(line for line in block if line.startswith("- **Understanding estimate:**"))
+    rendering.write_text(RENDERING.replace(f"{marker}\n", f"{marker}\n\n{estimate}\n", 1), encoding="utf-8")
     presented = cli.ok("present-plan", "--session", SESSION, "--kind", "order",
                        "--rendering-file", str(rendering))
     cli.ok("confirm-delivery", "--session", SESSION, "--kind", "order", "--by", "fedor",

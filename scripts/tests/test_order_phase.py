@@ -220,6 +220,15 @@ def _rendering_naming(doc, text=RENDERING) -> str:
     return text.replace(f"\n{ORDER_EXECUTOR_MARKER}", f"{named}\n{ORDER_EXECUTOR_MARKER}", 1) if named else text
 
 
+def _beside_the_planning_cost(state, text: str) -> str:
+    """`text` with the session's understanding estimate added to its cost section, as the
+    presentation gate requires of a rendering when the session priced an understanding segment."""
+    line = gates.understanding_estimate_line(state)
+    if line is None or line in text or ORDER_COST_MARKER not in text:
+        return text
+    return text.replace(f"{ORDER_COST_MARKER}\n", f"{ORDER_COST_MARKER}\n\n{line}", 1)
+
+
 def _present(store, tmp_path: Path, text=None, *, session=SESSION, bind=True, **kw):
     """Put the order draft to the user. A new-form order's binding-conditions question is
     answered in agreement with the draft first, unless `bind=False`. The default rendering
@@ -229,6 +238,7 @@ def _present(store, tmp_path: Path, text=None, *, session=SESSION, bind=True, **
         text = _rendering_naming(load_order_draft(draft_path)[0]) if draft_path else RENDERING
     if bind and draft_path:
         _bind_question(store, session=session)
+    text = _beside_the_planning_cost(store.load(session), text)
     rendering = tmp_path / "order-rendering.txt"
     rendering.write_text(text, encoding="utf-8")
     return cli.cmd_present_plan(

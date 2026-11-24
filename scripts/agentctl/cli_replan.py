@@ -1985,20 +1985,23 @@ def _revise_stage_estimate(args, state: SessionState, store: StateStore, fire: d
         data={"figure": figure, "estimate": (result.data or {}).get("estimate")})
 
 
-def _decline_held_figure(state: SessionState, fire: dict) -> None:
+def _decline_held_figure(state: SessionState, fire: dict) -> dict | None:
     """The user's `continue` on a stage's fire keeps the agreed figure, so the figure the agent
     held past the margin after the fire (and put to the user with it) is declined and no longer
     blocks the stage's dispatch. A figure a child escalated, or one held before the fire, is the
-    user's separate decision and stays."""
+    user's separate decision and stays. Returns the stage and figure declined, None when nothing was."""
     from . import sub_plan
     stage = _fire_stage(state, fire)
     if stage is None:
-        return
+        return None
     held = sub_plan.held_figure(state, stage.index)
     if (held and not held.get("escalated")
             and float(held.get("at") or 0.0) > float(fire.get("ts") or 0.0)):
         sub_plan.drop_held(state, stage.index)
-        state.log("held_figure_declined", stage=stage.index)
+        declined = {"stage": stage.index, "minutes": held.get("minutes"), "usd": held.get("usd")}
+        state.log("held_figure_declined", **declined)
+        return declined
+    return None
 
 
 def _after_acknowledgment(state: SessionState) -> str:
@@ -2047,7 +2050,9 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
       refuses and leaves the fire open when the correction is not written, and when the figure
       is the one already agreed and nothing since the fire moved it (`_no_revision_refusal`).
       On an understanding fire it renews the arming with its budget, source, pricing and
-      author.
+      author. A planning fire and an old-form stage's fire have no correction to write: a
+      `revise` on them, the user's or the agent's where its line allows, renews the arming at its
+      terms like `continue` and moves no figure.
 
     An acknowledgment that leaves the arming open renews it (`_renew_arming`) so a later
     overrun of the figure fires again.
@@ -2118,8 +2123,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
             _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_AGENT, args.by)
     elif not by_agent and decision != "abandon" and _acked_arming is not None and _acked_arming["closed_at"] is None:
         _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_USER, args.by)
-    if decision == "continue" and not by_agent:
-        _decline_held_figure(state, last)
+    declined = _decline_held_figure(state, last) if decision == "continue" and not by_agent else None
     state.log("fire_acknowledge", by=args.by, decision=decision)
     _record_backstop_crossing(state, crossing)
     _clear_since_user_decision(state, args.by)
@@ -2135,9 +2139,13 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
                          data={"fire": last})
     store.save(state)
     next_action = _after_acknowledgment(state)
-    return Directive(True, state.node, next_action,
-                     f"fire acknowledged (decision={decision}); resuming",
-                     data={"fire": last, **_crossing_data(crossing)})
+    detail = f"fire acknowledged (decision={decision}); resuming"
+    data = {"fire": last, **_crossing_data(crossing)}
+    if declined is not None:
+        detail += (f"; the figure held for stage {declined['stage']} ({declined['minutes']} min / "
+                   f"{declined['usd']} usd) is declined and the agreed figure stands")
+        data["declined_figure"] = declined
+    return Directive(True, state.node, next_action, detail, data=data)
 
 
 def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

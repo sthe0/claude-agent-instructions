@@ -271,8 +271,8 @@ def _proposal_lines(proposals, indent: str = "  ") -> list[str]:
 def _two_sided_order_md(order) -> list[str]:
     """A new-form order as the user reads it: who and where, then the customer side (the agent's
     reconstruction, with its acceptance checks and the binding conditions), then the executor side
-    (the agent's professional understanding, shown and not put to agreement), then the planning
-    cost beside the order. The records beside the order that no one agrees — method ideas with
+    (the agent's professional understanding, shown and not put to agreement), then the cost
+    beside the order. The records beside the order that no one agrees — method ideas with
     their verdicts and conditions on means — are not rendered."""
     lines = _order_header_lines(order)
     side = order.customer_side
@@ -298,11 +298,20 @@ def _two_sided_order_md(order) -> list[str]:
         if entry is not None:
             target = entry.ref or entry.search_id
             lines.append(f"- **Type entry:** {entry.kind}{': ' + target if target else ''}")
+    return lines + ["", *order_cost_block_lines(order), ""]
+
+
+def order_cost_block_lines(order, understanding_estimate: str | None = None) -> list[str]:
+    """The cost section of a new-form order: its marker, the understanding estimate with its source
+    and author when the session priced one (`gates.understanding_estimate_line`), then the planning
+    budget. The one place the section's lines are composed, so the rendering and the way on an
+    order-submit names cannot differ."""
     budget = order.planning_budget
-    lines += ["", ORDER_COST_MARKER, ""]
+    lines = [ORDER_COST_MARKER, ""]
+    if understanding_estimate is not None:
+        lines.append(understanding_estimate)
     lines += (_estimate_lines(PLANNING_COST_LABEL, budget) if budget is not None
               else [planning_cost_line(PLANNING_COST_LABEL, 0, 0)])
-    lines.append("")
     return lines
 
 

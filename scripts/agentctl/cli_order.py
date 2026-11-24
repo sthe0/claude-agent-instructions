@@ -17,6 +17,7 @@ from .plan import (
     PlanError, executor_side_digest, executor_side_parts, is_two_sided, load_order_draft,
     understanding_digest, understanding_parts,
 )
+from .render import order_cost_block_lines
 from .state import (
     CHALLENGE_DISMISSED,
     CHALLENGE_OPEN,
@@ -308,6 +309,11 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
     data = {"order_draft_path": args.plan, "understanding_sha256": state.order_draft_sha256}
     detail = (f"order draft {args.plan} submitted (understanding {state.order_draft_sha256[:12]}); "
               "next: plan-review --scope order, then present-plan --kind order")
+    estimate_line = gates.understanding_estimate_line(state)
+    if estimate_line is not None and is_two_sided(doc.meta.order):
+        data["order_cost_block"] = order_cost_block_lines(doc.meta.order, estimate_line)
+        detail += ("; its rendering's cost section carries the understanding estimate with its "
+                   "source and author beside the planning budget (data.order_cost_block)")
     if fire is not None:
         data["effort_fire"] = _effort_fire_escalation_data(state)
         data["route"] = _effort_fire_route(state, fire)

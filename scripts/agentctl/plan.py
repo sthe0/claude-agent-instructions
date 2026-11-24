@@ -2709,6 +2709,15 @@ def planning_cost_line(label: str, active_minutes, usd) -> str:
     return f"- **{label}:** {minutes} active minutes, {dollars} USD"
 
 
+UNDERSTANDING_COST_LABEL = "Understanding estimate"
+
+
+def understanding_cost_line(active_minutes, usd, source: str, author: str) -> str:
+    """The understanding estimate as the cost section prints it: the figure, where it comes from
+    and who authored it. Shown beside the order and not agreed apart."""
+    return f"{planning_cost_line(UNDERSTANDING_COST_LABEL, active_minutes, usd)} (source: {source}; author: {author})"
+
+
 _ORDER_ANCHOR_RE = re.compile(r"\[([RPK]\d+)\]")
 
 

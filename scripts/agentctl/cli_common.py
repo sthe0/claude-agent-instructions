@@ -98,6 +98,7 @@ from .state import (
     Stage,
     StageReview,
     StageStatus,
+    WeightClass,
 )
 from .store import FileStateStore, StateStore, safe_session_id as _safe_session_id
 
@@ -1147,12 +1148,19 @@ def _work_item(kind: str, armings: list[dict], budget: dict | None, actual: dict
     }
 
 
+def _phase_free(state: SessionState) -> bool:
+    """Whether the session is of a class that has no order to understand and no plan to write: a
+    chat or small-change one. Its planning line keeps the shape it had before the phases were
+    work items."""
+    return state.weight_class in (WeightClass.SMALL_CHANGE.value, WeightClass.CHAT.value)
+
+
 def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = None,
-                 projected: bool = False, customer: str = "") -> dict:
+                 projected: bool = False, customer: str = "", phases: bool = True) -> dict:
     """One segment's R6 line: its armings' actuals (carried plus booked) against their summed
     budgets, the carried part shown, the closing segment's actual alone. `budget` replaces the
     sum for the migrated planning line the switch has not yet booked. An understanding or planning
-    line also carries its work item, for the `customer` the order is for."""
+    line also carries its work item, for the `customer` the order is for, unless `phases` is off."""
     closing = segment == effort_segments.CLOSING
     actual = _scale_sum(armings, effort_segments.arming_actual)
     carried = _scale_sum(armings, lambda a: a["carried"])
@@ -1177,7 +1185,7 @@ def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = Non
     }
     if projected:
         line["projected"] = True
-    if segment in _WORK_ITEMS:
+    if phases and segment in _WORK_ITEMS:
         line["author"] = effort_segments.arming_author(armings[-1])
         line["work_item"] = _work_item(segment, armings, own, actual, customer)
         if segment == effort_segments.UNDERSTANDING:
@@ -1209,7 +1217,8 @@ def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> 
             continue
         projected = switch is not None and entry["segment"] == effort_segments.PLANNING
         lines.append(_effort_line(entry["segment"], entry["armings"], customer=customer,
-                                  budget=switch if projected else None, projected=projected))
+                                  budget=switch if projected else None, projected=projected,
+                                  phases=not _phase_free(state)))
     booked = effort_segments.conserve(ledger)["total"]
     budgeted = [line["budget"] for line in lines if line["budget"] is not None]
     budget = ({scale: sum(b.get(scale, 0.0) for b in budgeted) for scale in effort_segments.SCALES}

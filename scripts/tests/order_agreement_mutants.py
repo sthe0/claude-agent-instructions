@@ -628,7 +628,24 @@ def _agent_acknowledges_user_line(mp):
                lambda fire: effort_segments.AUTHORITY_AGENT, raising=True)
 
 
+def _disclosure_omits_phases(mp):
+    """The effort disclosure, and with it the closing report, lists no understanding or planning segment."""
+    from agentctl import effort_segments
+    real = effort_segments.timeline
+    phases = (effort_segments.UNDERSTANDING, effort_segments.PLANNING)
+    mp.setattr("agentctl.effort_segments.timeline",
+               lambda ledger, *a, **kw: [e for e in real(ledger, *a, **kw) if e["segment"] not in phases],
+               raising=True)
+
+
+def _small_task_gets_phase_segments(mp):
+    """A chat or small-change session's planning line carries the author and work item of a phase."""
+    mp.setattr("agentctl.cli_common._phase_free", lambda state: False, raising=True)
+
+
 MUTANTS = {
+    "disclosure_omits_phases": _disclosure_omits_phases,
+    "small_task_gets_phase_segments": _small_task_gets_phase_segments,
     "overrun_reported_only": _overrun_reported_only,
     "understanding_fire_unrouted": _understanding_fire_unrouted,
     "agent_acknowledges_user_line": _agent_acknowledges_user_line,

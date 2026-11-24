@@ -964,6 +964,10 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "push-subplan, which refuses a SKIPPED originating stage (--originating-stage can "
         "name any stage)"
     ),
+    ("agentctl/cli_common.py", "_enter_effort_diagnosis"): (
+        "n/a: writes PENDING to state.active_stage() (the stage running at an EXECUTING node), "
+        "which only next-stage sets, from ready_stages(); a SKIPPED stage is never active"
+    ),
     ("agentctl/cli_common.py", "_apply_refined_stage_fields"): (
         "guarded: its only status write moves a SKIPPED stage whose refined definition is "
         "no longer optional back to PENDING (a required stage cannot be declined)"

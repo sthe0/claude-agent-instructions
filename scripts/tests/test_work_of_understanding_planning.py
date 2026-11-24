@@ -42,7 +42,10 @@ from test_order_agreement import (  # noqa: F401  (home, ostore and armed_env ar
     SESSION, _agree, _classify, _confirm_delivery, _marker_of, _plan, _user_answers, _wire_answer_hook, armed_env,
     home, ostore)
 from test_order_agreement import _start as _start_session
-from test_order_phase import SIDES, _draft, _present, _review, _submit
+from agentctl.plan import ORDER_COST_MARKER, load_order_draft, understanding_cost_line
+from agentctl.render import order_cost_block_lines
+from test_order_phase import (
+    OLD_RENDERING, SIDES, _bind_question, _draft, _present, _rendering_naming, _review, _submit, ns)
 
 RE = script_module("record-experience.py")
 VEL = script_module("verify-experience-leaf.py")
@@ -697,6 +700,92 @@ def test_work_items_carry_customer_product_check(ostore, armed_env, tmp_path, mo
     stage = effort_segments.STAGE_PREFIX + "s1"
     opened = effort_segments.open_arming({}, stage, {USD: 1.0, MINUTES: 1.0}, "agent-declared", 0.0, "t")
     assert "work_item" not in cli_common._effort_line(stage, [opened])
+
+
+def _present_as_written(store, tmp_path, text):
+    """`present-plan --kind order` on `text` exactly as written; unlike `_present` it adds nothing to
+    the cost section, and it leaves the binding-conditions question to the caller."""
+    rendering = tmp_path / "as-written.txt"
+    rendering.write_text(text, encoding="utf-8")
+    return cli.cmd_present_plan(
+        ns(session=SESSION, kind="order", rendering_file=str(rendering), emit_skeleton=False, plan=None),
+        store=store)
+
+
+def _written_without_the_estimate(path: Path) -> str:
+    return _rendering_naming(load_order_draft(path)[0])
+
+
+def test_presentation_gate_requires_understanding_estimate(ostore, armed_env, tmp_path, monkeypatch):
+    leaf, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    submitted = _submit(ostore, path)
+    assert submitted.ok
+    assert _review(ostore).ok
+    _bind_question(ostore)
+    line = understanding_cost_line(30.0, 3.0, "type-record", "the typing agent")
+    assert gates.understanding_estimate_line(ostore.load(SESSION)) == line
+    written = _written_without_the_estimate(path)
+    assert line not in written and ORDER_COST_MARKER in written
+
+    refused = _present_as_written(ostore, tmp_path, written)
+    assert not refused.ok
+    assert any(line in problem and "understanding estimate" in problem for problem in refused.data["problems"])
+    assert ostore.load(SESSION).plan_presentations == []
+
+    block = submitted.data["order_cost_block"]
+    assert block == order_cost_block_lines(load_order_draft(path)[0].meta.order, line)
+    registered = _present_as_written(
+        ostore, tmp_path, written.split(ORDER_COST_MARKER)[0] + "\n".join(block) + "\n")
+    assert registered.ok, registered.detail
+    state = ostore.load(SESSION)
+    assert gates.order_presentation_stale_reason(state, state.plan_presentations[-1]) is None
+
+    leaf.write_text(_with_estimate(minutes=45, usd=4.0), encoding="utf-8")
+    assert _submit(ostore, path).ok
+    state = ostore.load(SESSION)
+    stale = gates.order_presentation_stale_reason(state, state.plan_presentations[-1])
+    assert stale is not None and gates.understanding_estimate_line(state) in stale
+
+
+def test_the_understanding_estimate_in_the_orders_text_is_refused(ostore, armed_env, tmp_path, monkeypatch):
+    _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    assert _review(ostore).ok
+    _bind_question(ostore)
+    line = gates.understanding_estimate_line(ostore.load(SESSION))
+    written = _written_without_the_estimate(path)
+    inside = written.replace(f"\n{ORDER_COST_MARKER}", f"{line}\n\n{ORDER_COST_MARKER}", 1)
+    refused = _present_as_written(ostore, tmp_path, inside)
+    assert not refused.ok
+    assert any("inside the order's text" in problem for problem in refused.data["problems"])
+
+
+def test_a_session_with_no_understanding_estimate_or_an_old_form_order_is_not_asked_for_one(
+        ostore, armed_env, tmp_path, monkeypatch):
+    _, path = _classified(ostore, tmp_path, monkeypatch)
+    assert _submit(ostore, path).ok
+    assert _review(ostore).ok
+    _bind_question(ostore)
+    state = ostore.load(SESSION)
+    state.effort_segments["armings"] = [
+        a for a in state.effort_segments["armings"] if a["segment"] != effort_segments.UNDERSTANDING]
+    ostore.save(state)
+    assert gates.understanding_estimate_line(ostore.load(SESSION)) is None
+    assert _present_as_written(ostore, tmp_path, _written_without_the_estimate(path)).ok
+
+    old = _draft(tmp_path, omit=("customer_side",), name="old.toml")
+    doc = load_order_draft(old)[0]
+    assert gates.order_rendering_problems(ostore.load(SESSION), doc, OLD_RENDERING) == []
+    assert not any("understanding estimate" in problem
+                   for problem in gates.order_rendering_problems(ostore.load(SESSION), doc, OLD_RENDERING))
+
+
+def test_the_cost_block_names_the_estimate_only_when_there_is_one(tmp_path):
+    order = load_order_draft(_order_draft(tmp_path))[0].meta.order
+    without = order_cost_block_lines(order)
+    with_line = order_cost_block_lines(order, "- the estimate line")
+    assert without[0] == ORDER_COST_MARKER and "- the estimate line" not in without
+    assert with_line == [with_line[0], with_line[1], "- the estimate line", *without[2:]]
 
 
 def test_author_values_named():
@@ -1420,12 +1509,57 @@ def _agent_acknowledges(store, decision: str = "revise"):
         SimpleNamespace(session=SESSION, by="agent", decision=decision, note="the cycle is closed"), store=store)
 
 
+def _planned_and_one_stage_passed(store, tmp_path) -> None:
+    """From an agreed order: a plan submitted, reviewed and approved, and its one stage passed."""
+    from conftest import STAGE_OBSERVATIONS
+    plan = _plan(tmp_path)
+    assert cli.cmd_plan(SimpleNamespace(session=SESSION), store=store).ok
+    submitted = cli.cmd_submit_plan(SimpleNamespace(session=SESSION, plan=plan), store=store)
+    assert submitted.ok, (submitted.detail, submitted.data)
+    cli.cmd_order_raise(SimpleNamespace(session=SESSION, id="O1", element="the release is one command"),
+                        store=store)
+    cli.cmd_order_dispose(SimpleNamespace(session=SESSION, id="O1", as_="covered", stage=1, reason="",
+                                          plan=plan), store=store)
+    reviewed = cli.cmd_plan_review(SimpleNamespace(
+        session=SESSION, verdict="pass", reviewer="thinker", concerns=None, note="", target=None,
+        plan_digest=hashlib.sha256(Path(plan).read_bytes()).hexdigest(), scope=None), store=store)
+    assert reviewed.ok, reviewed.detail
+    approved = cli.cmd_approve(SimpleNamespace(session=SESSION, by="user"), store=store)
+    assert approved.ok, (approved.detail, approved.data.get("blockers"))
+    cli.cmd_partition(SimpleNamespace(session=SESSION, m1=False, m2=False, m3=False, m4=False,
+                                      m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(SimpleNamespace(session=SESSION), store=store)
+    passed = cli.cmd_record_result(SimpleNamespace(
+        session=SESSION, status="passed", actual="ok", control="reviewed: ok", observation=STAGE_OBSERVATIONS[0],
+        cost_log=None), store=store, runner=_checks_pass)
+    after = store.load(SESSION)
+    assert passed.ok, (after.stage(1).outcome.status, after.stage(1).outcome.actual,
+                       [(f["segment"], f["scale"]) for f in after.effort_fires], passed.detail[:80],
+                       after.stage(1).outcome.actual.replace("\n", " ")[:400])
+
+
+def _verify_final(store):
+    verified = cli.cmd_verify_final(SimpleNamespace(session=SESSION), store=store, runner=_checks_pass)
+    assert verified.ok, (verified.detail[:200], verified.data.get("blockers"))
+    return verified
+
+
+def _resolved(store, monkeypatch):
+    for phase, note in (("searched", ""), ("skipped", "test fixture, nothing to record")):
+        cli.cmd_plugin_record(SimpleNamespace(session=SESSION, plugin="experience", phase=phase, note=note),
+                              store=store)
+    monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
+    done = cli.cmd_resolve(SimpleNamespace(session=SESSION, by="user", quality=5, quality_by="user-confirmed",
+                                           quality_note=None, cost_log=None), store=store)
+    assert done.ok, (done.detail, done.data)
+    return done
+
+
 def test_the_whole_understanding_effort_across_a_renewal_is_what_resolve_hands_to_the_record(
         ostore, home, armed_env, tmp_path, monkeypatch):
     """Fire, a user's acknowledgment and renewal, more work, a second fire and its difficulty cycle, the
     agent's acknowledgment, the order agreed, a plan approved, a stage passed, `verify-final` and the
     `resolve` verb: the figures on the type record are the effort of every understanding arming."""
-    from conftest import STAGE_OBSERVATIONS
     path = _fired_understanding(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0, confirmer="user"))
     leaf = Path(_understanding(ostore)["pricing"]["type"]["path"])
     assert ostore.load(SESSION).node == "DIAGNOSING"
@@ -1455,39 +1589,9 @@ def test_the_whole_understanding_effort_across_a_renewal_is_what_resolve_hands_t
     whole = {scale: sum(figures[scale] for figures in per_arming) for scale in (USD, MINUTES)}
     assert whole[USD] >= 2 * _overrun(3.0)
 
-    plan = _plan(tmp_path)
-    assert cli.cmd_plan(SimpleNamespace(session=SESSION), store=ostore).ok
-    submitted = cli.cmd_submit_plan(SimpleNamespace(session=SESSION, plan=plan), store=ostore)
-    assert submitted.ok, (submitted.detail, submitted.data)
-    cli.cmd_order_raise(SimpleNamespace(session=SESSION, id="O1", element="the release is one command"),
-                        store=ostore)
-    cli.cmd_order_dispose(SimpleNamespace(session=SESSION, id="O1", as_="covered", stage=1, reason="",
-                                          plan=plan), store=ostore)
-    reviewed = cli.cmd_plan_review(SimpleNamespace(
-        session=SESSION, verdict="pass", reviewer="thinker", concerns=None, note="", target=None,
-        plan_digest=hashlib.sha256(Path(plan).read_bytes()).hexdigest(), scope=None), store=ostore)
-    assert reviewed.ok, reviewed.detail
-    approved = cli.cmd_approve(SimpleNamespace(session=SESSION, by="user"), store=ostore)
-    assert approved.ok, (approved.detail, approved.data.get("blockers"))
-    cli.cmd_partition(SimpleNamespace(session=SESSION, m1=False, m2=False, m3=False, m4=False,
-                                      m3_severe=False, m4_severe=False), store=ostore)
-    cli.cmd_next_stage(SimpleNamespace(session=SESSION), store=ostore)
-    passed = cli.cmd_record_result(SimpleNamespace(
-        session=SESSION, status="passed", actual="ok", control="reviewed: ok", observation=STAGE_OBSERVATIONS[0],
-        cost_log=None), store=ostore, runner=_checks_pass)
-    after = ostore.load(SESSION)
-    assert passed.ok, (after.stage(1).outcome.status, after.stage(1).outcome.actual,
-                       [(f["segment"], f["scale"]) for f in after.effort_fires], passed.detail[:80],
-                       after.stage(1).outcome.actual.replace("\n", " ")[:400])
-    verified = cli.cmd_verify_final(SimpleNamespace(session=SESSION), store=ostore, runner=_checks_pass)
-    assert verified.ok, (verified.detail[:200], verified.data.get("blockers"))
-    for phase, note in (("searched", ""), ("skipped", "test fixture, nothing to record")):
-        cli.cmd_plugin_record(SimpleNamespace(session=SESSION, plugin="experience", phase=phase, note=note),
-                              store=ostore)
-    monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
-    done = cli.cmd_resolve(SimpleNamespace(session=SESSION, by="user", quality=5, quality_by="user-confirmed",
-                                           quality_note=None, cost_log=None), store=ostore)
-    assert done.ok, (done.detail, done.data)
+    _planned_and_one_stage_passed(ostore, tmp_path)
+    _verify_final(ostore)
+    done = _resolved(ostore, monkeypatch)
 
     written = done.data["understanding_actual"]
     assert written["written"] == ["actual", "estimate"] and written["skipped"] is None
@@ -1495,6 +1599,46 @@ def test_the_whole_understanding_effort_across_a_renewal_is_what_resolve_hands_t
     (row,) = block["actuals"]
     assert row["usd"] == pytest.approx(whole[USD]) and row.get("minutes", 0.0) == pytest.approx(whole[MINUTES])
     assert written["replaced_confirmed"] == {"confirmer": "user", "minutes": 30.0, "usd": 3.0}
+
+
+def _phase_lines_with_the_total(shown: dict) -> None:
+    lines = shown["lines"]
+    assert [line["segment"] for line in lines][:2] == [effort_segments.UNDERSTANDING, effort_segments.PLANNING]
+    understanding, planning = lines[0], lines[1]
+    assert understanding["author"] == "the typing agent" and understanding["budget"] == {USD: 3.0, MINUTES: 30.0}
+    assert understanding["actual"][USD] == pytest.approx(0.7)
+    assert planning["author"] and planning["budget"] is not None
+    assert planning["actual"][USD] == pytest.approx(0.4)
+    assert shown["total"]["actual"][USD] == pytest.approx(sum(line["actual"][USD] for line in lines))
+    assert shown["total"]["actual"][USD] >= 1.1
+    assert shown["total"]["budget"][USD] == pytest.approx(
+        sum(line["budget"][USD] for line in lines if line["budget"] is not None))
+    assert shown["total"]["budget"][USD] >= understanding["budget"][USD] + planning["budget"][USD]
+
+
+def test_closing_total_includes_phases(ostore, home, armed_env, tmp_path, monkeypatch):
+    _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    _book(ostore, usd=0.7, minutes=3)
+    _agreed_order(ostore, tmp_path, path)
+    _book(ostore, usd=0.4, minutes=2)
+    _planned_and_one_stage_passed(ostore, tmp_path)
+    _phase_lines_with_the_total(_verify_final(ostore).data["effort"])
+    _phase_lines_with_the_total(_resolved(ostore, monkeypatch).data["effort"])
+
+
+@pytest.mark.parametrize("flags", [
+    {"chat": True},
+    {"changed_lines": 5, "files": 1, "wall_clock_min": 3, "architectural": False},
+], ids=["chat", "small-change"])
+def test_a_small_task_has_no_phase_segments_and_its_planning_line_keeps_its_shape(ostore, armed_env, flags):
+    _start_session(ostore)
+    assert _classify(ostore, **flags).ok
+    _book(ostore, usd=0.2, minutes=1)
+    lines = cli_common._effort_disclosure(ostore.load(SESSION))["lines"]
+    assert [line["segment"] for line in lines] == [effort_segments.PLANNING]
+    assert not {"author", "work_item", "pricing"} & set(lines[0])
+    assert lines[0]["actual"][USD] == pytest.approx(0.2)
 
 
 def _presented_and_overrun(store, tmp_path, monkeypatch):
@@ -1905,6 +2049,26 @@ def test_executor_line_fire_agent_acknowledged(ostore, armed_env, fire_env, tmp_
     assert gates.open_fire_record(old.state("s")) is not None
     assert old.ack(by="user", decision="revise")["ok"]
     assert gates.open_fire_record(old.state("s")) is None and sub_plan.held_figure(old.state("s"), 1) is None
+    fires = len(old.state("s").effort_fires)
+    old.run("dispatch", session="s")
+    assert len(old.state("s").effort_fires) == fires, "a judging act after the user's revise raises no fire"
+
+    # the user's revise on a planning fire renews the planning arming: the next judging act raises nothing
+    revised = PlanningEng(_own_dir(tmp_path, "planning-revise"))
+    revised.planning()
+    revised.book(usd=OVERSPENT_USD)
+    revised.run("submit_plan", session="s", plan=revised.write())
+    assert effort_segments.line_acknowledged_by(gates.open_fire_record(revised.state())) == user
+    revised.cycle()
+    assert revised.ack(by="user", decision="revise")["ok"]
+    renewed = effort_segments.open_arming_of(revised.state().effort_segments, effort_segments.PLANNING)
+    assert renewed is not None and renewed["fire"] is None and not any(effort_segments.arming_actual(renewed).values()), \
+        "the user's revise renews the planning arming: a fresh one from zero, no fire on it"
+    fires = len(revised.state().effort_fires)
+    assert gates.open_fire_record(revised.state()) is None
+    revised.run("submit_plan", session="s", plan=revised.write())
+    assert len(revised.state().effort_fires) == fires and gates.open_fire_record(revised.state()) is None, \
+        "a judging act after the user's revise raises no fire"
 
     # a new-form stage at the difficulty line, inside the margin: the agent's correction, the user's line unmoved
     inside = _real_stage_in(tmp_path, monkeypatch, "inside")
@@ -1931,6 +2095,21 @@ def test_executor_line_fire_agent_acknowledged(ostore, armed_env, fire_env, tmp_
     assert len(after.effort_fires) == len(state.effort_fires) and gates.open_fire_record(after) is None, \
         "the next judging act raises no fire at the repriced figure"
 
+    # the two lines differ and one act crosses both: the fire is at the user line, so the agent's revise
+    # is refused and nothing is written; the user's continue closes it
+    both = _real_stage_in(tmp_path, monkeypatch, "both")
+    executing_overspent(both, usd=30.0)
+    both.agreed_stage(usd=1.0, approved_usd=3.0)
+    both.failed("s")
+    fire = gates.open_fire_record(both.state("s"))
+    assert effort_segments.line_acknowledged_by(fire) == user
+    both.cycle()
+    refused = both.ack(by="agent", decision="revise")
+    assert refused["ok"] is False and "fire is at the user line" in refused["detail"]
+    assert both.corrections() == [] and gates.open_fire_record(both.state("s")) is not None
+    assert both.ack(by="user", decision="continue")["ok"]
+    assert gates.open_fire_record(both.state("s")) is None
+
     # the same fire with a figure past the margin: held for the user, nothing written, the fire open;
     # the user's marked answer and correction, then the agent's re-run closes it with the user's authority
     past = _real_stage_in(tmp_path, monkeypatch, "past")
@@ -1949,6 +2128,12 @@ def test_executor_line_fire_agent_acknowledged(ostore, armed_env, fire_env, tmp_
     [only] = past.corrections()
     assert (only["by"], only["authority"]) == ("user", "user")
     assert sub_plan.user_figure(past.state("s"), 1)["usd"] == 40.0
+    assert stage_arming(past.state("s"), 1)["budget"][effort_segments.SCALE_USD] == 40.0, \
+        "the re-run carries the user's figure"
+    assert gates.open_fire_record(past.state("s")) is None
+    fires = len(past.state("s").effort_fires)
+    past.run("dispatch", session="s")
+    assert len(past.state("s").effort_fires) == fires, "a re-run after the user's own figure raises no fire"
 
     # a fire at the user line after an upward correction: past the user's new line, the user's again;
     # the user's own revise raised the line and does not fire again at the next judging act

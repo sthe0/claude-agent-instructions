@@ -451,7 +451,10 @@ def test_the_users_continue_declines_a_figure_the_agent_held_past_the_margin_aft
     assert sub_plan.held_figure(state, 1) is None and gates.open_fire_record(state) is None
     assert sub_plan.agreed_figure(state, 1)["usd"] == 1.0 and real.corrections() == []
     assert _dispatch_blockers(real) == []
-    assert any(event.get("event") == "held_figure_declined" for event in state.history), "the decline is logged"
+    [event] = [e for e in state.history if e.get("event") == "held_figure_declined"]
+    assert (event["stage"], event["usd"]) == (1, 40.0), "the decline is logged with the stage and the figure"
+    assert done["data"]["declined_figure"] == {"stage": 1, "minutes": event["minutes"], "usd": 40.0}
+    assert "stage 1" in done["detail"] and "40.0 usd" in done["detail"] and "is declined" in done["detail"]
 
 
 @pytest.mark.parametrize("held_at, escalated", [(-60.0, False), (60.0, True)], ids=["held-before-the-fire", "child-escalated"])

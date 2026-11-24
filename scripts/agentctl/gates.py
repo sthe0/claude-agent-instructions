@@ -66,6 +66,7 @@ from .plan import (
     names_check,
     order_anchor_ids,
     planning_cost_line,
+    understanding_cost_line,
     acceptance_requirement_bindings,
     changed_parts,
     consumers,
@@ -3148,13 +3149,44 @@ def _planning_budget_problems(state: SessionState, doc, lines: list[str], cost_a
     return problems
 
 
+def understanding_estimate_line(state: SessionState) -> str | None:
+    """The understanding estimate of the session as the cost section prints it, from the session's
+    latest understanding segment (open, or closed by the agreement: its figure, source and author
+    outlive both and survive a renewal); None for a session that opened no such segment — a session
+    begun before the segment existed, a chat or small-change one — which has no estimate to show."""
+    armings = [a for a in state.effort_segments.get("armings") or ()
+               if a["segment"] == effort_segments.UNDERSTANDING and a.get("budget")]
+    if not armings:
+        return None
+    last = armings[-1]
+    budget = last["budget"]
+    return understanding_cost_line(budget.get(effort_segments.SCALE_MINUTES), budget.get(effort_segments.SCALE_USD),
+                                   last["budget_source"], effort_segments.arming_author(last))
+
+
+def _understanding_estimate_problems(state: SessionState, lines: list[str], cost_at: int) -> list[str]:
+    """The understanding estimate sits in the cost section beside the planning budget, with its
+    source and author, exactly as the session's understanding segment records it. It is shown and
+    not agreed apart, so no budget record and no question stand behind it. A missing cost section
+    is the planning check's finding and is not said twice."""
+    figure = understanding_estimate_line(state)
+    if figure is None or cost_at < 0:
+        return []
+    if figure in lines[:cost_at]:
+        return ["the understanding estimate is inside the order's text"]
+    if figure not in lines[cost_at:]:
+        return ["the cost section does not show the understanding estimate with its source and "
+                f"author: add the line {figure!r} beside the planning budget"]
+    return []
+
+
 def order_rendering_problems(state: SessionState, doc, text: str) -> list[str]:
     """Why the registered rendering `text` of a new-form order may not be put to the user ([] ==
     it may): each marker a whole line occurring once, the customer side first and the cost after
     both sides; each side's content under its own marker; the planning cost with the figure of the
-    budget record; and the binding-conditions question recorded and answered consistently with the
-    draft's records. Structure only — what the sides say is the reviewer's. An old-form order has
-    none of this."""
+    budget record and the understanding estimate with its source and author; and the
+    binding-conditions question recorded and answered consistently with the draft's records.
+    Structure only — what the sides say is the reviewer's. An old-form order has none of this."""
     order = doc.meta.order if doc is not None else None
     if not is_two_sided(order):
         return []
@@ -3177,6 +3209,7 @@ def order_rendering_problems(state: SessionState, doc, text: str) -> list[str]:
     if 0 <= at["cost"] < max(at["customer"], at["executor"]):
         problems.append("the planning cost must come after both sides, outside the order's text")
     problems += _planning_budget_problems(state, doc, lines, at["cost"])
+    problems += _understanding_estimate_problems(state, lines, at["cost"])
     problems += _binding_conditions_problems(state, order)
     return problems
 
