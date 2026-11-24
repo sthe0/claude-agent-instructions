@@ -1,0 +1,15 @@
+{
+  "about": "Each fixture is the hook input of one entry of an event log of the pinned mechanisms record (runs/<pin run>/<source> under the probe state directory), line numbers 1-based. @STATE@ stands for the probe state directory. sha256 is of the fixture file.",
+  "state_token": "@STATE@",
+  "fixtures": {
+    "shell_before.json": {"source": "events/P1.jsonl", "line": 112, "sha256": "9e04d2806403186e008ee8402efe1751b460df48027e435c782ddb00213a4329"},
+    "write_before.json": {"source": "events/P1.jsonl", "line": 132, "sha256": "490a02c5f7259eda276fbf172ca2166dfdfc85fee961b6eafe5dcbfcc5c5b790"},
+    "read_before.json": {"source": "events/P1.jsonl", "line": 164, "sha256": "1ceadf62f064fbe3f3212d663f193afdad52367d18580c66c01e93c369bb021a"},
+    "grep_before.json": {"source": "events/P1.jsonl", "line": 196, "sha256": "e5a1e665387713f48918f0fac14a6b37ac2eace93beac7c0353257886137ddc8"},
+    "inner_tool_before.json": {"source": "events/P1.jsonl", "line": 284, "sha256": "a71d9c375af2f5ecde62701c976f27d23232ceb2f7490a12913d838c915e8010"},
+    "prompt.json": {"source": "events/E14.jsonl", "line": 19, "sha256": "7000722fdbb9c5569b4b53a2ff804acc1e3053727df378b83abbaadd87ad86eb"},
+    "question_before.json": {"source": "events/E4.jsonl", "line": 40, "sha256": "0d8c865d667202a3db3c397d5cdb138d05555177edf4628ab323477189ed0ba8"},
+    "question_after.json": {"source": "events/E4.jsonl", "line": 43, "sha256": "e686ee2bcb68d18a95f5a6619978db395713f97e0de1a02a67662096eb98f3f2"}
+  },
+  "synthetic": ["bash_unresolvable.json"]
+}

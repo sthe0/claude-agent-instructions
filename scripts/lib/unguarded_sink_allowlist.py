@@ -116,4 +116,20 @@ KNOWN_UNGUARDED_HARD_SINKS = {
         "anywhere in the call chain — confirmed by reading decide() and "
         "_rm_recursive_targets at source.",
     ),
+    "822f983a06fd5f77": (
+        "scripts/opencode_probe/adapter/assets/deny_all.py", "<module>",
+        "a probe stand-in, not a gate: it refuses every call unconditionally so the adapter "
+        "probe can observe the shim refusing; there is no classification to guard.",
+    ),
+    "9ff1ab3a09a1055a": (
+        "scripts/opencode_probe/adapter/assets/deny_touch.py", "<module>",
+        "a probe stand-in, not a gate: it refuses a command that starts with the literal "
+        "`touch ` (shell-token shape of the probe's own nested command), never natural "
+        "language.",
+    ),
+    "178b8ab4f5f4e382": (
+        "scripts/opencode_probe/adapter/assets/stop_block_once.py", "<module>",
+        "a probe stand-in, not a gate: it holds the turn once per marker file so the adapter "
+        "probe can observe the idle hook continuing the session; no classification.",
+    ),
 }

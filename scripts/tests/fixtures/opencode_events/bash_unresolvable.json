@@ -1,0 +1,1 @@
+{"synthetic": "This fixture is synthetic: it is not copied from a recorded event. It is a shell call the replay test pairs with a row whose script does not exist.", "tool": "shell", "sessionID": "ses_synthetic", "id": "call_synthetic_0", "input": {"command": "true"}}

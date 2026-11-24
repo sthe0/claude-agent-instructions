@@ -47,6 +47,10 @@
 "scripts/opencode_probe/userconfig.py" = { disposition = "not-canon", category = "not-canon", reason = "writes the user-config snapshot under the probe state dir; the user's own OpenCode files are only read" }
 "scripts/opencode_probe/assets/mcp_server.py" = { disposition = "not-canon", category = "not-canon", reason = "a stand-in MCP server that writes a marker file to the path argv[1] names, a path the probe puts under the isolated run root; no tracked file" }
 "scripts/opencode_probe/mechanisms/c_p11.py" = { disposition = "not-canon", category = "not-canon", reason = "copies the fake binary and writes a wrapper script into a directory under the record directory in the probe state dir; no tracked file" }
+"scripts/lib/opencode_events.py" = { disposition = "not-canon", category = "not-canon", reason = "appends the Claude-format shadow transcript under the OpenCode integration dir's state directory in the agent home; no tracked file" }
+"scripts/opencode_probe/adapter/__init__.py" = { disposition = "not-canon", category = "not-canon", reason = "install_inert_shim writes the inert plugin copy into the config directory its caller names, under the isolated run root; no tracked file" }
+"scripts/opencode_probe/adapter/c_a2.py" = { disposition = "not-canon", category = "not-canon", reason = "creates the empty state file of the probe session under the isolated run root's agent home; no tracked file" }
+"scripts/opencode_probe/adapter/assets/stop_block_once.py" = { disposition = "not-canon", category = "not-canon", reason = "a stand-in Stop row that writes its once-only marker file to the path its environment names, under the isolated run root; no tracked file" }
 "scripts/opencode_probe/paths.py" = { disposition = "not-canon", category = "not-canon", reason = "holds the scripted tool calls whose marker files (touch) the probe asks OpenCode to write under the isolated run root; the module itself writes no tracked file" }
 
 # --- exempt-landing: the sync / landing path itself ---

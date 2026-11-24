@@ -1,0 +1,1 @@
+{"tool": "grep", "sessionID": "ses_df7218abbffe9YrwbQrgxAqV8A", "agent": "build", "messageID": "msg_208de87ff001FuUzrnzRhHO4FV", "id": "call_m1_5_0", "input": {"pattern": "m-grep-token", "path": "@STATE@/runs/root.65srcfi5/m-grep.txt"}}

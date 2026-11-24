@@ -15,7 +15,7 @@ import datetime as dt
 import os
 
 from lib import host_llm, host_stamp
-from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
+from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOST_OPENCODE, HOSTS
 
 __all__ = [
     "HOST_CLAUDE",
@@ -41,12 +41,16 @@ class HostConflictError(Exception):
 def detect_host() -> "str | None":
     """Best-effort ambient host detection; None when no signal is conclusive.
 
-    CLAUDE_CODE_SESSION_ID wins outright — Claude Code stamps this on every
-    real session. Absent that, Cursor is inferred only when its CLI is
+    AGENTCTL_RUNTIME_HOST=opencode wins first: the OpenCode gate shim runs under
+    that marker and a Claude session id may be inherited from a parent shell.
+    Otherwise CLAUDE_CODE_SESSION_ID wins outright — Claude Code stamps this on
+    every real session. Absent that, Cursor is inferred only when its CLI is
     actually runnable (lib.host_llm.preflight: agent/cursor-agent on PATH AND
     a usable API key) — either half alone is too weak to name the host (a
     stray key file or a stray binary on PATH proves nothing about which host
     launched THIS process)."""
+    if os.environ.get("AGENTCTL_RUNTIME_HOST") == HOST_OPENCODE:
+        return HOST_OPENCODE
     if os.environ.get("CLAUDE_CODE_SESSION_ID"):
         return HOST_CLAUDE
     ok, _ = host_llm.preflight(HOST_CURSOR)

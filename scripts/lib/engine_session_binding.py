@@ -35,9 +35,14 @@ HARNESS_SESSION_ENVS = ("CLAUDE_CODE_SESSION_ID", "AGENTCTL_HARNESS_SESSION_ID")
 
 
 def harness_session_id(environ=None) -> str | None:
-    """The harness conversation id of this process, or None when no host supplied one."""
+    """The harness conversation id of this process, or None when no host supplied one.
+
+    Under the OpenCode runtime marker the order is reversed: the gate shim exports the id of
+    the OpenCode session it runs in, and a Claude id inherited from a parent shell must not
+    outrank it."""
     env = os.environ if environ is None else environ
-    for name in HARNESS_SESSION_ENVS:
+    names = HARNESS_SESSION_ENVS[::-1] if env.get("AGENTCTL_RUNTIME_HOST") == "opencode" else HARNESS_SESSION_ENVS
+    for name in names:
         value = env.get(name)
         if value:
             return value
@@ -133,6 +138,15 @@ def _is_linked_child(session: str) -> bool:
     return isinstance(data, dict) and isinstance(data.get("parent_link"), dict)
 
 
+def _shadow_transcripts(name: str) -> list[Path]:
+    """The OpenCode shadow transcript of conversation ``name``, written by the gate bridge
+    under ``state/transcripts/`` of the integration directory."""
+    from lib import opencode_events
+
+    path = opencode_events.shadow_transcript_path(opencode_events.integration_dir(), name)
+    return [path] if path.is_file() else []
+
+
 def transcript_for_session(session: str) -> Path | None:
     """The newest transcript of the conversation that ran engine ``session``, or None.
 
@@ -150,6 +164,7 @@ def transcript_for_session(session: str) -> Path | None:
     names = [session] if _is_linked_child(session) else [session, *harness_sessions_driving(session)]
     for name in dict.fromkeys(names):
         found.extend(config_root.iter_transcripts(f"*/{name}.jsonl"))
+        found.extend(_shadow_transcripts(name))
     if not found:
         return None
     return max(found, key=lambda p: p.stat().st_mtime)

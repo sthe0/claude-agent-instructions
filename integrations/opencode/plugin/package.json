@@ -1,0 +1,1 @@
+{"name":"agent-gates","version":"0.0.0","type":"module","main":"agent-gates.ts","exports":{".":"./agent-gates.ts"}}

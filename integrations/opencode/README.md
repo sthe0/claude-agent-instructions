@@ -13,6 +13,14 @@ that mechanism was seen to refuse.
 - `scripts/hook-parity.py` and `scripts/lib/hook_parity.py` — the checker and its library.
 - `scripts/tests/test_hook_parity.py` and `scripts/tests/fixtures/hook_parity/` — the tests and the
   one-row fixtures that prove each strict rule fires.
+- `plugin/` — the gate shim (`agent-gates.ts`) that OpenCode loads: it forwards each tool, prompt,
+  shell and idle event to `scripts/opencode-gate-bridge.py`, which runs Core's unchanged hook
+  scripts and answers allow or deny. A deny makes the shim throw, so the call is refused. The
+  directory's `package.json` must carry both `main` and `exports`; with `main` alone OpenCode
+  2.3.2 does not load the plugin and nothing is refused. Tests:
+  `scripts/tests/test_opencode_gate_bridge.py`; live cases: `opencode-probe.py run --phase adapter`.
+  Limits: a `shell` call run by the user or from the TUI (`!`) is not bound to an engine session,
+  and Code Mode `execute` reaches no shell.
 
 ## Row format
 
