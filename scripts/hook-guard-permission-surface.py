@@ -1145,6 +1145,45 @@ def _log_fire(log_path: str, payload: dict, branch: str, message: str | None, de
         pass
 
 
+def _text_edits_unreadable(tool_input: dict) -> bool:
+    return not all(isinstance(tool_input.get(key), str) for key in ("old_string", "new_string"))
+
+
+def _unreadable_field(tool_name: str, tool_input) -> str | None:
+    """The argument the guard cannot read (absent, not the type the tool requires, or a relative path), else None.
+
+    Claude Code never sends such a call; decide_detailed would allow it for want of a change to compare."""
+    if tool_name not in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+        return None
+    if not isinstance(tool_input, dict):
+        return "tool_input"
+    if tool_name == "Bash":
+        return None if isinstance(tool_input.get("command"), str) else "command"
+    path_key = "notebook_path" if tool_name == "NotebookEdit" else "file_path"
+    path = tool_input.get(path_key)
+    if not isinstance(path, str) or not os.path.isabs(path):
+        return path_key
+    if tool_name == "Edit" and _text_edits_unreadable(tool_input):
+        return "old_string, new_string"
+    if tool_name == "Write" and not isinstance(tool_input.get("content"), str):
+        return "content"
+    if tool_name == "MultiEdit":
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list) or not edits or not all(
+            isinstance(edit, dict) and not _text_edits_unreadable(edit) for edit in edits
+        ):
+            return "edits"
+    return None
+
+
+def _unreadable_message(field: str) -> str:
+    return (
+        f"permission-surface: `{field}` of this call is absent, not the type the tool requires, or a relative "
+        f"path, so the guard cannot tell whether it widens a permission. Claude Code never sends such a call; "
+        f"it is refused instead of allowed."
+    )
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -1158,16 +1197,19 @@ def main() -> int:
     cwd = payload.get("cwd") or os.getcwd()
     permission_mode = payload.get("permission_mode")
 
-    try:
-        decision, branch, message = decide_detailed(
-            tool_name, tool_input, cwd, permission_mode, _real_read_file, _session_scratch_probe(),
-        )
-    except Exception:
-        return 0
-
-    if decision in ("ask", "deny") and _recursion_depth() >= 1:
-        decision = "deny"
-        message = _with_permission_request_hint(message or f"{branch} widening detected")
+    unreadable = _unreadable_field(tool_name, tool_input)
+    if unreadable:
+        decision, branch, message = "deny", "unreadable-input", _unreadable_message(unreadable)
+    else:
+        try:
+            decision, branch, message = decide_detailed(
+                tool_name, tool_input, cwd, permission_mode, _real_read_file, _session_scratch_probe(),
+            )
+        except Exception:
+            return 0
+        if decision in ("ask", "deny") and _recursion_depth() >= 1:
+            decision = "deny"
+            message = _with_permission_request_hint(message or f"{branch} widening detected")
 
     if decision in ("ask", "deny"):
         log_path = os.environ.get("CLAUDE_PERMISSION_GUARD_LOG") or str(

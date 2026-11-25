@@ -1,0 +1,1 @@
+{"hook": "hook-guard-permission-surface.py", "files": {".claude-agent/settings.json": "{\"permissions\": {\"allow\": []}}"}, "payload": {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": "{root}", "permission_mode": "default", "tool_name": "MultiEdit", "tool_input": {"file_path": "{root}/.claude-agent/settings.json", "edits": ["swap"]}}}

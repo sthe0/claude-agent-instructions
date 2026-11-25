@@ -22,6 +22,9 @@ are NOT exempt here — the durable memory a session should write lives in
 personal auto-memory (~/.claude-agent/projects/<hash>/memory) or a linked
 worktree/second mount's project memory, never in canon directly.
 
+A call whose required argument is absent, mistyped, or a relative file path is REFUSED, not allowed: the
+hook cannot tell what it writes (docs/operations/hook-unparsable-input-inventory.toml).
+
 Everything else is ALLOWED (fail-open): a linked worktree, a second mount, a
 path outside canon entirely, `/tmp`, and any git error or missing canon-roots
 file. Non-`git commit` git commands (pull, fetch, merge --ff-only, update-ref,
@@ -359,13 +362,27 @@ def _deny_msg(target: str) -> str:
     )
 
 
+def _unreadable_msg(field: str) -> str:
+    return (
+        f"canon-readonly: `{field}` of this call is absent, not the type the tool requires, or a relative "
+        f"path, so the hook cannot tell whether it writes into canon. Claude Code never sends such a call; "
+        f"it is refused instead of allowed."
+    )
+
+
 def decide(payload: dict) -> str | None:
-    """Return a deny reason, or None to allow. Fail-open on any unexpected shape."""
+    """Return a deny reason, or None to allow. Fail-open on any other unexpected shape; refuses a call whose
+    required argument is absent, mistyped, or a relative file path."""
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        return _unreadable_msg("tool_input")
 
     if tool_name == "Bash":
-        command = (tool_input.get("command") or "").strip()
+        command = tool_input.get("command")
+        if not isinstance(command, str):
+            return _unreadable_msg("command")
+        command = command.strip()
         if not command:
             return None
         # A here-document body is DATA, not syntax: a Markdown blockquote line
@@ -407,9 +424,9 @@ def decide(payload: dict) -> str | None:
 
     file_path = tool_input.get("file_path")
     if not isinstance(file_path, str) or not file_path:
-        return None
+        return _unreadable_msg("file_path")
     if not os.path.isabs(file_path):
-        return None  # relative path — not resolvable to a specific checkout, fail-open
+        return _unreadable_msg("file_path")
     target_dir = _nearest_existing_dir(file_path)
     if target_dir is None:
         return None

@@ -1,0 +1,1 @@
+{"hook": "hook-guard-permission-surface.py", "files": {"notes.txt": "one\n"}, "payload": {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": "{root}", "permission_mode": "default", "tool_name": "Edit", "tool_input": {"file_path": "{root}/notes.txt", "old_string": "one", "new_string": "two"}}}

@@ -1,0 +1,768 @@
+# Allow-on-unreadable-input inventory of the PreToolUse hooks that scripts/install-reminder-hooks.sh wires.
+#
+# Difficulty removed: a denying hook that lets a call pass because it could not read the call turns the
+# OpenCode adapter's refusal into a pass. The adapter builds the hook payload itself (scripts/lib/opencode_events.py
+# claude_input) and refuses a call whose required argument is absent or of the wrong type, so a branch fed by a tool
+# argument is not reached from OpenCode. This file lists every such branch, so a hook that gains one is seen.
+#
+# [[hook]]   one per hook wired on PreToolUse; denies = false names a hook that has no way to refuse a call
+#            (test_inventory_covers_every_denying_hook checks its source for one).
+# [[row]]    one per branch of a denying hook that allows because input could not be read:
+#   hook, branch, location (file and function; lines drift, names do not), field (what could not be read),
+#   fed_by (tool_argument | payload | stdin | state | environment),
+#   reachable_from_claude (can Claude Code send an input that takes the branch),
+#   disposition = "refused" (the hook now refuses at it; fixture names the unreadable/ payload that proves it)
+#               | "left" (the branch stays as it is; reason says why),
+#   bridge_call (left, tool_argument, not reachable: an OpenCode call that would build such a payload; the
+#   bridge refuses it, test_left_inventory_rows_refused_by_bridge) or bridge_note (any other left row).
+# Hooks changed by this stage: hook-guard-canon-readonly.py, hook-guard-permission-surface.py (user decision
+# 2026-11-25). Every other row is left, because refusing there is not the stage's to change.
+
+[[hook]]
+script = "hook-guard-canon-readonly.py"
+denies = true
+
+[[hook]]
+script = "hook-guard-permission-surface.py"
+denies = true
+
+[[hook]]
+script = "hook-state-gate.py"
+denies = true
+
+[[hook]]
+script = "hook-scope-conflict.py"
+denies = true
+
+[[hook]]
+script = "hook-guard-destructive-rm.py"
+denies = true
+
+[[hook]]
+script = "hook-guard-subagent-destructive-action.py"
+denies = true
+
+[[hook]]
+script = "hook-guard-agent-specialist-stand-in.py"
+denies = true
+
+[[hook]]
+script = "hook-guard-bash-source-edit.py"
+denies = true
+
+[[hook]]
+script = "hook-multi-mount-search-guard.py"
+denies = true
+
+[[hook]]
+script = "hook-plan-delivery-gate.py"
+denies = true
+
+[[hook]]
+script = "hook-escalation-diagnosis-gate.py"
+denies = true
+
+[[hook]]
+script = "hook-deferring-disposition-gate.py"
+denies = true
+
+[[hook]]
+script = "hook-resolution-reminder.py"
+denies = true
+
+[[hook]]
+script = "hook-published-text-writer-gate.py"
+denies = true
+
+[[hook]]
+script = "verify-leaf-structure.py"
+denies = true
+
+[[hook]]
+script = "verify-experience-leaf.py"
+denies = true
+
+[[hook]]
+script = "verify-no-conflict-markers.py"
+denies = true
+
+[[hook]]
+script = "hook-memory-consistency.py"
+denies = false
+
+[[hook]]
+script = "hook-term-neutrality.py"
+denies = false
+
+[[hook]]
+script = "hook-retry-detector.py"
+denies = false
+
+[[hook]]
+script = "hook-long-job-arm.py"
+denies = false
+
+[[hook]]
+script = "hook-skill-first.py"
+denies = false
+
+# --- hook-guard-canon-readonly.py -------------------------------------------------------------------------
+
+[[row]]
+hook = "hook-guard-canon-readonly.py"
+branch = "stdin is not JSON, or JSON that is not an object"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object, and the bridge serialises a dict"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-guard-canon-readonly.py"
+branch = "tool_input is not an object, or a Bash command is missing or not a string"
+location = "decide"
+field = "tool_input, tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "Claude Code's Bash tool requires a string command and every tool input is an object"
+fixture = "unreadable/canon_bash_no_command.json"
+
+[[row]]
+hook = "hook-guard-canon-readonly.py"
+branch = "an Edit or Write file_path is missing, not a string or empty"
+location = "decide"
+field = "tool_input.file_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "Edit and Write require a string file_path"
+fixture = "unreadable/canon_edit_no_file_path.json"
+
+[[row]]
+hook = "hook-guard-canon-readonly.py"
+branch = "an Edit or Write file_path is relative"
+location = "decide"
+field = "tool_input.file_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "the tool schemas of Edit and Write require an absolute path; the hook never resolved a relative one against cwd"
+fixture = "unreadable/canon_edit_relative_path.json"
+
+[[row]]
+hook = "hook-guard-canon-readonly.py"
+branch = "shlex cannot split the command, so no git commit and no write target is seen"
+location = "_is_git_commit, bash_write_targets.segments"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = true
+disposition = "left"
+reason = "a command shlex rejects but the shell runs reaches the hook from Claude Code, so refusing would change a Claude verdict (fixture claude/canon_bash_commit_unbalanced_quote.json)"
+bridge_note = "the bridge passes a string command through as it is, as Claude Code does"
+
+[[row]]
+hook = "hook-guard-canon-readonly.py"
+branch = "cwd is not a directory that exists, so a git commit is not placed in any checkout"
+location = "decide"
+field = "cwd"
+fed_by = "payload"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code sends the absolute working directory it runs in"
+bridge_note = "the bridge sets cwd to the session directory or a resolved workdir, and refuses the call when it cannot resolve one (refused: directory)"
+
+# --- hook-guard-permission-surface.py ---------------------------------------------------------------------
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "stdin is not JSON, or JSON that is not an object"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object, and the bridge serialises a dict"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "tool_input is not an object"
+location = "main, decide_detailed"
+field = "tool_input"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "every Claude Code tool input is an object"
+fixture = "unreadable/ps_tool_input_not_object.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "a Bash command is missing or not a string"
+location = "decide_detailed"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "Claude Code's Bash tool requires a string command"
+fixture = "unreadable/ps_bash_no_command.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "an Edit, Write or MultiEdit file_path is missing, not a string or empty"
+location = "_g1_document_change, _g1_state_edit, _g3_edit"
+field = "tool_input.file_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "Edit, Write and MultiEdit require a string file_path"
+fixture = "unreadable/ps_edit_no_file_path.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "an Edit, Write or MultiEdit file_path is relative, so is_live_settings never meets the settings file it names"
+location = "_g1_document_change (lib/widening_targets.is_live_settings)"
+field = "tool_input.file_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "the tool schemas require an absolute path; the hook never resolved a relative one against cwd"
+fixture = "unreadable/ps_edit_relative_settings_path.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "a NotebookEdit notebook_path is missing or not a string"
+location = "_g1_state_notebook, _g3_notebook"
+field = "tool_input.notebook_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "NotebookEdit requires a string notebook_path"
+fixture = "unreadable/ps_notebook_no_path.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "an Edit old_string or new_string is absent or not a string, so the text after the edit is unknown"
+location = "_apply_edit"
+field = "tool_input.old_string, tool_input.new_string"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "Edit requires both as strings"
+fixture = "unreadable/ps_edit_no_old_string.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "a Write content is not a string"
+location = "_g1_write"
+field = "tool_input.content"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "Write requires a string content"
+fixture = "unreadable/ps_write_non_string_content.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "a MultiEdit edits is not a non-empty list of objects"
+location = "_g1_multi_edit, _apply_multi_edit"
+field = "tool_input.edits"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "refused"
+reason = "MultiEdit requires a list of edits, each an object"
+fixture = "unreadable/ps_multiedit_edits_not_list.json"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "an Edit old_string does not occur in the current text, so the edit is not applied"
+location = "_apply_edit"
+field = "tool_input.old_string"
+fed_by = "tool_argument"
+reachable_from_claude = true
+disposition = "left"
+reason = "a well-formed input Claude Code can send (the tool then fails the edit itself); refusing would change a Claude verdict"
+bridge_note = "the bridge refuses an edit whose oldString does not occur exactly (open limit fuzzy-edit)"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "the settings text before or after the change is not a JSON object, so no grant is read from it"
+location = "_parse_settings, _settings_grant"
+field = "contents of the settings file and of the change"
+fed_by = "state"
+reachable_from_claude = true
+disposition = "left"
+reason = "an existing settings file that is not valid JSON is a state Claude Code meets; refusing would change a Claude verdict (fixture claude/ps_edit_settings_invalid_base.json)"
+bridge_note = "the file is on disk, not an argument; the bridge cannot make it readable"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "the settings file exists but cannot be read (not not-found)"
+location = "_read_baseline"
+field = "contents of the settings file"
+fed_by = "state"
+reachable_from_claude = true
+disposition = "left"
+reason = "a state Claude Code meets (permissions, a directory, a non-UTF-8 file); refusing would change a Claude verdict"
+bridge_note = "the file is on disk, not an argument; the bridge cannot make it readable"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "shlex cannot split the command, so no write target, redirection or claude launch is seen"
+location = "lib/bash_write_targets.segments (G1-bash, G2, G2-env, G4)"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = true
+disposition = "left"
+reason = "a command shlex rejects but the shell runs reaches the hook from Claude Code (fixture claude/ps_bash_unbalanced_quote_skip_permissions.json); refusing would change a Claude verdict"
+bridge_note = "the bridge passes a string command through as it is, as Claude Code does"
+
+[[row]]
+hook = "hook-guard-permission-surface.py"
+branch = "any other error while deciding (a parse or I/O failure) allows"
+location = "decide_detailed"
+field = "any"
+fed_by = "state"
+reachable_from_claude = true
+disposition = "left"
+reason = "the blanket except stays for failures that are not a missing or mistyped argument; the argument cases are refused before decide_detailed runs"
+bridge_note = "not a tool argument"
+
+# --- hook-state-gate.py -----------------------------------------------------------------------------------
+
+[[row]]
+hook = "hook-state-gate.py"
+branch = "stdin is not JSON; a payload that is not an object exits 1 (not 2, so the call goes on)"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-state-gate.py"
+branch = "an Edit or Write file_path is missing or empty, so the target is not production"
+location = "main"
+field = "tool_input.file_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Edit and Write require a string file_path; the hook is not in the stage's two"
+bridge_call = { tool = "edit", args = { oldString = "a", newString = "b" } }
+
+# --- hook-scope-conflict.py -------------------------------------------------------------------------------
+
+[[row]]
+hook = "hook-scope-conflict.py"
+branch = "stdin is not JSON, or any exception while evaluating"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-scope-conflict.py"
+branch = "a file_path is missing or empty"
+location = "evaluate"
+field = "tool_input.file_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Edit and Write require a string file_path; the hook is not in the stage's two"
+bridge_call = { tool = "write", args = { content = "x" } }
+
+# --- hook-guard-destructive-rm.py -------------------------------------------------------------------------
+
+[[row]]
+hook = "hook-guard-destructive-rm.py"
+branch = "stdin is not JSON"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-guard-destructive-rm.py"
+branch = "a Bash command is missing (a non-string command crashes with exit 1, so the call goes on)"
+location = "main"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code's Bash tool requires a string command; the hook is not in the stage's two"
+bridge_call = { tool = "shell", args = {} }
+
+[[row]]
+hook = "hook-guard-destructive-rm.py"
+branch = "shlex cannot split the command, so no rm target is seen"
+location = "_rm_recursive_targets"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = true
+disposition = "left"
+reason = "a command shlex rejects but the shell runs reaches the hook from Claude Code; refusing would change a Claude verdict"
+bridge_note = "the bridge passes a string command through as it is, as Claude Code does"
+
+# --- hook-guard-subagent-destructive-action.py ------------------------------------------------------------
+
+[[row]]
+hook = "hook-guard-subagent-destructive-action.py"
+branch = "stdin is not JSON, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-guard-subagent-destructive-action.py"
+branch = "a Bash command is missing, or not a string"
+location = "decide"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code's Bash tool requires a string command; the hook is not in the stage's two"
+bridge_call = { tool = "shell", args = { command = 5 } }
+
+[[row]]
+hook = "hook-guard-subagent-destructive-action.py"
+branch = "shlex cannot split the command (the rm detector it reuses)"
+location = "decide, hook-guard-destructive-rm._rm_recursive_targets"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = true
+disposition = "left"
+reason = "a command shlex rejects but the shell runs reaches the hook from Claude Code; refusing would change a Claude verdict"
+bridge_note = "the bridge passes a string command through as it is, as Claude Code does"
+
+# --- hook-guard-agent-specialist-stand-in.py --------------------------------------------------------------
+
+[[row]]
+hook = "hook-guard-agent-specialist-stand-in.py"
+branch = "stdin is not JSON, not an object, or tool_input is not an object"
+location = "main"
+field = "stdin, tool_input"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-guard-agent-specialist-stand-in.py"
+branch = "an Agent prompt or description is missing or not a string"
+location = "decide"
+field = "tool_input.prompt, tool_input.description"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "the Agent tool requires both as strings; the hook is not in the stage's two"
+bridge_call = { tool = "subagent", args = { description = 5, prompt = "p", agent = "a" } }
+
+# --- hook-guard-bash-source-edit.py -----------------------------------------------------------------------
+
+[[row]]
+hook = "hook-guard-bash-source-edit.py"
+branch = "stdin is not JSON, not an object, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-guard-bash-source-edit.py"
+branch = "a Bash command is missing or empty"
+location = "decide"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code's Bash tool requires a string command; the hook is not in the stage's two"
+bridge_call = { tool = "shell", args = {} }
+
+[[row]]
+hook = "hook-guard-bash-source-edit.py"
+branch = "process substitution, a shlex error or a leftover here-document token yields no write target; a target holding $ or a backtick is skipped"
+location = "_write_targets, _denied_target"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = true
+disposition = "left"
+reason = "commands Claude Code sends and the hook cannot read; refusing would change a Claude verdict"
+bridge_note = "the bridge passes a string command through as it is, as Claude Code does"
+
+# --- hook-multi-mount-search-guard.py ---------------------------------------------------------------------
+
+[[row]]
+hook = "hook-multi-mount-search-guard.py"
+branch = "stdin is not JSON, not an object, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-multi-mount-search-guard.py"
+branch = "a Bash command is missing or empty"
+location = "decide"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code's Bash tool requires a string command; the hook is not in the stage's two"
+bridge_call = { tool = "shell", args = {} }
+
+[[row]]
+hook = "hook-multi-mount-search-guard.py"
+branch = "a Grep or Glob path is not a string, so realpath raises"
+location = "spans"
+field = "tool_input.path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "the path of Grep and Glob is an optional string; the hook is not in the stage's two"
+bridge_call = { tool = "grep", args = { pattern = "x", path = 5 } }
+
+# --- hook-plan-delivery-gate.py ---------------------------------------------------------------------------
+
+[[row]]
+hook = "hook-plan-delivery-gate.py"
+branch = "stdin is not JSON, not an object, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-plan-delivery-gate.py"
+branch = "session_id or transcript_path is missing, or the session state is unreadable"
+location = "decide, _decide_session, gate_decision"
+field = "session_id, transcript_path, session state"
+fed_by = "payload"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code sends both; the state file may be absent legitimately"
+bridge_note = "the bridge sets session_id and writes the shadow transcript it names as transcript_path"
+
+# --- hook-escalation-diagnosis-gate.py --------------------------------------------------------------------
+
+[[row]]
+hook = "hook-escalation-diagnosis-gate.py"
+branch = "stdin is not JSON, not an object, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-escalation-diagnosis-gate.py"
+branch = "AskUserQuestion questions are missing or malformed, so the text read is empty"
+location = "decide"
+field = "tool_input.questions"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "AskUserQuestion has a schema; the hook is not in the stage's two"
+bridge_call = { tool = "question", args = { questions = "x" } }
+
+# --- hook-deferring-disposition-gate.py -------------------------------------------------------------------
+
+[[row]]
+hook = "hook-deferring-disposition-gate.py"
+branch = "stdin is not JSON, not an object, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-deferring-disposition-gate.py"
+branch = "AskUserQuestion questions are missing or malformed, so no menu is read"
+location = "decide, lib/ask_text"
+field = "tool_input.questions"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "AskUserQuestion has a schema; the hook is not in the stage's two"
+bridge_call = { tool = "question", args = {} }
+
+# --- hook-resolution-reminder.py --------------------------------------------------------------------------
+
+[[row]]
+hook = "hook-resolution-reminder.py"
+branch = "stdin is not JSON, not an object, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-resolution-reminder.py"
+branch = "session_id is missing, or no landing or resolution is pending in the state"
+location = "decide"
+field = "session_id, session state"
+fed_by = "payload"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code sends session_id; an absent pending state is the ordinary case"
+bridge_note = "the bridge sets session_id on every payload"
+
+# --- hook-published-text-writer-gate.py -------------------------------------------------------------------
+
+[[row]]
+hook = "hook-published-text-writer-gate.py"
+branch = "stdin is not JSON, not an object, or any exception while deciding"
+location = "main"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "hook-published-text-writer-gate.py"
+branch = "a Bash command is not a string (a missing one is not a publication)"
+location = "decide, lib/published_body.resolve"
+field = "tool_input.command"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code's Bash tool requires a string command; the hook is not in the stage's two"
+bridge_call = { tool = "shell", args = { command = 5 } }
+
+[[row]]
+hook = "hook-published-text-writer-gate.py"
+branch = "shlex fails, an attachment is not found or no text body can be resolved, so the publication is unresolved"
+location = "lib/published_body.resolve, _decide_attachment"
+field = "tool_input.command, attachment file"
+fed_by = "tool_argument"
+reachable_from_claude = true
+disposition = "left"
+reason = "commands Claude Code sends (a body from a variable or a file not yet written); refusing would change a Claude verdict"
+bridge_note = "the bridge passes a string command through as it is, as Claude Code does"
+
+[[row]]
+hook = "hook-published-text-writer-gate.py"
+branch = "transcript_path is missing, or the transcript is unreadable"
+location = "_decide_text"
+field = "transcript_path, transcript"
+fed_by = "payload"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code sends the transcript path it keeps"
+bridge_note = "the bridge writes the shadow transcript and names it as transcript_path"
+
+# --- verify-leaf-structure.py -----------------------------------------------------------------------------
+
+[[row]]
+hook = "verify-leaf-structure.py"
+branch = "stdin is not JSON; a payload that is not an object exits 1 (not 2, so the call goes on)"
+location = "cmd_hook"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "verify-leaf-structure.py"
+branch = "a Write file_path is empty (so no leaf), or content is missing (read as empty)"
+location = "cmd_hook"
+field = "tool_input.file_path, tool_input.content"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Write requires a string file_path and content; the hook is not in the stage's two"
+bridge_call = { tool = "write", args = { content = "x" } }
+
+# --- verify-experience-leaf.py ----------------------------------------------------------------------------
+
+[[row]]
+hook = "verify-experience-leaf.py"
+branch = "stdin is not JSON; a payload that is not an object exits 1 (not 2, so the call goes on)"
+location = "cmd_hook"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "verify-experience-leaf.py"
+branch = "a Write file_path is missing or empty"
+location = "cmd_hook"
+field = "tool_input.file_path"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Write requires a string file_path; the hook is not in the stage's two"
+bridge_call = { tool = "write", args = { content = "x" } }
+
+[[row]]
+hook = "verify-experience-leaf.py"
+branch = "transcript_path is missing or names no file, so the write is allowed with an advisory"
+location = "transcript_confirms, cmd_hook"
+field = "transcript_path"
+fed_by = "payload"
+reachable_from_claude = false
+disposition = "left"
+reason = "Claude Code sends the transcript path it keeps"
+bridge_note = "the bridge writes the shadow transcript and names it as transcript_path"
+
+# --- verify-no-conflict-markers.py ------------------------------------------------------------------------
+
+[[row]]
+hook = "verify-no-conflict-markers.py"
+branch = "stdin is not JSON; a payload that is not an object exits 1 (not 2, so the call goes on)"
+location = "cmd_hook"
+field = "stdin"
+fed_by = "stdin"
+reachable_from_claude = false
+disposition = "left"
+reason = "not a tool argument; Claude Code always sends a JSON object"
+bridge_note = "opencode_events.build_payload returns a dict that the bridge dumps as JSON"
+
+[[row]]
+hook = "verify-no-conflict-markers.py"
+branch = "a Write content is missing (read as empty, so no marker)"
+location = "cmd_hook"
+field = "tool_input.content"
+fed_by = "tool_argument"
+reachable_from_claude = false
+disposition = "left"
+reason = "Write requires a string content; the hook is not in the stage's two"
+bridge_call = { tool = "write", args = { path = "/tmp/x" } }

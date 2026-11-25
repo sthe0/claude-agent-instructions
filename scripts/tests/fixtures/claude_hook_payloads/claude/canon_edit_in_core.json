@@ -1,0 +1,1 @@
+{"hook": "hook-guard-canon-readonly.py", "payload": {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": "{core}", "tool_name": "Edit", "tool_input": {"file_path": "{core}/scripts/existing.py", "old_string": "x = 1", "new_string": "x = 2"}}}
