@@ -22,6 +22,8 @@ INNER_MATCHER = f"mcp__{paths.INNER_NAMESPACE}__.*"
 PATCH_PATH_ID = "root:patch"
 PATCH_MODEL = "gpt-5"
 PATCH_TARGET = "m-patch"
+RELATIVE_PATCH_PATH_ID = "root:patch-relative"
+RELATIVE_PATCH_TARGET = "m-patch-rel"
 
 
 def pinned_path_ids(state):
@@ -67,21 +69,25 @@ def _path_entry(run, plan, spec, entries):
             "reason_in_error": sa.DENY_REASON in error, "status": out["status"]}
 
 
-def _patch_path(h, ctx):
+def _patch_path(h, ctx, relative=False):
     """The gpt family is offered ``patch`` in place of edit and write, a path the mechanisms record does not
     list (its stub model is not the one the P1 scenario drives): a patch that adds a file runs under the
-    denying row, and the file must not appear."""
-    patch = ("*** Begin Patch\n*** Add File: {root}/" + PATCH_TARGET + "\n+x\n*** End Patch")
+    denying row, and the file must not appear. With ``relative`` the patch names its file relative to the
+    session directory, which the bridge must make absolute before any hook sees it."""
+    target = RELATIVE_PATCH_TARGET if relative else PATCH_TARGET
+    named = target if relative else "{root}/" + target
+    patch = "*** Begin Patch\n*** Add File: " + named + "\n+x\n*** End Patch"
     scenario = {"models": {PATCH_MODEL: [{"tool_calls": [{"name": "patch", "arguments": {"patchText": patch}}]},
                                          {"text": "done"}]}}
     config = sa.gate_config({"providers": {"stub": {"models": {PATCH_MODEL: {"name": PATCH_MODEL}}}}})
     files = {**sa.gate_files(inert=ctx.inert), "extra-rows.toml": _rows()}
-    run = h.run(scenario, label="gated-patch", config=config, files=files, env=sa.gate_env(),
-                model=f"stub/{PATCH_MODEL}", timeout=120)
+    run = h.run(scenario, label="gated-patch-relative" if relative else "gated-patch", config=config, files=files,
+                env=sa.gate_env(), model=f"stub/{PATCH_MODEL}", timeout=120)
     logged = sa.refusal_logged(sa.gate_log(run), tool_prefix="patch")
-    executed = run.exists(PATCH_TARGET)
+    executed = run.exists(target)
     verdict = "unrefused" if executed else "refused" if logged else "unconfirmed"
-    return run, {"id": PATCH_PATH_ID, "tool": "patch", "verdict": verdict, "refusal_logged": logged,
+    return run, {"id": RELATIVE_PATCH_PATH_ID if relative else PATCH_PATH_ID, "tool": "patch", "verdict": verdict,
+                 "refusal_logged": logged,
                  "reason_in_error": sa.DENY_REASON in run.stdout + run.stderr, "status": run.exit_code}
 
 
@@ -105,9 +111,10 @@ def run(ctx):
         run = _gated(h, plan, label, ctx, rows_text)
         runs.append(run)
         entries.append(_path_entry(run, plan, plan.specs[0], sa.gate_log(run)))
-    patch_run, patch_entry = _patch_path(h, ctx)
-    runs.append(patch_run)
-    entries.append(patch_entry)
+    for relative in (False, True):
+        patch_run, patch_entry = _patch_path(h, ctx, relative)
+        runs.append(patch_run)
+        entries.append(patch_entry)
     unrefused = [e["id"] for e in entries if e["verdict"] == "unrefused"]
     unconfirmed = [e["id"] for e in entries if e["verdict"] == "unconfirmed"]
     evidence = {"path_ids": ids, "exit_codes": {r.label: r.exit_code for r in runs},

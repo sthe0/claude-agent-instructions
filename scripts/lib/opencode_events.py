@@ -129,71 +129,251 @@ def claude_tool(name: str, plugin: frozenset[str] = frozenset(),
 
 
 class UnreadablePatch(ValueError):
-    """A ``patch`` input whose file operations the gates cannot read."""
+    """A ``patch`` input whose file operations, or the text they leave a file with, the gates cannot work out."""
 
 
-_PATCH_FRAME = ("*** Begin Patch", "*** End Patch", "*** End of File")
-_PATCH_OPS = (("*** Add File: ", "write"), ("*** Update File: ", "edit"), ("*** Delete File: ", "edit"),
-              ("*** Move to: ", "write"))
+class UnresolvablePath(ValueError):
+    """A relative path of a tool call whose session directory is unknown: the absolute path the hooks are
+    written against cannot be made."""
 
 
-def patch_operations(patch_text) -> list[tuple[str, str, str]]:
-    """``(tool, path, content)`` per file operation of an OpenCode ``patch`` text, in order: ``write`` for
-    an added file or a rename's target, ``edit`` for an updated or deleted file. Raises ``UnreadablePatch``
-    when the text names no file or carries a ``***`` line that is neither a frame line nor an operation:
-    a gate that cannot read what the patch touches must refuse it, not pass it."""
+def absolute_path(path, directory: str):
+    """``path`` as the absolute, normalised path Claude Code gives its hooks, joined to the session ``directory``
+    (OpenCode resolves a relative path against it, probe A6). A value that is not a non-empty string is
+    returned as it is; a relative path with no known directory raises ``UnresolvablePath``."""
+    if not isinstance(path, str) or not path:
+        return path
+    if os.path.isabs(path):
+        return os.path.normpath(path)
+    if not directory or not os.path.isabs(directory):
+        raise UnresolvablePath(f"the path {path!r} is relative and the session directory is unknown")
+    return os.path.normpath(os.path.join(directory, path))
+
+
+# OpenCode 2.3.2's patch format, as the probe's patch_tool facts (A6 record) show it: an operation line is
+# recognised after its whitespace is trimmed, the path after the colon is trimmed too, an added file is
+# its ``+`` lines each ending in a newline, an updated file takes each hunk's old lines (found at the first
+# place from the previous hunk's end where they match exactly, then ignoring trailing whitespace, then
+# ignoring surrounding whitespace) replaced by the hunk's new lines context included, and the result ends
+# in a newline. A hunk whose old lines are not found fails the patch, as it does here.
+_PATCH_FRAME = ("*** Begin Patch", "*** End Patch")
+_PATCH_ADD, _PATCH_UPDATE, _PATCH_DELETE, _PATCH_MOVE = (
+    "*** Add File:", "*** Update File:", "*** Delete File:", "*** Move to:")
+_PATCH_EOF = "*** End of File"
+
+
+@dataclass
+class Hunk:
+    context: str | None = None
+    old: list[str] = field(default_factory=list)
+    new: list[str] = field(default_factory=list)
+    at_end: bool = False
+
+
+@dataclass
+class PatchOp:
+    kind: str  # "add" | "update" | "delete"
+    path: str
+    move_to: str | None = None
+    lines: list[str] = field(default_factory=list)
+    hunks: list[Hunk] = field(default_factory=list)
+
+
+def parse_patch(patch_text) -> list[PatchOp]:
+    """The file operations of an OpenCode ``patch`` text, in order. Raises ``UnreadablePatch`` when the text
+    names no file, an operation names no path, or a line is none the format knows: a gate that cannot read
+    what a patch touches must refuse it, not pass it."""
     if not isinstance(patch_text, str):
         raise UnreadablePatch("the patch text is not a string")
-    operations: list[tuple[str, str, list[str]]] = []
-    adding = False
-    for line in patch_text.splitlines():
-        for prefix, tool in _PATCH_OPS:
-            if line.startswith(prefix):
-                path = line[len(prefix):].strip()
-                if not path:
-                    raise UnreadablePatch(f"{prefix.strip()} names no path")
-                operations.append((tool, path, []))
-                adding = prefix == _PATCH_OPS[0][0]
-                break
-        else:
-            if line.startswith("***") and line.strip() not in _PATCH_FRAME:
-                raise UnreadablePatch(f"unknown patch line {line[:40]!r}")
-            if adding and line.startswith("+"):
-                operations[-1][2].append(line[1:])
-    if not operations:
+    ops: list[PatchOp] = []
+    ended = False
+    for line in patch_text.split("\n"):
+        text = line.strip()
+        if ended:
+            if text:
+                raise UnreadablePatch(f"text after the end of the patch: {line[:40]!r}")
+            continue
+        header = next((h for h in (_PATCH_ADD, _PATCH_UPDATE, _PATCH_DELETE, _PATCH_MOVE) if text.startswith(h)), None)
+        if header:
+            path = text[len(header):].strip()
+            if not path:
+                raise UnreadablePatch(f"{header} names no path")
+            if header == _PATCH_MOVE:
+                if not ops or ops[-1].kind != "update" or ops[-1].move_to is not None:
+                    raise UnreadablePatch(f"{header} does not follow an update")
+                ops[-1].move_to = path
+            else:
+                ops.append(PatchOp({_PATCH_ADD: "add", _PATCH_UPDATE: "update", _PATCH_DELETE: "delete"}[header], path))
+            continue
+        if text in _PATCH_FRAME:
+            ended = text == _PATCH_FRAME[1]
+            continue
+        if text.startswith("***") and text != _PATCH_EOF:
+            raise UnreadablePatch(f"unknown patch line {line[:40]!r}")
+        if not ops:
+            if text:
+                raise UnreadablePatch(f"text before the first file operation: {line[:40]!r}")
+            continue
+        op = ops[-1]
+        if op.kind == "add":
+            if line.startswith("+"):
+                op.lines.append(line[1:])
+            elif text:
+                raise UnreadablePatch(f"an added file's line does not start with '+': {line[:40]!r}")
+        elif op.kind == "update":
+            _hunk_line(op, line, text)
+        elif text:
+            raise UnreadablePatch(f"a deleted file carries a line: {line[:40]!r}")
+    if not ops:
         raise UnreadablePatch("the patch names no file")
-    return [(tool, path, "\n".join(body)) for tool, path, body in operations]
+    return ops
 
 
-def patch_calls(data: dict) -> list[dict]:
-    """The event ``data`` of one ``patch`` call as one ``write``/``edit`` event per file it names, so
-    the rows see the Claude tool and ``file_path`` they are written against. Other events are returned
-    as they are. The first call keeps the call id, later ones carry ``<id>#<n>``."""
+def _hunk_line(op: PatchOp, line: str, text: str) -> None:
+    if text == _PATCH_EOF:
+        if not op.hunks:
+            raise UnreadablePatch("an end-of-file marker before any hunk")
+        op.hunks[-1].at_end = True
+        return
+    if line.startswith("@@"):
+        op.hunks.append(Hunk(context=line[2:].strip() or None))
+        return
+    if not op.hunks:
+        op.hunks.append(Hunk())
+    hunk = op.hunks[-1]
+    if hunk.at_end:
+        raise UnreadablePatch("a line after a hunk's end-of-file marker")
+    if line.startswith("+"):
+        hunk.new.append(line[1:])
+    elif line.startswith("-"):
+        hunk.old.append(line[1:])
+    elif line.startswith(" ") or not line:
+        hunk.old.append(line[1:])
+        hunk.new.append(line[1:])
+    else:
+        raise UnreadablePatch(f"a hunk line does not start with ' ', '+' or '-': {line[:40]!r}")
+
+
+def _seek(lines: list[str], pattern: list[str], start: int, at_end: bool) -> int | None:
+    if at_end and len(lines) >= len(pattern):
+        start = len(lines) - len(pattern)
+    if not pattern:
+        return start
+    for same in (lambda a, b: a == b, lambda a, b: a.rstrip() == b.rstrip(), lambda a, b: a.strip() == b.strip()):
+        for index in range(start, len(lines) - len(pattern) + 1):
+            if all(same(lines[index + i], p) for i, p in enumerate(pattern)):
+                return index
+    return None
+
+
+def _seek_hunk(lines: list[str], old: list[str], cursor: int, at_end: bool) -> int | None:
+    found = _seek(lines, old, cursor, at_end)
+    return _seek(lines, old, cursor, False) if found is None and at_end else found
+
+
+def apply_hunks(text: str, hunks: list[Hunk]) -> str:
+    """The text OpenCode's patch tool leaves a file with after ``hunks``, or ``UnreadablePatch`` when a hunk
+    does not apply."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    replacements: list[tuple[int, int, list[str]]] = []
+    cursor = 0
+    for hunk in hunks:
+        if hunk.context is not None:
+            found = _seek(lines, [hunk.context], cursor, False)
+            if found is None:
+                raise UnreadablePatch(f"hunk context {hunk.context!r} not found")
+            cursor = found + 1
+        if not hunk.old:
+            replacements.append((len(lines), 0, hunk.new))
+            continue
+        old, new = hunk.old, hunk.new
+        found = _seek_hunk(lines, old, cursor, hunk.at_end)
+        if found is None and old[-1] == "":
+            old, new = old[:-1], new[:-1] if new and new[-1] == "" else new
+            found = _seek_hunk(lines, old, cursor, hunk.at_end)
+        if found is None:
+            raise UnreadablePatch(f"hunk lines {old[:2]!r} not found")
+        replacements.append((found, len(old), new))
+        cursor = found + len(old)
+    for start, length, new in sorted(replacements, key=lambda r: r[0], reverse=True):
+        lines[start:start + length] = new
+    if not lines or lines[-1] != "":
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _read_text(path: str) -> str:
+    try:
+        return Path(path).read_bytes().decode("utf-8")
+    except (OSError, ValueError) as error:
+        raise UnreadablePatch(f"{path} cannot be read: {error}") from error
+
+
+def patch_calls(data: dict, directory: str = "", *, resolve_content: bool = True) -> list[dict]:
+    """The event ``data`` of one ``patch`` call as the Claude calls that make the same change, so the rows
+    see the tool, ``file_path`` and content they are written against: a ``write`` of the text for an added
+    file; for an updated file an ``edit`` whose ``old_string`` is the file as it is and ``new_string`` the
+    file as the patch leaves it; for a deleted file an ``edit`` that empties it; for a rename a ``write`` of
+    the new text to the target and an ``edit`` that empties the source. Paths are absolute, joined to the
+    session ``directory``. With ``resolve_content`` false (the call already ran, the files are changed) only
+    the paths are carried. Raises ``UnreadablePatch`` or ``UnresolvablePath`` when a call cannot be made.
+    Other events are returned as they are. The first call keeps the call id, later ones carry ``<id>#<n>``."""
     if data.get("tool") != "patch":
         return [data]
     args = data.get("input") if isinstance(data.get("input"), dict) else {}
     calls = []
-    for index, (tool, path, content) in enumerate(patch_operations(args.get("patchText"))):
-        call = {**data, "tool": tool, "input": {"path": path}}
+    for op in parse_patch(args.get("patchText")):
+        path = absolute_path(op.path, directory)
+        target = absolute_path(op.move_to, directory) if op.move_to else path
+        if op.kind == "add":
+            calls.append(("write", target, "\n".join(op.lines) + "\n" if op.lines else ""))
+            continue
+        before = _read_text(path) if resolve_content else ""
+        after = apply_hunks(before, op.hunks) if resolve_content and op.kind == "update" else ""
+        if target != path:
+            calls.append(("write", target, after))
+            calls.append(("edit", path, (before, "")))
+        else:
+            calls.append(("edit", path, (before, after)))
+    out = []
+    for index, (tool, path, body) in enumerate(calls):
+        args = {"path": path}
         if tool == "write":
-            call["input"]["content"] = content
+            args["content"] = body
+        elif resolve_content:
+            args.update(oldString=body[0], newString=body[1])
+        call = {**data, "tool": tool, "input": args}
         if index:
             call["id"] = f"{data.get('id')}#{index}"
-        calls.append(call)
-    return calls
+        out.append(call)
+    return out
 
 
-def claude_input(tool: str, args: dict) -> dict:
+def claude_input(tool: str, args: dict, directory: str = "", *, strict: bool = True) -> dict:
+    """The Claude tool input of an OpenCode tool input. A path is made absolute against the session
+    ``directory`` (``UnresolvablePath`` when relative and the directory is unknown; with ``strict`` false the
+    path is kept as written, for events no gate decides on)."""
     args = args if isinstance(args, dict) else {}
+
+    def path_of(value):
+        try:
+            return absolute_path(value, directory)
+        except UnresolvablePath:
+            if strict:
+                raise
+            return value
+
     if tool in ("read", "write", "edit"):
-        mapped = {"file_path": args.get("path")}
+        mapped = {"file_path": path_of(args.get("path"))}
         if tool == "write":
             mapped["content"] = args.get("content")
         if tool == "edit":
             mapped.update(old_string=args.get("oldString"), new_string=args.get("newString"))
         return mapped
     if tool in ("glob", "grep"):
-        return {"pattern": args.get("pattern"), "path": args.get("path")}
+        return {"pattern": args.get("pattern"), "path": path_of(args.get("path"))}
     if tool == "shell":
         return {"command": args.get("command")}
     if tool == "execute":
@@ -419,9 +599,11 @@ def now() -> str:
 
 
 def build_payload(event: str, data: dict, *, transcript_path: Path, cwd: str, plugin: frozenset[str],
-                  environ=None, servers: frozenset[str] = frozenset()) -> dict:
+                  environ=None, servers: frozenset[str] = frozenset(), directory: str = "") -> dict:
     """The Claude-shaped payload of an OpenCode event ``data`` (the hook input, as the probe recorded it).
-    The tool name is None when no Claude name is known for the tool."""
+    The tool name is None when no Claude name is known for the tool. Paths of the tool input are made
+    absolute against the session ``directory`` (``UnresolvablePath`` of a before-event when one is relative and
+    it is unknown; an after-event, which no gate can still prevent, keeps the path as written)."""
     opencode_session = data.get("sessionID") or ""
     session = payload_session_id(opencode_session, environ)
     payload = {"session_id": session, "transcript_path": str(transcript_path), "cwd": cwd,
@@ -429,7 +611,7 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, cwd: str, pl
     if event in ("tool.execute.before", "tool.execute.after"):
         tool, args = data.get("tool") or "", data.get("input") or {}
         payload["tool_name"] = claude_tool(tool, plugin, servers)
-        payload["tool_input"] = claude_input(tool, args)
+        payload["tool_input"] = claude_input(tool, args, directory, strict=event == "tool.execute.before")
         payload["tool_use_id"] = data.get("id")
         if event == "tool.execute.after":
             payload["tool_response"] = claude_response(tool, args, data.get("result") or {})
@@ -457,7 +639,7 @@ def transcript_records(event: str, data: dict, session: str) -> list[dict]:
         return [{**base, "type": "assistant", "uuid": str(uuid.uuid4()),
                  "message": {"role": "assistant", "content": [
                      {"type": "tool_use", "id": data.get("id"), "name": name,
-                      "input": claude_input(tool, args)}]}}]
+                      "input": claude_input(tool, args, data.get("cwd") or "", strict=False)}]}}]
     if event == "tool.execute.after":
         response = claude_response(tool, args, data.get("result") or {})
         text = response.get("content") if isinstance(response, dict) and "content" in response \

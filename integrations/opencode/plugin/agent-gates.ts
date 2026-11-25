@@ -9,7 +9,15 @@
 //
 // OpenCode skips, without a word, a plugin whose setup throws, which would leave every tool call ungated.
 // So setup never throws: a failure it cannot survive leaves hooks that refuse the tool calls, and the
-// outcome is written to the setup marker for the launcher to check.
+// outcome is written to the setup marker for the launcher to check. The marker is only ever overwritten,
+// so a launcher must delete the one of an earlier launch before it starts OpenCode, or a plugin that was
+// skipped would be read as the earlier launch's "ok".
+//
+// A relative path of a tool call is resolved by OpenCode against the directory of its session. The shim
+// asks ctx.session.get for that directory per session and hands it to the bridge, which makes every path
+// absolute before a hook sees it; when no directory is known a relative path is refused. Under
+// ``opencode serve`` one process holds sessions of several directories, which is why the directory is
+// asked per session and the setup directory is only the fallback.
 //
 // Environment: AGENT_GATE_BRIDGE (bridge script path), AGENT_GATE_PYTHON (interpreter, default python3),
 // AGENT_GATE_LOG (a file that gets one JSON line per refusal and decision, never a tool result),
@@ -26,6 +34,7 @@ const LOG = process.env.AGENT_GATE_LOG || "/dev/null";
 const MARKER = process.env.AGENT_GATE_SETUP_MARKER || "";
 const DENIED_TOOLS = new Set(["opencode_worktree_create", "opencode_worktree_remove", "opencode_session_move"]);
 const WITHHELD = "[search output withheld: it could not be checked against the credential paths]";
+const NO_MATCH = "No matches found"; // OpenCode 2.3.2's whole answer to a grep with no hit (probe A6, search_and_output)
 
 function log(entry) {
   try {
@@ -99,6 +108,14 @@ function realPath(path) {
   }
 }
 
+// The absolute path a grep searches: its path (the session directory when none is given) made absolute
+// against the session directory; null when it is relative and that directory is unknown.
+function searchRoot(cwd, input) {
+  const given = input.input?.path || ".";
+  if (isAbsolute(given)) return resolve(given);
+  return cwd ? resolve(cwd, given) : null;
+}
+
 const within = (path, root) => path === root || path.startsWith(root + sep);
 
 // A path is judged by its lexical form and by its real path, against the lexical and the real form of
@@ -120,6 +137,7 @@ function pathGate(credentials) {
 // A shape that is not this one cannot be checked, so when the search root holds a credential path the
 // text is withheld instead of passed.
 function filterText(text, refused, risky) {
+  if (text === NO_MATCH) return { text, removed: 0 }; // what a search with no hit answers: nothing to hide
   const unchecked = risky ? { text: WITHHELD, removed: 1 } : { text, removed: 0 };
   const lines = text.split("\n");
   if (!/^Found \d+ matches$/.test(lines[0])) return unchecked;
@@ -146,8 +164,10 @@ function scrub(value, filter, depth = 0) {
   return value;
 }
 
-// Every field of the grep result is filtered or, for a search root that holds a credential path, dropped:
-// the model reads content[].text, but the whole result goes on to the bridge, the transcript and the logs.
+// Every field of the grep result is filtered or, for a search root that holds a credential path, dropped,
+// whatever its type: the model reads content[].text, but the whole result goes on to the bridge, the
+// transcript and the logs. A text field is filtered; any other value is scrubbed string by string, or, under
+// a risky root, emptied, since no text filter can vouch for it. Only a part's "type" is kept as it is.
 function sanitizeGrepResult(input, refused, risky) {
   let removed = 0;
   const filter = (text) => {
@@ -155,28 +175,54 @@ function sanitizeGrepResult(input, refused, risky) {
     removed = Math.max(removed, filtered.removed); // the fields repeat one result
     return filtered.text;
   };
+  const emptied = (value) => (typeof value === "string" ? "" : Array.isArray(value) ? [] : value && typeof value === "object" ? {} : value);
+  const field = (value) => (typeof value === "string" ? filter(value) : risky ? emptied(value) : scrub(value, filter));
   const result = input.result;
   if (typeof result === "string") {
     input.result = filter(result);
     return removed;
   }
   if (!result || typeof result !== "object") return removed;
-  for (const part of Array.isArray(result.content) ? result.content : []) {
-    if (part && typeof part.text === "string") part.text = filter(part.text);
-  }
-  if (typeof result.output === "string") result.output = filter(result.output);
   for (const key of Object.keys(result)) {
-    if (key === "content" || key === "output") continue;
-    if (!risky) result[key] = scrub(result[key], filter);
-    else if (typeof result[key] === "string") result[key] = "";
-    else if (result[key] && typeof result[key] === "object") result[key] = Array.isArray(result[key]) ? [] : {};
+    if (key !== "content" || !Array.isArray(result.content)) {
+      result[key] = field(result[key]);
+      continue;
+    }
+    result.content = result.content.map((part) => {
+      if (!part || typeof part !== "object") return field(part);
+      for (const name of Object.keys(part)) {
+        if (name !== "type" || typeof part.type !== "string") part[name] = field(part[name]);
+      }
+      return part;
+    });
   }
   return removed;
 }
 
 function install(ctx, failures) {
-  const located = ctx.location && typeof ctx.location.directory === "string" ? ctx.location.directory : "";
-  const directory = (input) => (input && (input.directory || input.cwd)) || located || process.cwd();
+  const located = ctx.location && typeof ctx.location.directory === "string" && isAbsolute(ctx.location.directory) ? ctx.location.directory : "";
+  if (!located) failures.push("ctx.location.directory is absent at setup");
+  // The directory of a session, which is where OpenCode resolves a relative path (probe A6): what
+  // ctx.session.get answers for it (a hook input names none), else the directory OpenCode was started in.
+  // Never this process's own working directory, which a relative path was not resolved against; "" when
+  // it is unknown, and then a relative path is refused, not guessed.
+  const sessions = new Map();
+  const directory = async (input) => {
+    const id = input && input.sessionID;
+    if (id && sessions.has(id)) return sessions.get(id);
+    if (id && typeof ctx.session.get === "function") {
+      try {
+        const found = (await ctx.session.get({ sessionID: id }))?.location?.directory;
+        if (typeof found === "string" && isAbsolute(found)) {
+          sessions.set(id, found);
+          return found;
+        }
+      } catch (error) {
+        log({ at: "session-directory-error", sessionID: id, error: String(error).slice(0, 200) });
+      }
+    }
+    return located;
+  };
   let credentials = [];
   let idleMax = 0;
   let unavailable = "";
@@ -210,9 +256,14 @@ function install(ctx, failures) {
       refuse("shell is refused: the shell hook that binds a shell to the OpenCode session did not register");
       return;
     }
-    const cwd = directory(input);
+    const cwd = await directory(input);
     if (tool === "grep") {
-      const path = resolve(cwd, input.input?.path || ".");
+      const path = searchRoot(cwd, input);
+      if (path === null) {
+        log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "session directory unknown" });
+        refuse("grep refused: its search path is relative and the session directory is unknown");
+        return;
+      }
       if (gate().refused(path)) {
         log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "credential path" });
         refuse(`credential path: ${path}`);
@@ -221,8 +272,8 @@ function install(ctx, failures) {
       greps.set(input.id, path);
     }
     const answer = await verdict("tool.execute.before", input, cwd);
-    if (answer.failed || answer.decision === "deny") {
-      const reason = answer.failed || answer.reason || "denied by a gate";
+    if (answer.failed || answer.decision !== "allow") {
+      const reason = answer.failed || answer.reason || (answer.decision === "deny" ? "denied by a gate" : "the gate bridge answered no decision");
       log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, script: answer.script || "bridge" });
       greps.delete(input.id);
       refuse(reason);
@@ -234,14 +285,14 @@ function install(ctx, failures) {
   });
 
   ctx.tool.hook("execute.after", async (input) => {
-    const cwd = directory(input);
+    const cwd = await directory(input);
     if (input.tool === "grep") {
-      const path = greps.get(input.id) ?? resolve(cwd, input.input?.path || ".");
+      const path = greps.get(input.id) ?? searchRoot(cwd, input);
       greps.delete(input.id);
       let removed = 0;
       try {
         const paths = gate();
-        removed = sanitizeGrepResult(input, paths.refused, paths.risky(path));
+        removed = sanitizeGrepResult(input, paths.refused, path === null || paths.risky(path));
       } catch (error) {
         input.result = { content: [{ type: "text", text: WITHHELD }] };
         log({ at: "grep-filter-error", id: input.id, error: String(error) });
@@ -253,7 +304,7 @@ function install(ctx, failures) {
   });
 
   ctx.session.hook("prompt", async (input) => {
-    const answer = await verdict("session.prompt", input, directory(input));
+    const answer = await verdict("session.prompt", input, await directory(input));
     if (answer.failed || answer.decision === "deny") {
       log({ at: "refusal", mechanism: "UserPromptSubmit", sessionID: input.sessionID });
       refuse(answer.failed || answer.reason || "prompt refused by a gate");
@@ -264,7 +315,7 @@ function install(ctx, failures) {
 
   ctx.session.hook("experimental.idle", async (input) => {
     const held = idle.get(input.sessionID) || 0;
-    const answer = await verdict("experimental.idle", input, directory(input));
+    const answer = await verdict("experimental.idle", input, await directory(input));
     if (answer.failed) {
       // Claude Code's Stop hook that fails does not hold the turn either: the turn ends
       log({ at: "bridge-error", event: "experimental.idle", error: answer.failed });
@@ -294,7 +345,7 @@ function install(ctx, failures) {
     const names = { "session.created": "session.created", "session.deleted": "session.deleted" };
     const name = names[event?.type];
     if (!name) return;
-    const answer = await verdict(name, { sessionID: event.data?.sessionID, ...event.data }, directory(event.data));
+    const answer = await verdict(name, { sessionID: event.data?.sessionID, ...event.data }, await directory({ sessionID: event.data?.sessionID, ...event.data }));
     if (answer.failed) log({ at: "bridge-error", event: name, error: answer.failed });
     for (const line of answer.context || []) log({ at: "context", sessionID: event.data?.sessionID, text: line });
   };

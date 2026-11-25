@@ -31,12 +31,35 @@ that mechanism was seen to refuse.
   (comma separated; the launcher passes the servers of the session's config). Any other id is refused
   whatever rows exist, because the parity table has no matcherless PreToolUse row. Case A5 of the adapter
   probe phase re-checks the ids the pinned binary offers.
+- **Paths.** OpenCode resolves a relative path of a tool call against the directory of the call's
+  session (probe A6, `ctx`). The shim asks `ctx.session.get({sessionID})` for that directory per session
+  (a hook input names none), falls back to `ctx.location.directory` of setup, and never to the process cwd;
+  the bridge joins every path it hands a hook (read, write, edit, patch files, grep and glob paths) to it, so a
+  row always sees an absolute path. A relative path with no known directory is refused. Setup without an
+  absolute `ctx.location.directory` fails the marker. Limit: under `opencode serve` one process holds sessions
+  of several directories; the per-session lookup covers them, but a failed `ctx.session.get` falls back to the
+  setup directory, which may not be the session's.
+- **Patch.** Each file of a `patch` call reaches the rows as the Claude call that makes the same change: a
+  `Write` for an added file; an `Edit` whose `old_string` is the file as it is and `new_string` the file as the
+  patch leaves it for an update; an `Edit` that empties the file for a delete; for a move a `Write` of the new
+  text to the target plus an `Edit` that empties the source. The bridge reads the file and applies the hunks the
+  way OpenCode 2.3.2 does (exact match, then right-trimmed, then fully trimmed; probe A6 `patch_tool.files`);
+  a patch it cannot read or apply is refused, never passed content-blind. OpenCode trims an operation line and
+  its path before reading them (an indented `*** Add File:` is an operation, A6 `indent-add`, `tab-add`,
+  `trailing-add`), and the bridge does the same, so no operation line escapes the rows.
 - **Grep.** The credential check compares real paths (symlinks resolved on both sides, a tail that does
-  not exist yet kept), against the session directory (`ctx.location.directory`, else the process cwd).
+  not exist yet kept), against the session directory above.
   A result is filtered per file block; when the search root holds a credential path and the text is not
-  the recognised `Found N matches` shape, the whole text is withheld. `result.content[].text`,
-  `result.output` and the other result fields are all filtered (a root above a credential drops the
-  others); what OpenCode 2.3.2 sends to the model is `content[].text`.
+  the recognised `Found N matches` shape (the exact `No matches found` of a search with no hit passes), the
+  whole text is withheld. Every field of the result is filtered or, under such a root, emptied whatever its
+  type (string, object, array, a non-array `content`, any part field other than `type`); what OpenCode 2.3.2
+  sends to the model is `content[].text`. Facts (probe A6 `search_and_output`): grep reaches files through
+  symlinks below its root; a long shell output is cut in the text a plugin sees and its full text saved to
+  `xdg/data/opencode/shell/<project>/sh_*.out`; the unfiltered grep text a tool produced is stored in
+  `opencode.db` before `tool.execute.after` runs. Those two stores hold text the filter cannot reach: the
+  stages 9/10 must keep them out of the model's reach (a documented limit of this shim, not closed here).
+- **Launcher duty.** The setup marker is only ever overwritten; the launcher (stages 9/10) deletes the one of an
+  earlier launch before it starts OpenCode.
 - **Setup.** OpenCode skips, silently, a plugin whose setup throws, so setup does not throw. When
   `AGENT_GATE_SETUP_MARKER` names a file, the shim writes `{"status": "ok" | "failed", "failures": [...]}`
   to it once setup ran; a launcher (the stage-9/10 preflight) treats a missing marker or `failed` as an

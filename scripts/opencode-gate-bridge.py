@@ -46,9 +46,10 @@ def _read_json(source) -> dict:
 
 
 def _decide_call(event: str, data: dict, rows: list[oe.Row], transcript: Path | None) -> oe.Decision:
-    cwd = data.get("cwd") or os.getcwd()
+    directory = data.get("cwd") or ""
+    cwd = directory or os.getcwd()
     payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"), cwd=cwd,
-                               plugin=oe.plugin_tools(), servers=oe.mcp_servers())
+                               plugin=oe.plugin_tools(), servers=oe.mcp_servers(), directory=directory)
     if transcript is not None:
         oe.append_transcript(transcript, oe.transcript_records(event, {**data, "cwd": cwd}, payload["session_id"]))
     if event == "tool.execute.before":
@@ -65,14 +66,16 @@ def _decide(event: str, data: dict, roots: list[Path], transcript: Path | None) 
     rows = oe.load_rows(roots, os.environ.get(oe.EXTRA_ROWS_ENV))
     if event == "tool.execute.before":
         oe.require_pretool_rows(rows)
+    before = event == "tool.execute.before"
     try:
-        calls = oe.patch_calls(data) if event.startswith("tool.execute.") else [data]
-    except oe.UnreadablePatch as error:
-        if event == "tool.execute.before":
-            return oe.Decision(True, f"patch refused, its file operations are unreadable: {error}",
+        calls = oe.patch_calls(data, data.get("cwd") or "", resolve_content=before) \
+            if event.startswith("tool.execute.") else [data]
+        decision = oe.combine([_decide_call(event, call, rows, transcript) for call in calls])
+    except (oe.UnreadablePatch, oe.UnresolvablePath) as error:
+        if before:
+            return oe.Decision(True, f"{data.get('tool')} refused, the gates cannot be shown what it does: {error}",
                                "opencode-gate-bridge")
         return oe.Decision()
-    decision = oe.combine([_decide_call(event, call, rows, transcript) for call in calls])
     if event == "session.created":
         from lib import hook_parity
 
