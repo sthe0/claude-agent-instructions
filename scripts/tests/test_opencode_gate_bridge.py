@@ -710,7 +710,7 @@ def _table_path_ids():
     return {p for row in _table()["row"] for p in row.get("paths", [])}
 
 
-def test_every_path_mapped_or_refused():
+def test_every_path_mapped_or_disabled():
     ids = _table_path_ids()
     assert ids == set(oe.PATH_TOOL_NAMES), "the table's path ids and the mapping differ"
     plugin = frozenset(oe.PLUGIN_TOOLS_OF_PATHS)
@@ -725,7 +725,7 @@ def test_every_path_mapped_or_refused():
     assert oe.claude_tool("probecm_touch", servers=servers) == "mcp__probecm__touch"
 
 
-def test_every_denying_row_matcher_hit_by_a_mapped_tool():
+def test_every_denying_row_matcher_hit_or_switched_off():
     plugin = frozenset(oe.PLUGIN_TOOLS_OF_PATHS)
     servers = frozenset({"probesrv", "probecm"})
     mapped = {oe.claude_tool(tool, plugin, servers) for pid, tool in oe.PATH_TOOL_NAMES.items()
