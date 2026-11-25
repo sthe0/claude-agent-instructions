@@ -45,16 +45,16 @@ def _rows(matcher=None, script=sa.DENY_ALL):
 def _gated(h, plan, label, ctx, rows_text):
     files = {**sa.gate_files(inert=ctx.inert), "extra-rows.toml": rows_text}
     return paths.exercise(h, plan, label, config=sa.gate_config(), files=files,
-                          env=sa.gate_env(AGENT_GATE_PLUGIN_TOOLS="probe_tool"))
+                          env=sa.gate_env())
 
 
 def _path_entry(run, plan, spec, entries):
     out = paths.outcome(run, plan, spec)
     call_id = spec.refusal_call_id or plan.call_ids[spec.path_id]
     if spec.path_id == paths.INNER_PATH_ID:
-        logged = sa.refusal_logged(entries, tool_prefix=f"{paths.INNER_NAMESPACE}_")
+        logged = sa.refusal_logged(entries, tool_prefix=f"{paths.INNER_NAMESPACE}_", source="deny")
     else:
-        logged = sa.refusal_logged(entries, call_id=call_id)
+        logged = sa.refusal_logged(entries, call_id=call_id, source="deny")
     error = str(out.get("error") or "")
     carried_out = out["executed"]
     if spec.effect == "dispatched" and sa.DENY_REASON in error:
@@ -80,7 +80,7 @@ def _patch_path(h, ctx):
     files = {**sa.gate_files(inert=ctx.inert), "extra-rows.toml": ""}
     run = h.run(scenario, label="gated-patch", config=config, files=files, env=sa.gate_env(),
                 model=f"stub/{PATCH_MODEL}", timeout=120)
-    logged = sa.refusal_logged(sa.gate_log(run), tool_prefix="patch")
+    logged = sa.refusal_logged(sa.gate_log(run), tool_prefix="patch", source="refused")
     executed = run.exists(PATCH_TARGET)
     verdict = "unrefused" if executed else "refused" if logged else "unconfirmed"
     return run, {"id": PATCH_PATH_ID, "tool": "patch", "verdict": verdict, "refusal_logged": logged,

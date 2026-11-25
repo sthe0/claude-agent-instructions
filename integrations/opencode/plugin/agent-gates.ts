@@ -62,6 +62,19 @@ function quote(text) {
   return "'" + String(text).replace(/'/g, "'\\''") + "'";
 }
 
+// A refusal the shim makes itself reads "refused: <class> <detail>" (the bridge's own refusals read the same);
+// a hook's deny, which the bridge hands over, reads "deny: <script> <reason>". The class names are the bridge's
+// (REFUSAL_CLASSES in scripts/lib/opencode_events.py).
+const refused = (cls, detail) => `refused: ${cls} ${detail}`;
+
+// OpenCode loads code from a project's own config unless OPENCODE_DISABLE_PROJECT_CONFIG=1 is set for the
+// process, and OPENCODE_CONFIG_PROJECT_DISABLE, when set, wins over it (probe A6): a session started without the
+// variable may be running code the gates were never written against.
+const PROJECT_CONFIG_OFF = process.env.OPENCODE_DISABLE_PROJECT_CONFIG === "1" && process.env.OPENCODE_CONFIG_PROJECT_DISABLE === undefined;
+
+// The digest of each session's rows snapshot, as the bridge answered it at the session's first event.
+const digests = new Map();
+
 function runBridge(args, input) {
   return new Promise((done) => {
     const child = spawn(PYTHON, [BRIDGE, ...args], { stdio: ["pipe", "pipe", "pipe"] });
@@ -77,10 +90,15 @@ function runBridge(args, input) {
 }
 
 async function verdict(name, input, cwd) {
-  const result = await runBridge(["event", name], { ...input, cwd });
+  const session = input && input.sessionID;
+  const sent = { ...input, cwd };
+  if (session && digests.has(session)) sent.rowsDigest = digests.get(session);
+  const result = await runBridge(["event", name], sent);
   if (result.code !== 0) return { failed: `gate bridge failed (${name}, exit ${result.code}): ${result.err.trim().slice(0, 300)}` };
   try {
-    return JSON.parse(result.out);
+    const answer = JSON.parse(result.out);
+    if (session && answer && typeof answer.digest === "string" && !digests.has(session)) digests.set(session, answer.digest);
+    return answer;
   } catch (error) {
     return { failed: `gate bridge answered no JSON (${name})` };
   }
@@ -215,6 +233,7 @@ function sanitizeGrepResult(input, refused, risky) {
 function install(ctx, failures) {
   const located = ctx.location && typeof ctx.location.directory === "string" && isAbsolute(ctx.location.directory) ? ctx.location.directory : "";
   if (!located) failures.push("ctx.location.directory is absent at setup");
+  if (!PROJECT_CONFIG_OFF) failures.push("OPENCODE_DISABLE_PROJECT_CONFIG=1 is not set for this process");
   // The directory of a session, which is where OpenCode resolves a relative path and runs a command (probe
   // A6): what ctx.session.get answers for it (a hook input names none). Only a successful answer is kept.
   // When the answer cannot be had the directory is "" and the call is refused: neither this process's
@@ -256,43 +275,48 @@ function install(ctx, failures) {
     const tool = input.tool;
     if (unavailable) {
       log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "setup failed" });
-      refuse(`the agent gates did not set up (${unavailable}); ${tool} refused`);
+      refuse(refused("gate-setup", `the agent gates did not set up (${unavailable}); ${tool} refused`));
+      return;
+    }
+    if (!PROJECT_CONFIG_OFF) {
+      log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "project config not off" });
+      refuse(refused("project-config", "OPENCODE_DISABLE_PROJECT_CONFIG=1 is not set (or OPENCODE_CONFIG_PROJECT_DISABLE is), so the session may have loaded code from the project's own OpenCode config"));
       return;
     }
     if (DENIED_TOOLS.has(tool)) {
       log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "denied by name" });
-      refuse(`${tool} is denied by the agent gates`);
+      refuse(refused("refused-tool", `${tool} is denied by the agent gates`));
       return;
     }
     if (tool === "shell" && !shellBound) {
       log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "shell hook not registered" });
-      refuse("shell is refused: the shell hook that binds a shell to the OpenCode session did not register");
+      refuse(refused("gate-setup", "shell is refused: the shell hook that binds a shell to the OpenCode session did not register"));
       return;
     }
     const cwd = await directory(input);
     if (!cwd) {
       log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "session directory unknown" });
-      refuse(`${tool} refused: the directory its session runs in is unknown, so no path or command can be placed`);
+      refuse(refused("directory", `${tool} refused: the directory its session runs in is unknown, so no path or command can be placed`));
       return;
     }
     if (tool === "grep") {
       const path = searchRoot(cwd, input);
       if (path === null) {
         log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "search path not resolvable" });
-        refuse("grep refused: its search path is in a form OpenCode's resolver was not recorded to handle");
+        refuse(refused("path-form", "grep refused: its search path is in a form OpenCode's resolver was not recorded to handle"));
         return;
       }
       if (gate().refused(path)) {
         log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "credential path" });
-        refuse(`credential path: ${path}`);
+        refuse(`deny: agent-gates credential path: ${path}`);
         return;
       }
       greps.set(input.id, path);
     }
     const answer = await verdict("tool.execute.before", input, cwd);
     if (answer.failed || answer.decision !== "allow") {
-      const reason = answer.failed || answer.reason || (answer.decision === "deny" ? "denied by a gate" : "the gate bridge answered no decision");
-      log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, script: answer.script || "bridge" });
+      const reason = answer.failed ? refused("gate-setup", answer.failed) : answer.reason || refused("gate-setup", "the gate bridge answered no decision");
+      log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, script: answer.script || "bridge", detail: String(reason).slice(0, 200) });
       greps.delete(input.id);
       refuse(reason);
       return;

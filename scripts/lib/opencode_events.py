@@ -13,16 +13,21 @@ of a question) comes from the pinned mechanisms probe record, not from documenta
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
+import hashlib
 import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tomllib
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from lib import config_root
@@ -32,13 +37,22 @@ DENY_WINS = True
 # OpenCode has no loop guard on the idle hook (E6): the shim stops continuing a session after this many.
 IDLE_MAX_CONTINUES = 5
 
+# OpenCode reads the project's own config (opencode.json, .opencode/plugin, .opencode/tool) at start, before
+# any tool call, and a gated session must not run what the project brings; probe A6 (project_routes) records
+# that this variable switches each of the three routes off. Only the value the probe set is accepted, and only
+# while ``OPENCODE_CONFIG_PROJECT_DISABLE`` is unset: the pinned binary reads that one first
+# (``CONFIG_PROJECT_DISABLE ?? DISABLE_PROJECT_CONFIG``), so any value of it replaces this variable's.
+PROJECT_CONFIG_OFF_ENV = "OPENCODE_DISABLE_PROJECT_CONFIG"
+PROJECT_CONFIG_PRECEDENCE_ENV = "OPENCODE_CONFIG_PROJECT_DISABLE"
+PROJECT_CONFIG_OFF = {PROJECT_CONFIG_OFF_ENV: "1"}
+
 RUNTIME_HOST_ENV = "AGENTCTL_RUNTIME_HOST"
 HARNESS_SESSION_ENV = "AGENTCTL_HARNESS_SESSION_ID"
 OWN_SESSION_ENV = "AGENTCTL_OWN_SESSION"
 INTEGRATION_ENV = "AGENT_OPENCODE_HOME"
 EXTRA_ROWS_ENV = "AGENT_GATE_EXTRA_ROWS"
-PLUGIN_TOOLS_ENV = "AGENT_GATE_PLUGIN_TOOLS"
-MCP_SERVERS_ENV = "AGENT_GATE_MCP_SERVERS"
+OPENCODE_CONFIG_ENV = "OPENCODE_CONFIG"
+OPENCODE_CONFIG_DIR_ENV = "OPENCODE_CONFIG_DIR"
 SETTINGS_CREDENTIAL_KEY = "opencode-credential-file"
 SETTINGS_FILE = "opencode.local.toml"
 
@@ -73,6 +87,25 @@ REFUSED_TOOLS: dict[str, str] = {
 }
 REFUSED_PATHS: dict[str, str] = {
     path_id: REFUSED_TOOLS[tool] for path_id, tool in FAMILY_TOOL_PATHS.items() if tool in REFUSED_TOOLS}
+
+# What the adapter cannot do and says so, by id; ``integrations/opencode/README.md`` § Open limits carries
+# each id with its consequence for the user.
+OPEN_LIMITS: dict[str, str] = {
+    "patch-refused": "every call of the gpt family's multi-file patch editor is refused: its effect cannot be "
+                     "shown to the rows, and it cannot be switched off without also removing edit and write",
+    "project-routes-unobserved": "a route by which a project brings code into OpenCode that probe A6 never saw "
+                                 "load in its control run cannot be shown switched off; the variable "
+                                 "OPENCODE_DISABLE_PROJECT_CONFIG is set for the session regardless",
+    "alternate-spellings": "a read whose file name ends in a form OpenCode would retry under another spelling "
+                           "(no-break space, curly quote, decomposed accent) is refused",
+    "fuzzy-edit": "an edit whose oldString does not occur in the file exactly is refused, though OpenCode would "
+                  "apply it fuzzily",
+    "mcp-name-reserved": "an MCP server named opencode, or after a built-in or a refused tool, is refused: its "
+                         "tools cannot be told from OpenCode's own",
+    "interpreter-writes": "a write into the session's own config directory or the integration directory made by "
+                          "code an interpreter runs (python -c, node -e) is not seen: only write, edit and the "
+                          "write targets of a shell command line (redirects, cp, mv, install, tee) are checked",
+}
 
 # Every argument of every built-in the adapter maps, as the pinned OpenCode version's tool schemas name it
 # (probe A5 records them): ``path`` is resolved like a path (``resolve_path``) into the named Claude input
@@ -109,14 +142,61 @@ ARGUMENT_CLASSES: dict[str, dict[str, tuple[str, str]]] = {
 }
 OPTIONAL_ARGUMENTS = frozenset({"offset", "limit", "replaceAll", "background", "hidden", "include", "literal",
                                 "caseSensitive", "timeout", "format", "model", "sessionID", "workdir"})
+# The arguments a call must carry (probe A5, ``tool_schemas``, records the schema's own ``required``) and the
+# JSON type of each argument name; a call of a built-in that leaves a required one out or gives one the wrong
+# type is refused, since OpenCode's own handling of it was never recorded.
+REQUIRED_ARGUMENTS = {
+    "read": {"path"}, "write": {"path", "content"}, "edit": {"path", "oldString", "newString"},
+    "glob": {"pattern"}, "grep": {"pattern"}, "shell": {"command"}, "execute": {"code"}, "webfetch": {"url"},
+    "websearch": {"query"}, "question": {"questions"}, "subagent": {"description", "prompt", "agent"},
+    "skill": {"id"},
+}
+STRING_ARGUMENTS = frozenset({"path", "content", "oldString", "newString", "pattern", "command", "workdir", "code",
+                              "url", "format", "query", "description", "prompt", "agent", "model", "sessionID",
+                              "id", "include"})
+BOOLEAN_ARGUMENTS = frozenset({"replaceAll", "background", "hidden", "literal", "caseSensitive"})
+NUMBER_ARGUMENTS = frozenset({"offset", "limit", "timeout"})
+ARRAY_ARGUMENTS = frozenset({"questions"})
+# glob reads these two spellings of a path as no path at all (A6 ``spellings``); grep reads them as the
+# directory of that name.
+GLOB_ABSENT_PATHS = frozenset({"undefined", "null"})
 
 EVENT_OF = {
     "tool.execute.before": "PreToolUse", "tool.execute.after": "PostToolUse",
     "session.prompt": "UserPromptSubmit", "session.created": "SessionStart",
     "session.deleted": "SessionEnd", "experimental.idle": "Stop",
 }
+# The events whose verdict can refuse something: a tool call, a prompt, the end of a turn.
+DECIDING_EVENTS = frozenset({"tool.execute.before", "session.prompt", "experimental.idle"})
 
 ROW_TIMEOUT_DEFAULT_S = 10
+
+REFUSAL_CLASSES = ("unclassified", "argument", "refused-tool", "path-form", "directory", "project-config",
+                   "config-dir", "rows-snapshot", "gate-setup")
+
+
+def refusal_reason(cls: str, detail: str) -> str:
+    """The text of a refusal the bridge or the shim makes itself; a hook's deny reads
+    ``deny: <script> <reason>`` instead, so the reader sees whose refusal it is."""
+    assert cls in REFUSAL_CLASSES, cls
+    return f"refused: {cls} {detail}"
+
+
+def hook_deny_reason(script: str, reason: str) -> str:
+    return f"deny: {script} {reason}"
+
+
+def project_config_off(environ=None) -> bool:
+    env = os.environ if environ is None else environ
+    return (env.get(PROJECT_CONFIG_OFF_ENV) == PROJECT_CONFIG_OFF[PROJECT_CONFIG_OFF_ENV]
+            and PROJECT_CONFIG_PRECEDENCE_ENV not in env)
+
+
+def require_project_config_off(environ=None) -> None:
+    if not project_config_off(environ):
+        raise ProjectConfigNotOff(f"{PROJECT_CONFIG_OFF_ENV}={PROJECT_CONFIG_OFF[PROJECT_CONFIG_OFF_ENV]} is not "
+                                  f"set (or {PROJECT_CONFIG_PRECEDENCE_ENV} is), so the session may have loaded "
+                                  f"code from the project's own OpenCode config")
 
 
 def integration_dir() -> Path:
@@ -129,15 +209,51 @@ def transcripts_dir(directory: Path) -> Path:
     return Path(directory) / "state" / "transcripts"
 
 
+def snapshots_dir(directory: Path) -> Path:
+    return Path(directory) / "state" / "rows-snapshots"
+
+
 def shadow_transcript_path(directory: Path, session: str) -> Path:
     return transcripts_dir(directory) / f"{config_root.sanitize_session_id(session)}.jsonl"
 
 
-def append_transcript(path: Path, records: list[dict]) -> None:
+@contextmanager
+def _transcript_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
+    with open(path.parent / ".lock", "a", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def append_transcript(path: Path, records: list[dict]) -> None:
+    with _transcript_lock(path), path.open("a", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(record) + "\n")
+
+
+def redact_transcript_call(path: Path, tool_use_id) -> None:
+    """Take the input of one recorded tool call out of the shadow transcript: the call was refused after the
+    rows were shown it, and the transcript must not keep the file content or command of a refused call."""
+    with _transcript_lock(path):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        kept = []
+        for line in lines:
+            try:
+                record = json.loads(line)
+                for part in (record.get("message") or {}).get("content") or []:
+                    if isinstance(part, dict) and part.get("type") == "tool_use" and part.get("id") == tool_use_id:
+                        part["input"] = {}
+                        part["refused"] = True
+                        line = json.dumps(record)
+            except (ValueError, AttributeError):
+                pass
+            kept.append(line)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+        os.replace(temporary, path)
 
 
 def payload_session_id(opencode_session: str, environ=None) -> str:
@@ -147,63 +263,201 @@ def payload_session_id(opencode_session: str, environ=None) -> str:
     return env.get(OWN_SESSION_ENV) or opencode_session
 
 
-def plugin_tools(environ=None) -> frozenset[str]:
+def declared_mcp_servers(environ=None) -> frozenset[str]:
+    """The MCP server names the session's own OpenCode config declares: the keys of ``mcp`` in the file
+    ``OPENCODE_CONFIG`` names and in ``opencode.json`` of ``OPENCODE_CONFIG_DIR`` (probe A5,
+    ``mcp_names_from_config``, records that a server's tools are offered as ``<key>_<tool>``). A config that
+    cannot be read declares none, so the tools of its servers are refused."""
     env = os.environ if environ is None else environ
-    return frozenset(t for t in (env.get(PLUGIN_TOOLS_ENV) or "").split(",") if t)
+    sources = [env.get(OPENCODE_CONFIG_ENV)]
+    if env.get(OPENCODE_CONFIG_DIR_ENV):
+        sources.append(str(Path(env[OPENCODE_CONFIG_DIR_ENV]) / "opencode.json"))
+    names: set[str] = set()
+    for source in filter(None, sources):
+        try:
+            table = json.loads(Path(source).read_text(encoding="utf-8")).get("mcp")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(table, dict):
+            names.update(str(key) for key in table)
+    return frozenset(names)
 
 
-def mcp_servers(environ=None) -> frozenset[str]:
-    """The MCP server names of the session's config, as the launcher that generated it lists them."""
+def declared_plugin_tools(extra_rows_file: str | None = None) -> frozenset[str]:
+    """The plugin tool ids the parity table declares (``plugin_tools.ids``, shipped empty) and, for a
+    session, the table-shaped file ``AGENT_GATE_EXTRA_ROWS`` names."""
+    from lib import hook_parity
+
+    tables = [hook_parity.load_table(hook_parity.CORE_TABLE)]
+    if extra_rows_file:
+        tables.append(tomllib.loads(Path(extra_rows_file).read_text(encoding="utf-8")))
+    ids: set[str] = set()
+    for table in tables:
+        ids.update(str(i) for i in (table.get("plugin_tools") or {}).get("ids") or [])
+    return frozenset(ids)
+
+
+# A server of this name would take the ids OpenCode's own tools carry (``opencode_worktree_create``) or a
+# built-in's, so its tools cannot be told from them.
+RESERVED_SERVER_NAMES = frozenset({"opencode"}) | frozenset(BUILTIN_TOOLS) | frozenset(REFUSED_TOOLS)
+
+
+class UnshowableCall(ValueError):
+    """A tool call the gates cannot be shown as it will run; ``cls`` is its refusal class."""
+
+    cls = "argument"
+
+
+class UnclassifiedTool(UnshowableCall):
+    """A tool id that is no built-in, no tool of a declared MCP server and no declared plugin tool, or fits
+    two of these, or sits under a reserved server name."""
+
+    cls = "unclassified"
+
+
+class RefusedTool(UnshowableCall):
+    """A built-in whose effect no gate can be shown (``REFUSED_TOOLS``), or one denied by name."""
+
+    cls = "refused-tool"
+
+
+class UnresolvablePath(UnshowableCall):
+    """A path the way OpenCode resolves it cannot be reproduced: a form outside the recorded set."""
+
+    cls = "path-form"
+
+
+class UnknownDirectory(UnresolvablePath):
+    """A path or event that depends on the session directory, and that directory is not known."""
+
+    cls = "directory"
+
+
+class UnclassifiedArgument(UnshowableCall):
+    """A built-in's call carries an argument ``ARGUMENT_CLASSES`` does not list, lacks a required one or gives
+    one of the wrong type, or an ``edit`` whose ``oldString`` is not in the file as written."""
+
+    cls = "argument"
+
+
+class RowsSnapshotRefused(UnshowableCall):
+    """The rows of a session are not the ones its first event froze: no snapshot, or one that changed."""
+
+    cls = "rows-snapshot"
+
+
+class ProjectConfigNotOff(UnshowableCall):
+    cls = "project-config"
+
+
+class ConfigDirWrite(UnshowableCall):
+    """A write into the session's own config directory or the integration directory: the plugin that gates the
+    session and the config that loads it live there."""
+
+    cls = "config-dir"
+
+
+def protected_directories(environ=None) -> tuple[str, ...]:
+    """The directories a gated session must not write into: the config directory OpenCode was started with
+    (``OPENCODE_CONFIG_DIR``) and the integration directory (the shim, the shadow transcripts, the rows
+    snapshots, OpenCode's data). Real paths, so a link to either names it."""
     env = os.environ if environ is None else environ
-    return frozenset(s for s in (env.get(MCP_SERVERS_ENV) or "").split(",") if s)
+    found = [env.get(OPENCODE_CONFIG_DIR_ENV)]
+    found.append(env.get(INTEGRATION_ENV) or str(config_root.agent_home() / "opencode"))
+    return tuple(dict.fromkeys(os.path.realpath(p) for p in found if p))
+
+
+def _inside(path: str, directory: str) -> bool:
+    return path == directory or path.startswith(directory.rstrip(os.sep) + os.sep)
+
+
+def config_dir_write_targets(tool: str, tool_input: dict, cwd: str, environ=None) -> list[str]:
+    """The paths of ``tool_input`` (a Claude-shaped input; ``tool`` is the Claude tool name) that a write or
+    edit, or the write targets of a shell command line, would put into a protected directory."""
+    from lib import bash_write_targets
+
+    if tool in ("Write", "Edit"):
+        candidates = [tool_input.get("file_path")]
+    elif tool == "Bash":
+        candidates = bash_write_targets.command_write_targets(str(tool_input.get("command") or ""), cwd)
+    else:
+        return []
+    protected = protected_directories(environ)
+    hits = []
+    for candidate in filter(None, candidates):
+        normal = os.path.normpath(str(candidate))
+        if any(_inside(p, d) for p in (normal, os.path.realpath(normal)) for d in protected):
+            hits.append(normal)
+    return hits
+
+
+def require_no_config_dir_write(tool: str, tool_input: dict, cwd: str, environ=None) -> None:
+    hits = config_dir_write_targets(tool, tool_input, cwd, environ)
+    if hits:
+        raise ConfigDirWrite(f"{tool} would write {hits[0]}, inside the session's config directory or the "
+                             f"integration directory, where the plugin that gates the session lives")
+
+
+def classify_tool(name: str, plugin: frozenset[str] = frozenset(),
+                  servers: frozenset[str] = frozenset()) -> str:
+    """The Claude tool name for an OpenCode tool id, by declared names only.
+
+    A built-in (``BUILTIN_TOOLS``) maps by its table; a tool in ``REFUSED_TOOLS`` or denied by name is refused;
+    otherwise the prefix before ``_`` is an MCP server declared in the session's config (the longest wins),
+    giving ``mcp__<server>__<tool>``; otherwise the id is a declared plugin tool, giving ``plugin__<id>``. An id
+    that fits both an MCP server and a plugin id is ambiguous, and one that fits neither is not known: both are
+    refused, as is any id under a reserved server name."""
+    if name in BUILTIN_TOOLS:
+        return BUILTIN_TOOLS[name]
+    if name in REFUSED_TOOLS or denied_by_name(name):
+        raise RefusedTool(f"{name} is not a tool the gates can be shown: "
+                          f"{REFUSED_TOOLS.get(name, 'OpenCode manages worktrees and sessions itself')}")
+    for server in sorted(RESERVED_SERVER_NAMES & servers):
+        if name.startswith(server + "_"):
+            raise UnclassifiedTool(f"{name} is under the MCP server name {server!r}, which is reserved")
+    named = [s for s in sorted(servers - RESERVED_SERVER_NAMES, key=len, reverse=True)
+             if name.startswith(s + "_") and name[len(s) + 1:]]
+    if named and name in plugin:
+        raise UnclassifiedTool(f"{name} is both a tool of the MCP server {named[0]!r} and a declared plugin tool")
+    if named:
+        return f"mcp__{named[0]}__{name[len(named[0]) + 1:]}"
+    if name in plugin:
+        return f"plugin__{name}"
+    raise UnclassifiedTool(f"{name} is no built-in, no tool of an MCP server the session's config declares and "
+                           f"no plugin tool the parity table declares")
 
 
 def claude_tool(name: str, plugin: frozenset[str] = frozenset(),
                 servers: frozenset[str] = frozenset()) -> str | None:
-    """The Claude tool name for an OpenCode tool, or None when the tool is not one the session knows.
-
-    A built-in maps by ``BUILTIN_TOOLS``, a tool the plugin registers is ``plugin__<id>``, and an MCP
-    tool is ``<server>_<tool>`` for a server named in ``servers`` (the longest such server wins). A name
-    that is none of these has no Claude name; an underscore alone does not make an MCP tool."""
-    if name in BUILTIN_TOOLS:
-        return BUILTIN_TOOLS[name]
-    if name in plugin:
-        return f"plugin__{name}"
-    for server in sorted(servers, key=len, reverse=True):
-        tool = name[len(server) + 1:]
-        if name.startswith(server + "_") and tool:
-            return f"mcp__{server}__{tool}"
-    return None
+    """``classify_tool``, or None when the tool is not one the session knows."""
+    try:
+        return classify_tool(name, plugin, servers)
+    except UnshowableCall:
+        return None
 
 
-class UnshowableCall(ValueError):
-    """A tool call the gates cannot be shown as it will run: a path or directory that cannot be resolved, or
-    an argument nobody classified."""
+def _spelling_form(name: str) -> str:
+    """What OpenCode's read tool takes alternate spellings of a file name to be the same as: NFC, no-break and
+    narrow no-break space as a space, curly as straight single quotes (A6 ``spellings``)."""
+    return (unicodedata.normalize("NFC", name).replace(" ", " ").replace(" ", " ")
+            .replace("‘", "'").replace("’", "'"))
 
 
-class UnresolvablePath(UnshowableCall):
-    """A path the way OpenCode resolves it cannot be reproduced: a form outside the recorded set, or a
-    directory it depends on that is unknown."""
-
-
-class UnclassifiedArgument(UnshowableCall):
-    """A built-in's call carries an argument ``ARGUMENT_CLASSES`` does not list."""
-
-
-def resolve_path(path, directory: str, home: str | None = None):
+def resolve_path(path, directory: str):
     """The absolute, normalised path OpenCode 2.3.2 takes a path argument to name, for exactly the forms probe
     A6 recorded (``path_forms``): the empty string is the session ``directory``; ``~`` and ``~/...`` are the
-    home directory (``home``, else ``$HOME``; ``~//...`` was not recorded and is refused); a leading ``/`` (also
-    ``//``) is absolute; every other form,
-    ``~user``, ``$HOME``, ``${HOME}``, ``file://...``, ``..``, ``./``, is relative to the session directory.
-    ``None`` (an argument not given) stays ``None``. Any other value, a NUL byte, or a directory or home that
-    is needed and not an absolute path raises ``UnresolvablePath``: a form that was not recorded is refused."""
+    home directory (``$HOME``, the one home source; ``~//...`` was not recorded and is refused); a leading ``/``
+    (also ``//``) is absolute; every other form, ``~user``, ``$HOME``, ``${HOME}``, ``file://...``, ``..``,
+    ``./``, is relative to the session directory. ``None`` (an argument not given) stays ``None``. Any other
+    value, a NUL byte, or a directory or home that is needed and not an absolute path is refused. So is a path
+    whose last component is not its own spelling form (``_spelling_form``): the read tool opens the file under
+    any alternate spelling of a missing name, which no compare of the written name covers (A6 ``spellings``)."""
     if path is None:
         return None
     if not isinstance(path, str) or "\0" in path:
         raise UnresolvablePath(f"the path {path!r} is not a form OpenCode's resolver was recorded to handle")
     if path == "~" or path.startswith("~/"):
-        base = home if home is not None else os.environ.get("HOME", "")
+        base = os.environ.get("HOME", "")
         if not base or not os.path.isabs(base) or path.startswith("~//"):
             raise UnresolvablePath(f"the path {path!r} starts at the home directory and it is unknown, or is a "
                                    f"form that was not recorded")
@@ -212,13 +466,19 @@ def resolve_path(path, directory: str, home: str | None = None):
         joined = path
     else:
         if not directory or not os.path.isabs(directory):
-            raise UnresolvablePath(f"the path {path!r} is relative and the session directory is unknown")
+            raise UnknownDirectory(f"the path {path!r} is relative and the session directory is unknown")
         joined = os.path.join(directory, path)
     normal = os.path.normpath(joined)
-    return normal[1:] if normal.startswith("//") else normal
+    normal = normal[1:] if normal.startswith("//") else normal
+    last = os.path.basename(normal)
+    if _spelling_form(last) != last:
+        raise UnresolvablePath(f"the last component of {path!r} is not its own spelling form (no-break space, "
+                               f"curly quote or decomposed accent): OpenCode would open the file under another "
+                               f"spelling than the one the gates compare")
+    return normal
 
 
-def run_directory(tool: str, args: dict, directory: str, *, strict: bool = True, home: str | None = None) -> str:
+def run_directory(tool: str, args: dict, directory: str, *, strict: bool = True) -> str:
     """The directory a call runs in, which Claude's payload names ``cwd``: the session ``directory``, but for a
     shell call with a ``workdir`` the one that names (OpenCode resolves it like any path, probe A6). With
     ``strict`` false a ``workdir`` that cannot be resolved leaves the session directory (events no gate
@@ -227,17 +487,31 @@ def run_directory(tool: str, args: dict, directory: str, *, strict: bool = True,
     if workdir is None:
         return directory
     try:
-        return resolve_path(workdir, directory, home)
+        return resolve_path(workdir, directory)
     except UnresolvablePath:
         if strict:
             raise
         return directory
 
 
-def claude_input(tool: str, args: dict, directory: str = "", *, strict: bool = True, home: str | None = None) -> dict:
+def _type_problem(name: str, value) -> str | None:
+    if name in STRING_ARGUMENTS and not isinstance(value, str):
+        return "a string"
+    if name in BOOLEAN_ARGUMENTS and not isinstance(value, bool):
+        return "a boolean"
+    if name in NUMBER_ARGUMENTS and (isinstance(value, bool) or not isinstance(value, (int, float))):
+        return "a number"
+    if name in ARRAY_ARGUMENTS and not isinstance(value, list):
+        return "a list"
+    return None
+
+
+def claude_input(tool: str, args: dict, directory: str = "", *, strict: bool = True) -> dict:
     """The Claude tool input of an OpenCode tool input, by ``ARGUMENT_CLASSES``. A path is resolved by
-    ``resolve_path`` (``UnresolvablePath`` when it cannot be; with ``strict`` false it is kept as written, and an
-    unlisted argument is dropped, for events no gate decides on). A tool the table does not list (plugin and MCP
+    ``resolve_path`` (refused when it cannot be; with ``strict`` false it is kept as written, and an unlisted
+    argument is dropped, for events no gate decides on). With ``strict`` an argument of the wrong type, and a
+    required one that is absent (or JSON null, which OpenCode drops), is refused too. A glob ``path`` of the text
+    ``undefined`` or ``null`` is no path, as OpenCode takes it. A tool the table does not list (plugin and MCP
     tools) passes its input as it is."""
     args = args if isinstance(args, dict) else {}
     classes = ARGUMENT_CLASSES.get(tool)
@@ -250,32 +524,95 @@ def claude_input(tool: str, args: dict, directory: str = "", *, strict: bool = T
             if strict:
                 raise UnclassifiedArgument(f"{tool} was called with the argument {name!r}, which nobody classified")
             continue
+        if value is None:
+            continue
+        problem = _type_problem(name, value) if strict else None
+        if problem:
+            raise UnclassifiedArgument(f"{tool} argument {name!r} is not {problem}")
         kind, target = classes[name]
         if kind == "irrelevant" or target == "cwd":
             continue
         if kind == "path":
+            if tool == "glob" and value in GLOB_ABSENT_PATHS:
+                continue
             try:
-                value = resolve_path(value, directory, home)
+                value = resolve_path(value, directory)
             except UnresolvablePath:
                 if strict:
                     raise
         mapped[target] = value
+    if strict:
+        absent = sorted(n for n in REQUIRED_ARGUMENTS.get(tool, ()) if args.get(n) is None)
+        if absent:
+            raise UnclassifiedArgument(f"{tool} was called without the required argument {absent[0]!r}")
     return mapped
 
 
-def unclassified_arguments(schema: dict[str, list[str]]) -> list[str]:
-    """``tool.argument`` for every argument of a recorded tool schema (``{tool: [argument names]}``) that
-    ``ARGUMENT_CLASSES`` does not list, ``tool`` alone for a tool that is neither listed, refused nor a probe's;
-    and ``tool.argument (stale)`` for a listed argument the schema no longer has."""
+EDIT_FILE_MAX_BYTES = 4 * 1024 * 1024
+
+
+def require_exact_edit(file_path: str, old_string: str) -> None:
+    """Refuse an ``edit`` whose ``oldString`` is not in the file as written. OpenCode matches it fuzzily (curly
+    quotes, indentation, trailing space; A6 ``spellings``), so the rows would be shown another edit than the one
+    made. The file is opened only here, never a link or a device, and nothing of its content leaves this
+    function. An empty ``oldString`` is OpenCode's own write of the whole file."""
+    if not old_string:
+        return
+    unreadable = UnclassifiedArgument(f"edit of {file_path}: the bridge cannot read the file to check that "
+                                      f"oldString occurs in it exactly")
+    try:
+        fd = os.open(file_path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        raise unreadable from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise unreadable
+        with os.fdopen(os.dup(fd), "rb") as handle:
+            data = handle.read(EDIT_FILE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(data) > EDIT_FILE_MAX_BYTES:
+        raise unreadable
+    if old_string.encode("utf-8") not in data:
+        raise UnclassifiedArgument(f"edit of {file_path}: oldString does not occur in the file exactly, and "
+                                   f"OpenCode would match it fuzzily and make another edit than the rows see")
+
+
+def _schema_type(spec) -> str:
+    kind = spec.get("type") if isinstance(spec, dict) else None
+    return "number" if kind == "integer" else str(kind)
+
+
+def _expected_type(name: str) -> str | None:
+    for expected, names in (("string", STRING_ARGUMENTS), ("boolean", BOOLEAN_ARGUMENTS),
+                            ("number", NUMBER_ARGUMENTS), ("array", ARRAY_ARGUMENTS)):
+        if name in names:
+            return expected
+    return None
+
+
+def unclassified_arguments(schema: dict[str, dict], plugin: frozenset[str] = frozenset(),
+                           servers: frozenset[str] = frozenset()) -> list[str]:
+    """What differs between the tool schemas the pinned OpenCode offered (``{tool: {"properties": {name: spec},
+    "required": [...]}}``, probe A5 ``tool_schemas``) and what the adapter classified: ``tool.argument`` for an
+    argument ``ARGUMENT_CLASSES`` does not list, ``tool.argument (stale)`` for a listed one the schema no longer
+    has, ``tool.argument (type)`` for another JSON type than ``_expected_type``, ``tool (required)`` for another
+    required set than ``REQUIRED_ARGUMENTS``, and ``tool`` alone for a tool that is no built-in, no refused tool
+    and no declared plugin or MCP tool."""
     problems = []
-    for tool, names in sorted(schema.items()):
+    for tool, spec in sorted(schema.items()):
+        properties = spec.get("properties") or {} if isinstance(spec, dict) else {}
         classes = ARGUMENT_CLASSES.get(tool)
         if classes is None:
-            if tool not in REFUSED_TOOLS and claude_tool(tool) is None:
+            if tool not in REFUSED_TOOLS and claude_tool(tool, plugin, servers) is None:
                 problems.append(tool)
             continue
-        problems += [f"{tool}.{n}" for n in names if n not in classes]
-        problems += [f"{tool}.{n} (stale)" for n in classes if n not in names]
+        problems += [f"{tool}.{n}" for n in properties if n not in classes]
+        problems += [f"{tool}.{n} (stale)" for n in classes if n not in properties]
+        problems += [f"{tool}.{n} (type)" for n, sub in properties.items()
+                     if n in classes and _expected_type(n) not in (None, _schema_type(sub))]
+        if set(spec.get("required") or []) != REQUIRED_ARGUMENTS.get(tool, set()):
+            problems.append(f"{tool} (required)")
     return problems
 
 
@@ -372,13 +709,53 @@ def _extra_rows(path: str | None) -> list[Row]:
 
 def load_rows(layer_roots: list[Path] | None = None, extra_rows_file: str | None = None) -> list[Row]:
     """Core's rows, then each non-home layer root's rows, then the per-session rows file's.
-    A layer root only adds rows; Core's are never replaced."""
+    A layer root only adds rows; Core's are never replaced. This reads the three sources; a session reads
+    them once, into its snapshot (``rows_snapshot``)."""
     rows = _core_rows()
     home = config_root.agent_home().resolve()
     for root in layer_roots or []:
         if Path(root).resolve() != home:
             rows += _layer_rows(Path(root))
     return rows + _extra_rows(extra_rows_file)
+
+
+def snapshot_digest(snapshot: dict) -> str:
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def rows_snapshot(integration: Path, session: str, digest: str | None, make_roots, extra_rows_file: str | None
+                  ) -> tuple[list[Row], frozenset[str], str]:
+    """The rows and the declared plugin tool ids of a session, and the digest of the snapshot they come from.
+
+    A session's rows are read from the three sources once, into a snapshot file under the integration state
+    keyed by the session id. With no ``digest`` (the first event of the session, or a new process of an existing
+    one) the snapshot is built from the sources (``make_roots`` gives the layer roots) and replaces the stored
+    one. With a ``digest`` the stored snapshot is read and never rebuilt: a snapshot that is missing,
+    unreadable or whose digest differs is refused, so a row added or changed after the session began does not
+    take effect in it and one removed does not drop out."""
+    if not session:
+        raise RowsSnapshotRefused("the session has no id to key its rows snapshot by")
+    path = snapshots_dir(integration) / f"{config_root.sanitize_session_id(session)}.json"
+    if digest:
+        try:
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise RowsSnapshotRefused("the stored rows snapshot of this session is missing or unreadable") from None
+        if not isinstance(snapshot, dict) or snapshot_digest(snapshot) != digest:
+            raise RowsSnapshotRefused("the stored rows snapshot of this session is not the one its digest names")
+    else:
+        snapshot = {"rows": [asdict(r) for r in load_rows(make_roots(), extra_rows_file)],
+                    "plugin_tools": sorted(declared_plugin_tools(extra_rows_file))}
+        digest = snapshot_digest(snapshot)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(snapshot, sort_keys=True), encoding="utf-8")
+        os.replace(temporary, path)
+    try:
+        rows = [Row(**row) for row in snapshot["rows"]]
+        return rows, frozenset(str(i) for i in snapshot["plugin_tools"]), digest
+    except (KeyError, TypeError):
+        raise RowsSnapshotRefused("the stored rows snapshot of this session has a shape no snapshot has") from None
 
 
 def rows_for(rows: list[Row], event: str, tool_name: str | None) -> list[Row]:
@@ -401,6 +778,12 @@ class Decision:
     reason: str = ""
     script: str = ""
     context: list[str] = field(default_factory=list)
+    cls: str = ""
+
+
+def refusal(cls: str, detail: str) -> Decision:
+    """A refusal the bridge makes itself, of refusal class ``cls``."""
+    return Decision(True, refusal_reason(cls, detail), "opencode-gate-bridge", cls=cls)
 
 
 def parse_hook_output(returncode: int, stdout: str, stderr: str) -> Decision:
@@ -461,7 +844,7 @@ def run_row(row: Row, payload: dict, env: dict) -> Decision:
     argv = command_of(row)
     try:
         proc = subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
-                              timeout=row.timeout_s, env=env, cwd=payload.get("cwd") or None)
+                              timeout=row.timeout_s, env=env, cwd=payload["cwd"])
     except subprocess.TimeoutExpired:
         return Decision()  # Claude Code treats a timed-out hook as a non-blocking error: the call runs
     decision = parse_hook_output(proc.returncode, proc.stdout, proc.stderr)
@@ -470,12 +853,15 @@ def run_row(row: Row, payload: dict, env: dict) -> Decision:
 
 
 def run_rows(rows: list[Row], payload: dict) -> Decision:
-    """Run ``rows`` against ``payload`` side by side and combine their decisions in row order."""
+    """Run ``rows`` against ``payload`` side by side and combine their decisions in row order. The hooks run in
+    the payload's ``cwd``, which must be a directory: this process's own is never a stand-in."""
     for row in rows:
         command_of(row)
     if not rows:
         return Decision()
-    env = hook_env(payload.get("session_id", ""), payload.get("cwd", ""))
+    if not payload.get("cwd"):
+        raise UnknownDirectory("the directory the session runs in is unknown, so no hook can be run in it")
+    env = hook_env(payload.get("session_id", ""), payload["cwd"])
     with ThreadPoolExecutor(max_workers=min(len(rows), 8)) as pool:
         decisions = list(pool.map(lambda r: run_row(r, payload, env), rows))
     return combine(decisions)
@@ -488,10 +874,10 @@ def now() -> str:
 def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: frozenset[str],
                   environ=None, servers: frozenset[str] = frozenset(), directory: str = "") -> dict:
     """The Claude-shaped payload of an OpenCode event ``data`` (the hook input, as the probe recorded it).
-    The tool name is None when no Claude name is known for the tool. ``cwd`` is the session ``directory``, or
-    for a shell call with a ``workdir`` the directory the command will run in; paths of the tool input are
-    resolved by ``resolve_path`` (``UnshowableCall`` of a before-event when one cannot be; an after-event,
-    which no gate can still prevent, keeps the path as written)."""
+    ``cwd`` is the session ``directory``, or for a shell call with a ``workdir`` the directory the command will
+    run in; paths of the tool input are resolved by ``resolve_path``. A before-event whose tool is not one the
+    session knows, or whose call cannot be shown, raises ``UnshowableCall``; an after-event, which no gate can
+    still prevent, keeps the tool name None and the path as written."""
     opencode_session = data.get("sessionID") or ""
     session = payload_session_id(opencode_session, environ)
     payload = {"session_id": session, "transcript_path": str(transcript_path), "cwd": directory,
@@ -499,9 +885,11 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: froz
     if event in ("tool.execute.before", "tool.execute.after"):
         tool, args = data.get("tool") or "", data.get("input") or {}
         strict = event == "tool.execute.before"
+        payload["tool_name"] = classify_tool(tool, plugin, servers) if strict else claude_tool(tool, plugin, servers)
         payload["cwd"] = run_directory(tool, args, directory, strict=strict)
-        payload["tool_name"] = claude_tool(tool, plugin, servers)
         payload["tool_input"] = claude_input(tool, args, directory, strict=strict)
+        if strict:
+            require_no_config_dir_write(payload["tool_name"], payload["tool_input"], payload["cwd"], environ)
         payload["tool_use_id"] = data.get("id")
         if event == "tool.execute.after":
             payload["tool_response"] = claude_response(tool, args, data.get("result") or {})
@@ -516,7 +904,8 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: froz
     return payload
 
 
-def transcript_records(event: str, data: dict, session: str) -> list[dict]:
+def transcript_records(event: str, data: dict, session: str, *, plugin: frozenset[str] = frozenset(),
+                       servers: frozenset[str] = frozenset()) -> list[dict]:
     """The Claude-format transcript lines an event adds to the shadow transcript."""
     base = {"sessionId": session, "timestamp": now(), "cwd": data.get("cwd", "")}
     if event == "session.prompt":
@@ -524,7 +913,7 @@ def transcript_records(event: str, data: dict, session: str) -> list[dict]:
         return [{**base, "type": "user", "uuid": str(uuid.uuid4()),
                  "message": {"role": "user", "content": [{"type": "text", "text": text}]}}]
     tool, args = data.get("tool") or "", data.get("input") or {}
-    name = claude_tool(tool, plugin_tools(), mcp_servers()) or tool
+    name = claude_tool(tool, plugin, servers) or tool
     if event == "tool.execute.before":
         return [{**base, "type": "assistant", "uuid": str(uuid.uuid4()),
                  "message": {"role": "assistant", "content": [
@@ -543,10 +932,11 @@ def transcript_records(event: str, data: dict, session: str) -> list[dict]:
 def credential_paths(integration: Path, agent_home: Path, credential_file: str | None) -> tuple[Path, ...]:
     """The paths that hold credentials or what the gates saw, resolved absolute: OpenCode's auth store in the
     integration directory, the shadow transcripts directory (every tool call and result the gates were
-    shown, which a model that read it would see unfiltered), the per-machine settings file under the agent
-    home, and the credential file the settings name. Reads no setting itself."""
+    shown, which a model that read it would see unfiltered), the rows snapshots (which name every script the
+    gates run), the per-machine settings file under the agent home, and the credential file the settings name.
+    Reads no setting itself."""
     found = [Path(integration) / "data" / "opencode" / "auth.json", transcripts_dir(integration),
-             Path(agent_home) / SETTINGS_FILE]
+             snapshots_dir(integration), Path(agent_home) / SETTINGS_FILE]
     if credential_file:
         found.append(Path(credential_file).expanduser())
     return tuple(dict.fromkeys(p.resolve() for p in found))

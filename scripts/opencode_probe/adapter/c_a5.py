@@ -14,8 +14,10 @@ the editing tools they are offered: the action ``patch`` and the action ``edit``
 
 pass when every offered tool id is a tool the adapter maps (``opencode_events.BUILTIN_TOOLS``), a path id the
 mechanisms record lists (``PATH_TOOL_NAMES``) or a tool it refuses (``REFUSED_TOOLS``), and the argument names
-the schemas carry for the mapped tools are exactly the ones ``opencode_events.ARGUMENT_CLASSES`` classifies;
-fail when an offered tool id is unaccounted for, or an argument is unclassified or no longer in the schema;
+the schemas carry for the mapped tools are exactly the ones ``opencode_events.ARGUMENT_CLASSES`` classifies, with
+the JSON types and required sets the bridge checks (``oe.unclassified_arguments``);
+fail when an offered tool id is unaccounted for, or an argument is unclassified, retyped, no longer in the schema
+or required differently;
 unobserved when a run did not offer any tool. The record carries, per model id, the tools the model was
 offered, each tool's argument names, the switch-off runs and the registry's answer.
 """
@@ -52,6 +54,24 @@ def argument_names(schema):
     return sorted(props) if isinstance(props, dict) else []
 
 
+def input_schema(schema):
+    """One tool's input schema as ``{"properties": {name: spec}, "required": [...]}``, from the chat request's form."""
+    node = schema if isinstance(schema, dict) else {}
+    node = node.get("parameters") or node.get("input_schema") or node
+    props = node.get("properties") if isinstance(node, dict) else None
+    required = node.get("required") if isinstance(node, dict) else None
+    return {"properties": dict(props) if isinstance(props, dict) else {},
+            "required": sorted(required) if isinstance(required, list) else []}
+
+
+def merge_schemas(into, more):
+    """Fold one family's schema of a tool into the union: every property seen, every argument any family requires."""
+    into.setdefault("properties", {}).update({k: v for k, v in more["properties"].items()
+                                              if k not in into["properties"]})
+    into["required"] = sorted(set(into.get("required", [])) | set(more["required"]))
+    return into
+
+
 def _switch_off(h, config, files, c_p1):
     out = {}
     for action in SWITCH_OFF_ACTIONS:
@@ -80,7 +100,7 @@ def run(ctx):
                      model=f"stub/{model}", timeout=90)
         offered[model] = {"tools": run_.tool_list(), "exit_code": run_.exit_code}
         for tool in run_.tool_list():
-            arguments.setdefault(tool, set()).update(argument_names(run_.tool_schema(tool)))
+            merge_schemas(arguments.setdefault(tool, {}), input_schema(run_.tool_schema(tool)))
     switch_off = _switch_off(h, config, files, c_p1)
     registry = {}
     with h.serve({"models": {"m1": [{"text": MARKERS[1]}]}}, label="registry", config=config, files=files,
@@ -90,7 +110,7 @@ def run(ctx):
             registry[path] = {"status": status, "body": body if status == 200 else None}
     union = sorted({t for entry in offered.values() for t in entry["tools"]})
     unaccounted = [t for t in union if not _accounted(t)]
-    schema = {tool: sorted(names) for tool, names in sorted(arguments.items()) if tool not in PROBE_TOOLS}
+    schema = {tool: spec for tool, spec in sorted(arguments.items()) if tool not in PROBE_TOOLS}
     argument_problems = oe.unclassified_arguments(schema)
     patch_alone = bool(switch_off["patch/gpt-5"]["tools"]) and "patch" not in switch_off["patch/gpt-5"]["tools"]
     evidence = {"offered": offered, "union": union, "registry": registry, "unaccounted": unaccounted,

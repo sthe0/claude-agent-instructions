@@ -5,19 +5,19 @@
     opencode-gate-bridge.py credential-paths      the credential path list, as one JSON list
     opencode-gate-bridge.py idle-cap              the cap on idle continues of one session
 
-``event`` answers ``{"decision": "allow"|"deny", "reason": ..., "script": ..., "context": [...]}`` and
-exits 0; it exits 2 with ``missing-script: <path>`` or the error text when it cannot decide, and the
-shim then refuses a tool call rather than let it pass. ``replay`` runs a recorded input through the
-rows without a session or a transcript: exit 1 on deny, printing ``deny: <script> <reason>``; exit 0 on
-allow; exit 2 with ``missing-script: <path>`` when a row's script does not resolve.
+``event`` answers ``{"decision": "allow"|"deny", "reason": ..., "script": ..., "context": [...], "digest": ...}``
+and exits 0; it exits 2 with ``missing-script: <path>`` or the error text when it cannot decide, and the shim
+then refuses a tool call rather than let it pass. A hook's deny reads ``deny: <script> <reason>``; a refusal the
+bridge makes itself reads ``refused: <class> <detail>`` (``oe.REFUSAL_CLASSES``): a tool nobody classified, an
+argument nobody classified, ``patch``, a path in a form OpenCode's resolver was not recorded to handle, an unknown
+session directory, a session started without ``OPENCODE_DISABLE_PROJECT_CONFIG``, a write into the session's own
+config directory or the integration directory, a rows snapshot that is missing or changed.
 
-The rows are the Core parity table's, plus each non-home layer root's, plus the table-shaped file named
-by ``AGENT_GATE_EXTRA_ROWS``. A parity table without a PreToolUse row for the OpenCode host is an error
-(exit 2), not an allow-all. A tool id that is no built-in, no plugin tool (``AGENT_GATE_PLUGIN_TOOLS``) and
-no tool of an MCP server named in ``AGENT_GATE_MCP_SERVERS`` is refused whatever rows exist, as is a
-``patch`` call, a call with an argument nobody classified, a path in a form OpenCode's resolver was not
-recorded to handle, and any tool call whose session directory is unknown. Plugin shim, rows and
-combination: ``lib/opencode_events.py``.
+The rows are the Core parity table's, plus each non-home layer root's, plus the table-shaped file named by
+``AGENT_GATE_EXTRA_ROWS``, read once at the session's first event into a snapshot; the answer's ``digest`` names
+it and the shim sends it back with every later event (``rowsDigest``). A parity table without a PreToolUse row
+for the OpenCode host is an error (exit 2), not an allow-all. Plugin shim, rows and combination:
+``lib/opencode_events.py``.
 """
 from __future__ import annotations
 
@@ -29,6 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import config_root, opencode_events as oe  # noqa: E402
+
+REFUSING_EVENTS = ("tool.execute.before", "session.prompt")
 
 
 def _default_layer_roots(cwd: str) -> list[Path]:
@@ -46,43 +48,41 @@ def _read_json(source) -> dict:
     return data
 
 
-def _decide_call(event: str, data: dict, rows: list[oe.Row], transcript: Path | None) -> oe.Decision:
-    tool = data.get("tool") or ""
+def _decide_call(event: str, data: dict, rows: list[oe.Row], plugin: frozenset[str], transcript: Path | None,
+                 environ=None) -> oe.Decision:
     directory = data.get("cwd") or ""
-    if not directory and event in ("tool.execute.before", "tool.execute.after"):
-        # every hook runs in it and reads paths against it: never this process's own directory
+    if not directory:
         if event == "tool.execute.before":
-            return oe.Decision(True, f"{tool} refused: the directory the session runs in is unknown",
-                               "opencode-gate-bridge")
-        return oe.Decision()
-    payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"),
-                               plugin=oe.plugin_tools(), servers=oe.mcp_servers(), directory=directory)
+            oe.classify_tool(str(data.get("tool") or ""), plugin, oe.declared_mcp_servers(environ))
+            raise oe.UnknownDirectory("the directory the session runs in is unknown, so no path or command "
+                                      "can be placed")
+        if event == "tool.execute.after":
+            return oe.Decision()
+    servers = oe.declared_mcp_servers(environ)
+    payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"), plugin=plugin,
+                               environ=environ, servers=servers, directory=directory)
     if transcript is not None:
         oe.append_transcript(transcript, oe.transcript_records(event, {**data, "cwd": directory},
-                                                                payload["session_id"]))
-    if event == "tool.execute.before":
-        if oe.denied_by_name(tool):
-            return oe.Decision(True, f"{tool} is denied by the OpenCode gate adapter", "opencode-gate-bridge")
-        if tool in oe.REFUSED_TOOLS:
-            return oe.Decision(True, f"{tool} is refused by the OpenCode gate adapter: {oe.REFUSED_TOOLS[tool]}",
-                               "opencode-gate-bridge")
-        if payload["tool_name"] is None:
-            return oe.Decision(True, f"tool {tool!r} is neither a built-in tool, a plugin tool nor a tool of "
-                                     f"a configured MCP server; refused", "opencode-gate-bridge")
-    return oe.run_rows(oe.rows_for(rows, payload["hook_event_name"], payload.get("tool_name")), payload)
+                                                                payload["session_id"], plugin=plugin,
+                                                                servers=servers))
+    decision = oe.run_rows(oe.rows_for(rows, payload["hook_event_name"], payload.get("tool_name")), payload)
+    if decision.deny and event == "tool.execute.before" and transcript is not None:
+        oe.redact_transcript_call(transcript, data.get("id"))
+    return decision
 
 
-def _decide(event: str, data: dict, roots: list[Path], transcript: Path | None) -> oe.Decision:
-    rows = oe.load_rows(roots, os.environ.get(oe.EXTRA_ROWS_ENV))
+def _decide(event: str, data: dict, rows: list[oe.Row], plugin: frozenset[str], roots: list[Path],
+            transcript: Path | None, environ=None) -> oe.Decision:
     if event == "tool.execute.before":
         oe.require_pretool_rows(rows)
     try:
-        decision = _decide_call(event, data, rows, transcript)
+        decision = _decide_call(event, data, rows, plugin, transcript, environ)
     except oe.UnshowableCall as error:
-        if event == "tool.execute.before":
-            return oe.Decision(True, f"{data.get('tool')} refused, the gates cannot be shown what it does: {error}",
-                               "opencode-gate-bridge")
+        if event in REFUSING_EVENTS:
+            return oe.refusal(error.cls, str(error))
         return oe.Decision()
+    if decision.deny and event in REFUSING_EVENTS:
+        decision.reason = oe.hook_deny_reason(decision.script, decision.reason)
     if event == "session.created":
         from lib import hook_parity
 
@@ -90,36 +90,55 @@ def _decide(event: str, data: dict, roots: list[Path], transcript: Path | None) 
     return decision
 
 
-def _output(decision: oe.Decision) -> dict:
+def _output(decision: oe.Decision, digest: str | None) -> dict:
     return {"decision": "deny" if decision.deny else "allow", "reason": decision.reason,
-            "script": decision.script, "context": decision.context}
+            "script": decision.script, "context": decision.context, "digest": digest}
+
+
+def bridge_event(name: str, data: dict, roots: list[Path], *, environ=None) -> dict:
+    """The verdict of one event of a session. ``data["rowsDigest"]`` is the digest of the session's rows snapshot
+    the shim holds; without it the snapshot is built from the sources and replaces the stored one."""
+    env = os.environ if environ is None else environ
+    data = dict(data)
+    digest = data.pop("rowsDigest", None)
+    session = oe.payload_session_id(data.get("sessionID") or "", env)
+    transcript = oe.shadow_transcript_path(oe.integration_dir(), session) if session else None
+    try:
+        if name in REFUSING_EVENTS:
+            oe.require_project_config_off(env)
+        rows, plugin, digest = oe.rows_snapshot(oe.integration_dir(), session, digest, lambda: roots,
+                                                env.get(oe.EXTRA_ROWS_ENV))
+    except oe.UnshowableCall as error:
+        if name in REFUSING_EVENTS:
+            return _output(oe.refusal(error.cls, str(error)), digest)
+        return _output(oe.Decision(), digest)
+    return _output(_decide(name, data, rows, plugin, roots, transcript, env), digest)
 
 
 def cmd_event(args) -> int:
     data = _read_json(sys.stdin)
-    cwd = data.get("cwd") or os.getcwd()
-    roots = [Path(r) for r in args.layer_root] or _default_layer_roots(cwd)
-    session = oe.payload_session_id(data.get("sessionID") or "")
-    transcript = oe.shadow_transcript_path(oe.integration_dir(), session) if session else None
+    roots = [Path(r) for r in args.layer_root] or _default_layer_roots(data.get("cwd") or os.getcwd())
     try:
-        decision = _decide(args.name, data, roots, transcript)
+        output = bridge_event(args.name, data, roots)
     except oe.MissingScript as error:
         print(f"missing-script: {error.path}", file=sys.stderr)
         return 2
-    print(json.dumps(_output(decision)))
+    print(json.dumps(output))
     return 0
 
 
 def cmd_replay(args) -> int:
     with open(args.payload, encoding="utf-8") as handle:
         data = _read_json(handle)
+    extra = os.environ.get(oe.EXTRA_ROWS_ENV)
+    roots = [Path(r) for r in args.layer_root]
     try:
-        decision = _decide(args.event, data, [Path(r) for r in args.layer_root], None)
+        decision = _decide(args.event, data, oe.load_rows(roots, extra), oe.declared_plugin_tools(extra), roots, None)
     except oe.MissingScript as error:
         print(f"missing-script: {error.path}")
         return 2
     if decision.deny:
-        print(f"deny: {decision.script} {decision.reason}")
+        print(decision.reason if decision.cls else oe.hook_deny_reason(decision.script, decision.reason))
         return 1
     return 0
 

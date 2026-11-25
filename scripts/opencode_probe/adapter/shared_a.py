@@ -22,7 +22,6 @@ GATES_DIR = "gdir"
 GATES_PLUGIN = "file://{root}/" + GATES_DIR
 PROBE_PLUGIN = "file://{root}/pdir"
 DENY_REASON = "adapter-probe-deny"
-PROBE_MCP_SERVERS = ("probesrv", "probecm")
 
 
 def shim_files(*, inert: bool) -> dict[str, str]:
@@ -60,8 +59,10 @@ def gate_files(*, inert: bool) -> dict[str, str]:
     return {f"{GATES_DIR}/{name}": text for name, text in shim_files(inert=inert).items()}
 
 
-def extra_rows(rows: list[dict]) -> str:
-    out = []
+def extra_rows(rows: list[dict], plugin_tools: tuple[str, ...] = ("probe_tool",)) -> str:
+    """The table-shaped file ``AGENT_GATE_EXTRA_ROWS`` names: the rows, and the plugin tool ids the session
+    declares (the probe plugin's ``probe_tool``)."""
+    out = ["[plugin_tools]", f"ids = {json.dumps(list(plugin_tools))}", ""]
     for row in rows:
         out.append("[[row]]")
         for key, value in row.items():
@@ -71,11 +72,13 @@ def extra_rows(rows: list[dict]) -> str:
 
 
 def gate_env(**more: str) -> dict[str, str]:
-    """The environment that makes the shim reach the bridge and write its log under the run root."""
-    env = {"AGENT_GATE_BRIDGE": str(BRIDGE), "AGENT_GATE_PYTHON": sys.executable,
+    """The environment that makes the shim reach the bridge and write its log under the run root; it carries the
+    variable that switches the project's own OpenCode config off, as every launcher's does."""
+    from lib import opencode_events as oe
+
+    env = {**oe.PROJECT_CONFIG_OFF, "AGENT_GATE_BRIDGE": str(BRIDGE), "AGENT_GATE_PYTHON": sys.executable,
            "AGENT_GATE_LOG": "{root}/gates.log", "AGENT_GATE_EXTRA_ROWS": "{root}/extra-rows.toml",
-           "AGENT_OPENCODE_HOME": "{root}/opencode-home",
-           "AGENT_GATE_MCP_SERVERS": ",".join(PROBE_MCP_SERVERS), "AGENT_GATE_SETUP_MARKER": "{root}/setup.marker"}
+           "AGENT_OPENCODE_HOME": "{root}/opencode-home", "AGENT_GATE_SETUP_MARKER": "{root}/setup.marker"}
     env.update(more)
     return env
 
@@ -99,9 +102,15 @@ def parse_gate_log(text: str) -> list[dict]:
     return entries
 
 
-def refusal_logged(entries: list[dict], *, call_id: str | None = None, tool_prefix: str | None = None) -> bool:
+def refusal_logged(entries: list[dict], *, call_id: str | None = None, tool_prefix: str | None = None,
+                   source: str | None = None) -> bool:
+    """A refusal of the call is in the log. With ``source`` (``deny`` or ``refused``) only a refusal whose
+    reason begins ``<source>:`` counts: a hook's deny reads ``deny: <script> ...`` and a refusal the bridge or
+    shim makes itself reads ``refused: <class> ...``, and a case that rests on a denying row counts the first."""
     for entry in entries:
         if entry.get("at") != "refusal":
+            continue
+        if source is not None and not str(entry.get("detail", "")).startswith(f"{source}: "):
             continue
         if call_id is not None and entry.get("id") == call_id:
             return True

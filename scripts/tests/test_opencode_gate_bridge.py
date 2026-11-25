@@ -79,12 +79,22 @@ console.log(JSON.stringify({ results, synthetic, sessionGets, hooks: Object.keys
 def _env(tmp_path, **more):
     env = {k: v for k, v in os.environ.items()
            if k not in ("CLAUDE_CODE_SESSION_ID", "AGENTCTL_OWN_SESSION", "AGENTCTL_HARNESS_SESSION_ID",
-                        "AGENTCTL_RUNTIME_HOST", "AGENT_GATE_EXTRA_ROWS", "AGENT_GATE_PLUGIN_TOOLS",
-                        "AGENT_GATE_MCP_SERVERS", "CLAUDE_AGENT_HOME", "PROBE_INERT")}
+                        "AGENTCTL_RUNTIME_HOST", "AGENT_GATE_EXTRA_ROWS", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
+                        "OPENCODE_CONFIG_PROJECT_DISABLE", "CLAUDE_AGENT_HOME", "PROBE_INERT")}
     (tmp_path / "home").mkdir(exist_ok=True)
-    env.update(CLAUDE_CONFIG_DIR=str(tmp_path / "home"), AGENT_OPENCODE_HOME=str(tmp_path / "oc"))
+    env.update(CLAUDE_CONFIG_DIR=str(tmp_path / "home"), AGENT_OPENCODE_HOME=str(tmp_path / "oc"),
+               **oe.PROJECT_CONFIG_OFF)
     env.update(more)
     return env
+
+
+def _mcp_config(tmp_path, servers):
+    """The session's own OpenCode config, declaring ``servers`` under ``mcp`` (where the bridge reads the MCP
+    server names a tool id may carry), as an environment for ``_bridge`` and ``_shim``."""
+    config = tmp_path / "session-config.json"
+    config.write_text(json.dumps({"mcp": {name: {"type": "local", "command": ["true"]} for name in servers}}),
+                      encoding="utf-8")
+    return {oe.OPENCODE_CONFIG_ENV: str(config)}
 
 
 def _script(tmp_path, name, text):
@@ -93,8 +103,10 @@ def _script(tmp_path, name, text):
     return path
 
 
-def _rows(tmp_path, rows):
+def _rows(tmp_path, rows, plugin_tools=()):
     out = []
+    if plugin_tools:
+        out += ["[plugin_tools]", f"ids = {json.dumps(list(plugin_tools))}", ""]
     for row in rows:
         out.append("[[row]]")
         out += [f"{key} = {json.dumps(value)}" for key, value in row.items()]
@@ -126,9 +138,11 @@ def _record_rows(tmp_path, event, matcher=None):
     return row, tmp_path / "recorded.jsonl"
 
 
-def _event(tmp_path, name, data, rows, **more):
-    rows_file = _rows(tmp_path, rows)
+def _event(tmp_path, name, data, rows, servers=(), plugin_tools=(), **more):
+    rows_file = _rows(tmp_path, rows, plugin_tools)
     data = {"cwd": str(tmp_path), **data}
+    if servers:
+        more = {**_mcp_config(tmp_path, servers), **more}
     return _bridge(tmp_path, ["event", name], json.dumps(data), AGENT_GATE_EXTRA_ROWS=str(rows_file),
                    RECORD_FILE=str(tmp_path / "recorded.jsonl"), **more)
 
@@ -204,10 +218,10 @@ def test_replay_recorded_payload_reaches_rows_in_claude_shape(tmp_path, name, ev
     data = _fixture(tmp_path, name)
     payload_file = _script(tmp_path, "payload.json", json.dumps(data))
     row, recorded = _record_rows(tmp_path, hook_event)
-    rows_file = _rows(tmp_path, [row])
+    rows_file = _rows(tmp_path, [row], plugin_tools=["probe_tool"])
     proc = _bridge(tmp_path, ["replay", "--event", event, "--payload", str(payload_file)],
                    AGENT_GATE_EXTRA_ROWS=str(rows_file), RECORD_FILE=str(recorded),
-                   AGENT_GATE_PLUGIN_TOOLS="probe_tool", AGENT_GATE_MCP_SERVERS="probecm,probesrv")
+                   **_mcp_config(tmp_path, ["probecm", "probesrv"]))
     assert proc.returncode in (0, 1), proc.stdout + proc.stderr
     (payload,) = _recorded(recorded)
     assert payload["hook_event_name"] == hook_event
@@ -324,10 +338,10 @@ def test_unknown_tool_refused_without_any_matcherless_row(tmp_path, tool):
     all: a tool that is not a built-in, a plugin tool or a tool of a configured MCP server is refused."""
     row, recorded = _record_rows(tmp_path, "PreToolUse", "Bash")
     data = {"tool": tool, "sessionID": "ses_u", "id": "call_u", "input": {}}
-    proc = _event(tmp_path, "tool.execute.before", data, [row], AGENT_GATE_MCP_SERVERS="probesrv")
+    proc = _event(tmp_path, "tool.execute.before", data, [row], servers=["probesrv"])
     verdict = json.loads(proc.stdout)
     assert proc.returncode == 0 and verdict["decision"] == "deny", proc.stdout + proc.stderr
-    assert "neither a built-in tool" in verdict["reason"] and verdict["script"] == "opencode-gate-bridge"
+    assert verdict["reason"].startswith("refused: unclassified ") and verdict["script"] == "opencode-gate-bridge"
     assert not Path(recorded).exists()
 
 
@@ -338,7 +352,8 @@ def test_underscore_does_not_make_an_mcp_tool():
     assert oe.claude_tool("probe_long_x", servers=servers) == "mcp__probe_long__x", "the longest server wins"
     assert oe.claude_tool("probesrv_", servers=servers) is None
     assert oe.claude_tool("probesrv", servers=servers) is None
-    assert oe.claude_tool("probe_tool", frozenset({"probe_tool"}), servers) == "plugin__probe_tool"
+    assert oe.claude_tool("probe_tool", frozenset({"probe_tool"}), servers) is None, "fits a server and a plugin id"
+    assert oe.claude_tool("probe_tool", frozenset({"probe_tool"}), frozenset({"probesrv"})) == "plugin__probe_tool"
 
 
 def test_star_matcher_matches_every_tool_like_claude(tmp_path):
@@ -367,7 +382,10 @@ def test_empty_parity_table_is_an_error_not_allow_all(tmp_path, monkeypatch, cap
     monkeypatch.setattr(oe, "_core_rows", lambda: [])
     monkeypatch.setenv("AGENT_OPENCODE_HOME", str(tmp_path / "oc"))
     monkeypatch.delenv(oe.EXTRA_ROWS_ENV, raising=False)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool": "read", "id": "c", "input": {}})))
+    for name, value in oe.PROJECT_CONFIG_OFF.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("OPENCODE_CONFIG_PROJECT_DISABLE", raising=False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool": "read", "id": "c", "sessionID": "ses_e", "input": {}})))
     assert _bridge_module().main(["event", "tool.execute.before", "--layer-root", str(tmp_path)]) == 2
     assert "EmptyParityTable" in capsys.readouterr().err
     with pytest.raises(oe.EmptyParityTable):
@@ -401,7 +419,7 @@ def test_patch_calls_are_refused_by_the_bridge_whatever_the_rows_say(tmp_path):
     data = _call(tmp_path, "patch", {"patchText": "*** Begin Patch\n*** Add File: x\n+x\n*** End Patch"})
     verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row]).stdout)
     assert verdict["decision"] == "deny" and verdict["script"] == "opencode-gate-bridge"
-    assert "refused by the OpenCode gate adapter" in verdict["reason"] and oe.REFUSED_TOOLS["patch"] in verdict["reason"]
+    assert verdict["reason"].startswith("refused: refused-tool ") and oe.REFUSED_TOOLS["patch"] in verdict["reason"]
     assert not Path(recorded).exists()
     assert oe.claude_tool("patch") is None and "patch" not in oe.ARGUMENT_CLASSES
 
@@ -424,16 +442,18 @@ RESOLVER_FORMS = [
 
 
 @pytest.mark.parametrize("given, directory, home, expected", RESOLVER_FORMS)
-def test_resolve_path_gives_what_opencode_did_with_each_recorded_form(given, directory, home, expected):
-    assert oe.resolve_path(given, directory, home) == expected
+def test_resolve_path_gives_what_opencode_did_with_each_recorded_form(monkeypatch, given, directory, home, expected):
+    monkeypatch.setenv("HOME", home)
+    assert oe.resolve_path(given, directory) == expected
 
 
 @pytest.mark.parametrize("given, directory, home", [
     ("~//x", D, H), ("~", D, ""), ("~/x", D, "relative"), ("x", "", H), ("", "", H), ("x", "rel/dir", H),
     ("a\0b", D, H), (7, D, H), (["a"], D, H)])
-def test_resolve_path_refuses_a_form_it_was_not_recorded_to_handle(given, directory, home):
+def test_resolve_path_refuses_a_form_it_was_not_recorded_to_handle(monkeypatch, given, directory, home):
+    monkeypatch.setenv("HOME", home)
     with pytest.raises(oe.UnresolvablePath):
-        oe.resolve_path(given, directory, home)
+        oe.resolve_path(given, directory)
 
 
 def test_resolve_path_leaves_a_missing_argument_missing_and_reads_home_from_the_environment(monkeypatch):
@@ -495,7 +515,8 @@ def test_a_tilde_edit_of_the_live_settings_file_is_refused_by_the_real_row(tmp_p
 def test_an_unrecorded_path_form_is_refused_before_any_row_runs(tmp_path, tool, args):
     row, recorded = _record_rows(tmp_path, "PreToolUse")
     verdict = json.loads(_event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args), [row]).stdout)
-    assert verdict["decision"] == "deny" and "cannot be shown what it does" in verdict["reason"], verdict
+    assert verdict["decision"] == "deny", verdict
+    assert verdict["reason"].startswith(("refused: path-form ", "refused: argument ")), verdict
     assert not Path(recorded).exists()
 
 
@@ -524,8 +545,9 @@ def test_a_tool_call_whose_session_directory_is_unknown_is_refused_for_every_too
     row, recorded = _record_rows(tmp_path, "PreToolUse")
     for directory in ({"cwd": ""}, {"cwd": None}):
         data = {**_call(tmp_path, tool, args), **directory}
-        verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row], AGENT_GATE_MCP_SERVERS="probesrv").stdout)
-        assert verdict["decision"] == "deny" and "directory" in verdict["reason"], (tool, verdict)
+        verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row], servers=["probesrv"]).stdout)
+        assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: "), (tool, verdict)
+        assert verdict["reason"].split()[1] in ("directory", "refused-tool"), (tool, verdict)
     missing = {k: v for k, v in _call(tmp_path, tool, args).items() if k != "cwd"}
     proc = _bridge(tmp_path, ["event", "tool.execute.before"], json.dumps(missing))
     assert json.loads(proc.stdout)["decision"] == "deny"
@@ -589,21 +611,35 @@ def test_no_bridge_path_opens_the_file_a_tool_names(tmp_path, monkeypatch):
              ("grep", {"pattern": "p", "path": str(secret)}), ("glob", {"pattern": "*", "path": str(tmp_path)})]
     for index, (tool, args) in enumerate(calls):
         for event in ("tool.execute.before", "tool.execute.after"):
-            bridge._decide_call(event, _call(tmp_path, tool, args, f"c{index}",
-                                             result={"content": [{"type": "text", "text": "out"}]}), rows, transcript)
+            try:
+                bridge._decide_call(event, _call(tmp_path, tool, args, f"c{index}",
+                                                 result={"content": [{"type": "text", "text": "out"}]}), rows,
+                                    frozenset(), transcript)
+            except oe.UnshowableCall:
+                assert tool == "patch" and event == "tool.execute.before"
     assert str(secret) not in opened and str(secret.resolve()) not in opened
     text = transcript.read_text(encoding="utf-8")
     assert "FILE-CONTENT-SENTINEL" not in text and "tool_use" in text
 
 
-def test_a_refused_call_puts_only_what_the_model_wrote_into_the_transcript(tmp_path):
+def test_a_call_the_rows_were_not_shown_leaves_nothing_in_the_transcript(tmp_path):
     transcript = oe.shadow_transcript_path(tmp_path / "oc", "ses_t")
     data = _call(tmp_path, "patch", {"patchText": "*** Update File: f\n@@\n-x\n+y"})
     proc = _event(tmp_path, "tool.execute.before", data, [])
     assert json.loads(proc.stdout)["decision"] == "deny"
-    (record,) = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
-    assert record["message"]["content"][0]["input"] == {"patchText": "*** Update File: f\n@@\n-x\n+y"}
-    assert set(record["message"]["content"][0]) == {"type", "id", "name", "input"}
+    assert not transcript.exists() or "patchText" not in transcript.read_text(encoding="utf-8")
+
+
+def test_a_call_a_row_denied_keeps_no_input_in_the_transcript(tmp_path):
+    transcript = oe.shadow_transcript_path(tmp_path / "oc", "ses_t")
+    denier = _script(tmp_path, "deny_row.py", DENIER)
+    row = {"event": "PreToolUse", "matcher": "Write", "script": str(denier), "timeout_s": 20}
+    data = _call(tmp_path, "write", {"path": str(tmp_path / "x"), "content": "SECRET-BODY"})
+    assert json.loads(_event(tmp_path, "tool.execute.before", data, [row]).stdout)["decision"] == "deny"
+    text = transcript.read_text(encoding="utf-8")
+    assert "SECRET-BODY" not in text
+    (record,) = [json.loads(line) for line in text.splitlines()]
+    assert record["message"]["content"][0]["refused"] is True
 
 
 def test_the_shadow_transcripts_directory_is_a_credential_path(tmp_path):
@@ -614,7 +650,7 @@ def test_the_shadow_transcripts_directory_is_a_credential_path(tmp_path):
 
 
 # The inventory of every argument of every built-in the adapter maps, against the schemas probe A5 recorded.
-RECORDED_SCHEMAS = {
+RECORDED_ARGUMENTS = {
     "read": ["limit", "offset", "path"], "write": ["content", "path"],
     "edit": ["newString", "oldString", "path", "replaceAll"],
     "glob": ["hidden", "limit", "path", "pattern"],
@@ -625,9 +661,16 @@ RECORDED_SCHEMAS = {
 }
 
 
+def _schemas(arguments=RECORDED_ARGUMENTS):
+    """The shape of record A5's ``tool_schemas``: ``{tool: {"properties": {name: {"type": ...}}, "required": [...]}}``."""
+    return {tool: {"properties": {n: {"type": oe._expected_type(n) or "string"} for n in names},
+                   "required": sorted(oe.REQUIRED_ARGUMENTS.get(tool, ()))}
+            for tool, names in arguments.items()}
+
+
 def test_every_argument_of_every_mapped_builtin_is_classified_with_a_reason():
-    assert oe.unclassified_arguments(RECORDED_SCHEMAS) == []
-    assert set(RECORDED_SCHEMAS) == set(oe.ARGUMENT_CLASSES)
+    assert oe.unclassified_arguments(_schemas()) == []
+    assert set(RECORDED_ARGUMENTS) == set(oe.ARGUMENT_CLASSES)
     for tool, classes in oe.ARGUMENT_CLASSES.items():
         for name, (kind, detail) in classes.items():
             assert kind in ("path", "mapped", "irrelevant") and detail.strip(), (tool, name)
@@ -637,10 +680,18 @@ def test_every_argument_of_every_mapped_builtin_is_classified_with_a_reason():
 
 
 def test_the_inventory_check_fails_for_a_tool_or_argument_it_does_not_classify():
-    assert oe.unclassified_arguments({**RECORDED_SCHEMAS, "read": ["path", "newarg"]}) == [
-        "read.newarg", "read.offset (stale)", "read.limit (stale)"]
-    assert oe.unclassified_arguments({**RECORDED_SCHEMAS, "newtool": ["a"]}) == ["newtool"]
-    assert oe.unclassified_arguments({"patch": ["patchText"], "probe_tool": ["a"]}) == ["probe_tool"]
+    changed = oe.unclassified_arguments(_schemas({**RECORDED_ARGUMENTS, "read": ["path", "newarg"]}))
+    assert sorted(changed) == ["read.limit (stale)", "read.newarg", "read.offset (stale)"]
+    assert oe.unclassified_arguments(_schemas({**RECORDED_ARGUMENTS, "newtool": ["a"]})) == ["newtool"]
+    assert oe.unclassified_arguments(_schemas({"patch": ["patchText"], "probe_tool": ["a"]})) == ["probe_tool"]
+    assert oe.unclassified_arguments(_schemas({"patch": ["patchText"], "probe_tool": ["a"]}),
+                                     plugin=frozenset({"probe_tool"})) == []
+    retyped = _schemas()
+    retyped["read"]["properties"]["path"] = {"type": "array"}
+    assert oe.unclassified_arguments(retyped) == ["read.path (type)"]
+    required = _schemas()
+    required["read"]["required"] = ["path", "offset"]
+    assert oe.unclassified_arguments(required) == ["read (required)"]
 
 
 def test_no_irrelevant_argument_decides_where_or_what_a_tool_reads_writes_or_runs():
@@ -654,15 +705,17 @@ def test_an_argument_nobody_classified_refuses_the_call(tmp_path):
     row, recorded = _record_rows(tmp_path, "PreToolUse")
     data = _call(tmp_path, "write", {"path": "x", "content": "c", "newlocation": "/etc/y"})
     verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row]).stdout)
-    assert verdict["decision"] == "deny" and "newlocation" in verdict["reason"]
+    assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: argument ")
+    assert "newlocation" in verdict["reason"]
     assert not Path(recorded).exists()
 
 
-def test_claude_input_maps_each_class(tmp_path):
+def test_claude_input_maps_each_class(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", "/h")
     assert oe.claude_input("read", {"path": "a", "offset": 1, "limit": 2}, "/d") == {
         "file_path": "/d/a", "offset": 1, "limit": 2}
     assert oe.claude_input("edit", {"path": "~/a", "oldString": "o", "newString": "n", "replaceAll": True},
-                           "/d", home="/h") == {"file_path": "/h/a", "old_string": "o", "new_string": "n",
+                           "/d") == {"file_path": "/h/a", "old_string": "o", "new_string": "n",
                                                 "replace_all": True}
     assert oe.claude_input("glob", {"pattern": "*", "hidden": True, "limit": 3}, "/d") == {"pattern": "*", "path": None}
     assert oe.claude_input("shell", {"command": "c", "workdir": "x", "timeout": 5}, "/d") == {"command": "c"}
@@ -682,7 +735,7 @@ def test_claude_input_maps_each_class(tmp_path):
 def test_configured_mcp_server_tool_reaches_its_rows(tmp_path):
     row, recorded = _record_rows(tmp_path, "PreToolUse", "mcp__probesrv__.*")
     data = {"tool": "probesrv_touch", "sessionID": "ses_m", "id": "call_m", "input": {"a": 1}}
-    proc = _event(tmp_path, "tool.execute.before", data, [row], AGENT_GATE_MCP_SERVERS="probesrv")
+    proc = _event(tmp_path, "tool.execute.before", data, [row], servers=["probesrv"])
     assert json.loads(proc.stdout)["decision"] == "allow"
     (payload,) = _recorded(recorded)
     assert payload["tool_name"] == "mcp__probesrv__touch" and payload["tool_input"] == {"a": 1}
@@ -871,13 +924,14 @@ def test_credential_paths_command_reads_per_machine_setting(tmp_path):
     plain = _bridge(tmp_path, ["credential-paths"])
     integration = (tmp_path / "oc").resolve()
     base = [str(integration / "data" / "opencode" / "auth.json"), str(integration / "state" / "transcripts"),
-            str(home / "opencode.local.toml")]
+            str(integration / "state" / "rows-snapshots"), str(home / "opencode.local.toml")]
     assert json.loads(plain.stdout) == base
     secrets = _credentials(tmp_path, as_directory=False)
     configured = _bridge(tmp_path, ["credential-paths"])
     assert json.loads(configured.stdout) == [*base, str(secrets / "cred.json")]
     assert oe.credential_paths(Path("/i"), Path("/h"), None) == (
-        Path("/i/data/opencode/auth.json"), Path("/i/state/transcripts"), Path("/h/opencode.local.toml"))
+        Path("/i/data/opencode/auth.json"), Path("/i/state/transcripts"), Path("/i/state/rows-snapshots"),
+        Path("/h/opencode.local.toml"))
     assert oe.credential_paths(Path("/i"), Path("/h"), "/c/key")[-1] == Path("/c/key")
 
 
@@ -892,11 +946,11 @@ def test_grep_gate_refuses_credential_path(tmp_path):
     paths = [secrets, secrets / "nested" / "cred.json", auth, tmp_path.resolve() / "home" / "opencode.local.toml"]
     result = _shim(tmp_path, [_grep_before(p, f"call_{i}") for i, p in enumerate(paths)])
     for path, step in zip(paths, result["results"]):
-        assert step["threw"] == f"credential path: {path}"
+        assert step["threw"] == f"deny: agent-gates credential path: {path}"
     refusals = [e for e in _gate_log(tmp_path) if e["at"] == "refusal"]
     assert len(refusals) == len(paths) and all(e["reason"] == "credential path" for e in refusals)
     relative = _shim(tmp_path, [_grep_before("secrets", "call_rel")])
-    assert relative["results"][0]["threw"] == f"credential path: {secrets}"
+    assert relative["results"][0]["threw"] == f"deny: agent-gates credential path: {secrets}"
 
 
 GREP_TEXT = "Found 3 matches\n{ok}:\n  Line 1: fine\n{secret}:\n  Line 2: SECRET-TOKEN-1\n  Line 3: SECRET-TOKEN-2"
@@ -963,7 +1017,7 @@ def test_grep_gate_compares_real_paths_through_a_symlinked_directory(tmp_path):
     link = _link(tmp_path, "link", secrets)
     paths = [link, link / "cred.json", link / "not-yet-created" / "x.json"]
     result = _shim(tmp_path, [_grep_before(p, f"call_{i}") for i, p in enumerate(paths)])
-    assert all(step["threw"].startswith("credential path: ") for step in result["results"])
+    assert all(step["threw"].startswith("deny: agent-gates credential path: ") for step in result["results"])
 
 
 def test_grep_gate_compares_real_paths_through_a_symlinked_agent_home(tmp_path):
@@ -975,7 +1029,7 @@ def test_grep_gate_compares_real_paths_through_a_symlinked_agent_home(tmp_path):
              oc_link / "data" / "opencode" / "auth.json", real_oc / "data" / "opencode" / "auth.json"]
     result = _shim(tmp_path, [_grep_before(p, f"call_{i}") for i, p in enumerate(paths)],
                    CLAUDE_CONFIG_DIR=str(home_link), AGENT_OPENCODE_HOME=str(oc_link))
-    assert all(step["threw"].startswith("credential path: ") for step in result["results"])
+    assert all(step["threw"].startswith("deny: agent-gates credential path: ") for step in result["results"])
 
 
 def _leaky_result(text):
@@ -1039,7 +1093,7 @@ def test_grep_path_resolves_against_the_session_directory_not_the_process_cwd(tm
     steps = [_grep_before("secrets", "call_dir"), _grep_before("fine", "call_ok")]
     result = _shim(tmp_path, steps, location=str(tmp_path.resolve()), cwd=elsewhere,
                    AGENT_GATE_EXTRA_ROWS=str(_rows(tmp_path, [row])), RECORD_FILE=str(recorded))
-    assert result["results"][0]["threw"] == f"credential path: {secrets}"
+    assert result["results"][0]["threw"] == f"deny: agent-gates credential path: {secrets}"
     assert result["results"][1]["threw"] is None
     assert _recorded(recorded)[-1]["cwd"] == str(tmp_path.resolve())
 
@@ -1052,12 +1106,12 @@ def test_grep_path_resolves_against_each_sessions_own_directory(tmp_path):
               "input": {"tool": "grep", "sessionID": sid, "id": f"call_{sid}", "input": {"pattern": "x", "path": "secrets"}}}
              for sid in ("ses_in", "ses_out")]
     result = _shim(tmp_path, steps, location=str(outside), sessions={"ses_in": str(inside), "ses_out": str(outside)})
-    assert result["results"][0]["threw"] == f"credential path: {secrets}"
+    assert result["results"][0]["threw"] == f"deny: agent-gates credential path: {secrets}"
     assert result["results"][1]["threw"] is None
     assert [g["sessionID"] for g in result["sessionGets"]] == ["ses_in", "ses_out"]
 
 
-UNKNOWN_DIRECTORY = "refused: the directory its session runs in is unknown, so no path or command can be placed"
+UNKNOWN_DIRECTORY = "the directory its session runs in is unknown, so no path or command can be placed"
 
 
 @pytest.mark.parametrize("options", [{"no_session_get": True}, {"session_get_throws": True},
@@ -1074,7 +1128,7 @@ def test_every_tool_call_is_refused_when_the_session_directory_cannot_be_had(tmp
              for i, (tool, args) in enumerate(calls)]
     result = _shim(tmp_path, steps, AGENT_GATE_EXTRA_ROWS=str(_rows(tmp_path, [row])), RECORD_FILE=str(recorded),
                    **options)
-    assert [r["threw"] for r in result["results"]] == [f"{tool} {UNKNOWN_DIRECTORY}" for tool, _ in calls]
+    assert [r["threw"] for r in result["results"]] == [f"refused: directory {tool} refused: {UNKNOWN_DIRECTORY}" for tool, _ in calls]
     assert result["setupThrew"] is None and not Path(recorded).exists()
     log = _gate_log(tmp_path)
     refusals = [e for e in log if e["at"] == "refusal"]
@@ -1105,7 +1159,7 @@ def test_setup_without_a_location_directory_fails_the_marker(tmp_path):
 def test_session_directory_is_not_the_process_cwd_when_nothing_is_known(tmp_path):
     secrets = _credentials(tmp_path)
     result = _shim(tmp_path, [_grep_before("secrets")], location="", cwd=tmp_path, no_session_get=True)
-    assert result["results"][0]["threw"] != f"credential path: {secrets}"
+    assert result["results"][0]["threw"] != f"deny: agent-gates credential path: {secrets}"
     assert UNKNOWN_DIRECTORY in result["results"][0]["threw"]
 
 
@@ -1119,8 +1173,8 @@ def test_a_tilde_rooted_grep_on_a_credential_directory_is_refused_and_marked_ris
         f'{oe.SETTINGS_CREDENTIAL_KEY} = {json.dumps(str((home / ".secrets").resolve()))}\n', encoding="utf-8")
     env = {"HOME": str(home)}
     refused = _shim(tmp_path, [_grep_before("~/.secrets", "c1"), _grep_before("~/.secrets/x/y", "c2")], **env)
-    assert [r["threw"] for r in refused["results"]] == [f"credential path: {home.resolve()}/.secrets",
-                                                        f"credential path: {home.resolve()}/.secrets/x/y"]
+    assert [r["threw"] for r in refused["results"]] == [f"deny: agent-gates credential path: {home.resolve()}/.secrets",
+                                                        f"deny: agent-gates credential path: {home.resolve()}/.secrets/x/y"]
     text = f"Found 1 matches\n{home.resolve()}/.secrets/cred:\n  Line 1: SECRET-TOKEN-1"
     step = {"hook": "tool.execute.after", "input": {"tool": "grep", "sessionID": "ses_g", "id": "c3",
                                                     "input": {"pattern": "x", "path": "~"},
@@ -1130,7 +1184,7 @@ def test_a_tilde_rooted_grep_on_a_credential_directory_is_refused_and_marked_ris
     plain = _shim(tmp_path, [_grep_before("~", "c4"), _grep_before("~//x", "c5"), _grep_before("$HOME/.secrets", "c6")],
                   **env)
     assert [r["threw"] is None for r in plain["results"]] == [True, False, True]
-    assert plain["results"][1]["threw"].startswith("grep refused: its search path is in a form")
+    assert plain["results"][1]["threw"].startswith("refused: path-form grep refused: its search path is in a form")
     assert [e["reason"] for e in _gate_log(tmp_path) if e["at"] == "refusal"] == [
         "credential path", "credential path", "search path not resolvable"]
 
@@ -1183,7 +1237,7 @@ def test_bridge_verdict_without_a_decision_refuses_a_pre_tool_event(tmp_path):
     steps = [{"hook": "tool.execute.before", "input": {"tool": "read", "id": "c1", "sessionID": "s",
                                                        "input": {"path": str(tmp_path / "x")}}}]
     result = _shim(tmp_path, steps, AGENT_GATE_BRIDGE=str(silent))
-    assert result["results"][0]["threw"] == "the gate bridge answered no decision"
+    assert result["results"][0]["threw"] == "refused: gate-setup the gate bridge answered no decision"
 
 
 def _marker(tmp_path):
@@ -1194,7 +1248,7 @@ def test_unwritable_log_does_not_unload_the_gates(tmp_path):
     step = {"hook": "tool.execute.before", "input": {"tool": "opencode_session_move", "id": "c1", "sessionID": "s"}}
     result = _shim(tmp_path, [step], AGENT_GATE_LOG=str(tmp_path / "no-such-dir" / "gates.log"))
     assert result["setupThrew"] is None and "tool.execute.before" in result["hooks"]
-    assert result["results"][0]["threw"] == "opencode_session_move is denied by the agent gates"
+    assert result["results"][0]["threw"] == "refused: refused-tool opencode_session_move is denied by the agent gates"
     assert _marker(tmp_path) == {"status": "ok", "failures": []}
 
 
@@ -1223,7 +1277,7 @@ def test_failed_shell_hook_registration_fails_the_marker_and_refuses_shell(tmp_p
     steps = [{"hook": "tool.execute.before", "input": {"tool": "shell", "id": "c1", "sessionID": "s",
                                                        "input": {"command": "true"}}}]
     result = _shim(tmp_path, steps, failing=["shell.create.before"])
-    assert result["setupThrew"] is None and result["results"][0]["threw"].startswith("shell is refused")
+    assert result["setupThrew"] is None and result["results"][0]["threw"].startswith("refused: gate-setup shell is refused")
     marker = _marker(tmp_path)
     assert marker["status"] == "failed" and marker["failures"][0].startswith("shell.create.before: ")
 
@@ -1370,9 +1424,9 @@ def test_adapter_phase_declares_its_cases():
     infos = {c.case_id: c for c in core.phase_cases(phase)}
     assert phase.anchor == "A1" and set(infos) == {"A1", "A2", "A4", "A5", "A6"}
     assert (infos["A1"].k7, infos["A2"].k7, infos["A4"].k7) == (True, True, False)
-    assert (infos["A5"].k7, infos["A6"].k7) == (True, False)
-    assert infos["A1"].rests_on_plugin_deny and infos["A4"].rests_on_plugin_deny
-    assert not infos["A2"].rests_on_plugin_deny
+    assert (infos["A5"].k7, infos["A6"].k7) == (True, True)
+    assert infos["A1"].rests_on_plugin_deny and infos["A4"].rests_on_plugin_deny and infos["A6"].rests_on_plugin_deny
+    assert not infos["A2"].rests_on_plugin_deny and not infos["A5"].rests_on_plugin_deny
 
 
 def test_adapter_record_with_a4_absent_pins_in_a_scratch_copy(tmp_path):
