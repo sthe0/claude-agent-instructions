@@ -53,8 +53,9 @@ that mechanism was seen to refuse.
   the recognised `Found N matches` shape (the exact `No matches found` of a search with no hit passes), the
   whole text is withheld. Every field of the result is filtered or, under such a root, emptied whatever its
   type (string, object, array, a non-array `content`, any part field other than `type`); what OpenCode 2.3.2
-  sends to the model is `content[].text`. Facts (probe A6 `search_and_output`): grep reaches files through
-  symlinks below its root; a long shell output is cut in the text a plugin sees and its full text saved to
+  sends to the model is `content[].text`. Facts (probe A6 `search_and_output`): grep does not follow
+  symlinks below its root (a word held only behind a directory link and a file link is "No matches found"),
+  so a link to a credential file under a searched root is not read by grep; a long shell output is cut in the text a plugin sees and its full text saved to
   `xdg/data/opencode/shell/<project>/sh_*.out`; the unfiltered grep text a tool produced is stored in
   `opencode.db` before `tool.execute.after` runs. Those two stores hold text the filter cannot reach: the
   stages 9/10 must keep them out of the model's reach (a documented limit of this shim, not closed here).
