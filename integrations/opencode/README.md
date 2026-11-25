@@ -25,28 +25,41 @@ that mechanism was seen to refuse.
 ### What the shim refuses, and what it reports
 
 - **Tool ids.** A tool id is judged as the Claude tool whose rows see it: a built-in through
-  `BUILTIN_TOOLS` in `scripts/lib/opencode_events.py` (the gpt model family is offered `patch`, not
-  `edit` and `write`; the shim judges each file of a patch as a `Write` or `Edit` call), a plugin
+  `BUILTIN_TOOLS` in `scripts/lib/opencode_events.py`, a plugin
   tool named in `AGENT_GATE_PLUGIN_TOOLS`, a tool of an MCP server named in `AGENT_GATE_MCP_SERVERS`
   (comma separated; the launcher passes the servers of the session's config). Any other id is refused
-  whatever rows exist, because the parity table has no matcherless PreToolUse row. Case A5 of the adapter
-  probe phase re-checks the ids the pinned binary offers.
-- **Paths.** OpenCode resolves a relative path of a tool call against the directory of the call's
-  session (probe A6, `ctx`). The shim asks `ctx.session.get({sessionID})` for that directory per session
-  (a hook input names none), falls back to `ctx.location.directory` of setup, and never to the process cwd;
-  the bridge joins every path it hands a hook (read, write, edit, patch files, grep and glob paths) to it, so a
-  row always sees an absolute path. A relative path with no known directory is refused. Setup without an
-  absolute `ctx.location.directory` fails the marker. Limit: under `opencode serve` one process holds sessions
-  of several directories; the per-session lookup covers them, but a failed `ctx.session.get` falls back to the
-  setup directory, which may not be the session's.
-- **Patch.** Each file of a `patch` call reaches the rows as the Claude call that makes the same change: a
-  `Write` for an added file; an `Edit` whose `old_string` is the file as it is and `new_string` the file as the
-  patch leaves it for an update; an `Edit` that empties the file for a delete; for a move a `Write` of the new
-  text to the target plus an `Edit` that empties the source. The bridge reads the file and applies the hunks the
-  way OpenCode 2.3.2 does (exact match, then right-trimmed, then fully trimmed; probe A6 `patch_tool.files`);
-  a patch it cannot read or apply is refused, never passed content-blind. OpenCode trims an operation line and
-  its path before reading them (an indented `*** Add File:` is an operation, A6 `indent-add`, `tab-add`,
-  `trailing-add`), and the bridge does the same, so no operation line escapes the rows.
+  whatever rows exist, because the parity table has no matcherless PreToolUse row, and so is `patch`
+  (below). Case A5 of the adapter probe phase re-checks the ids the pinned binary offers.
+- **Arguments.** `ARGUMENT_CLASSES` classifies every argument of every enabled built-in tool as mapped to a
+  named hook-input field, as a path (resolved, see below), or as irrelevant to every denying row, with a
+  one-line reason; an argument that changes where or what a tool reads, writes or runs is never irrelevant.
+  A call with an argument the table does not list is refused. A test fails when the recorded schemas carry a
+  tool or argument the table does not classify, and case A5 fails live when the pinned binary's schemas differ
+  from the recorded ones.
+- **Paths.** OpenCode resolves a path argument of a tool call against the directory of the call's
+  session, and the bridge reproduces exactly the forms probe A6 recorded (`path_forms`, one resolver in
+  `resolve_path` and the same rule in the shim's `resolveForm`): an empty or absent path is the session
+  directory; `~`, `~/` and `~/x` are the home directory; a leading `/` is absolute (`//x` is `/x`); `..`,
+  `./` and every other form, `~user`, `$HOME`, `${HOME}` and `file://...` included, are taken as ordinary
+  relative components under the session directory; a backslash is an ordinary filename character. Any other
+  form (`~//x`, a value that is no string, a NUL byte) is refused, as is any relative path when no directory
+  is known. The shim asks `ctx.session.get({sessionID})` for the session directory and caches only a
+  successful answer; when it fails, every call of that session is refused (logged
+  `session directory unknown`) and the setup directory is never used in its place, since under
+  `opencode serve` one process holds sessions of several directories. The bridge refuses a before-event that
+  names no directory for the same reason, and no hook runs in the bridge's own cwd. A shell call's `workdir`
+  is resolved with the same resolver and handed to the hooks as Claude's payload `cwd`. Setup without an
+  absolute `ctx.location.directory` fails the marker.
+- **Patch.** The `patch` tool (the only file editor the gpt model family is offered) cannot be switched
+  off alone: probe A5 `switch_off` records that the permission actions `patch` and `apply_patch`, a
+  legacy `permission` key and an agent's `tools: {patch: false}` remove nothing, while the action `edit`
+  and a top-level `tools: {patch: false}` remove `edit`, `write` and `patch` together for every family. The
+  bridge does not imitate how OpenCode applies a patch (the earlier reader and applier differed from it in
+  details); it refuses every `patch` call before any row runs (`REFUSED_TOOLS`, A1 `root:patch`). Documented
+  limit: a gpt-family model is offered `patch` and nothing else for editing, so it cannot edit files through
+  the editor under the adapter; other families keep `edit` and `write`, which are mapped. Neither outcome is
+  a gap the gates leave open. No gate path opens a file a tool names, so the shadow
+  transcript (itself a credential path) holds only what the model wrote in the call.
 - **Grep.** The credential check compares real paths (symlinks resolved on both sides, a tail that does
   not exist yet kept), against the session directory above.
   A result is filtered per file block; when the search root holds a credential path and the text is not
