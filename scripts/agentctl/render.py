@@ -220,18 +220,22 @@ def render_order_md(doc: PlanDoc) -> list[str]:
     return lines
 
 
-def reagreement_lines(record: dict | None) -> list[str]:
-    """The record of a second agreement beside the order it concerns: what changed, why, the plan
+def reagreement_lines(record: dict | None, doc=None) -> list[str]:
+    """The record of a second agreement beside the order it concerns: what changes, why, the plan
     the earlier order had and the difficulty the change removes. `[]` for a first agreement (no
     record). Held in the agreement, not in the order, so the order's bytes and digests never
-    carry it."""
+    carry it. `doc`: the draft the record was submitted with; its goal and done criterion are
+    part of the product the agreement binds (`plan.product_digest`), so the block shows them
+    too: what the user answers is what the replan is then released against."""
     if not record:
         return []
+    product = ([f"- **Goal:** {doc.meta.goal}", f"- **Done criterion:** {doc.meta.done_criterion}"]
+               if doc is not None else [])
     return ["## Re-agreement", "",
             f"- **What changes:** {record.get('changes', '')}",
             f"- **Why:** {record.get('why', '')}",
             f"- **Earlier plan:** {record.get('earlier_plan', '')}",
-            f"- **Difficulty it removes:** {record.get('difficulty', '')}", ""]
+            f"- **Difficulty it removes:** {record.get('difficulty', '')}", *product, ""]
 
 
 def _order_header_lines(order) -> list[str]:

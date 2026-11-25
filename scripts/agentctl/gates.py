@@ -3214,21 +3214,27 @@ def order_rendering_problems(state: SessionState, doc, text: str) -> list[str]:
         problems.append("the planning cost must come after both sides, outside the order's text")
     problems += _planning_budget_problems(state, doc, lines, at["cost"])
     problems += _understanding_estimate_problems(state, lines, at["cost"])
-    problems += _reagreement_problems(state, lines)
+    problems += _reagreement_problems(state, doc, lines, at)
     problems += _binding_conditions_problems(state, order)
     return problems
 
 
-def _reagreement_problems(state: SessionState, lines: list[str]) -> list[str]:
+def _reagreement_problems(state: SessionState, doc, lines: list[str], at: dict[str, int]) -> list[str]:
     """The four grounds `order-submit` recorded with a second draft stand in the rendering the user
-    answers, each line as the engine renders it: what the user agrees to is what was presented,
-    so `order-agree` reads the grounds from the record and not from flags given after the answer.
-    A draft submitted with no grounds (a first agreement) has none to show."""
+    answers, each line as the engine renders it, with the draft's goal and done criterion: what the
+    user agrees to is what was presented, so `order-agree` reads the grounds from the record and
+    not from flags given after the answer, and a replan is released only against a goal and a done
+    criterion the user was shown. A draft submitted with no grounds (a first agreement) has none to
+    show. A line inside the executor section (from its marker to the cost marker, or the end)
+    does not count: what is shown there is the agent's, not what the user answers."""
     record = state.order_draft_reagreement
     if not record:
         return []
     from .render import reagreement_lines
-    missing = [line for line in reagreement_lines(record) if line and line not in lines]
+    start = at["executor"]
+    end = at["cost"] if at["cost"] > start else len(lines)
+    shown = lines if start < 0 else lines[:start] + lines[end:]
+    missing = [line for line in reagreement_lines(record, doc) if line and line not in shown]
     if not missing:
         return []
     return ["the rendering does not carry the re-agreement grounds the draft was submitted with: add "
@@ -4737,8 +4743,9 @@ def replan_routing_blockers(state: SessionState, old, new, change=None, *,
     description change and a method change are no business of the order; they follow the approval
     rule of the plan they change. `product_only`: before approval, where only the root product is
     routed. Inert unless the order-agreement gate applies (an armed substantive root with an
-    agreed order) and `new` states an order. `classes`: the classification the caller already holds
-    for the same `old` / `new` / `change`; it is computed here when absent."""
+    agreed order) and `new` states an order. `classes`: the classification the caller already holds;
+    it must be `classify_replan(old, new, change)` of this very call (a classification of another
+    pair or change routes the wrong class), and it is computed here when absent."""
     if (old is None or new is None or new.meta.order is None or state.order_agreement is None
             or not order_agreement_active(state)):
         return []

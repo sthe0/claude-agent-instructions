@@ -274,11 +274,63 @@ def test_rendering_without_the_grounds_is_not_presented(ostore, home, armed_env,
     submitted, _ = _submit_second(ostore, tmp_path)
     assert submitted.ok and _review(ostore).ok
     with monkeypatch.context() as m:
-        m.setattr(test_order_phase, "reagreement_lines", lambda record: [])
+        m.setattr(test_order_phase, "reagreement_lines", lambda record, doc=None: [])
         refused = _present(ostore, tmp_path)
 
     assert refused.ok is False and "re-agreement grounds" in _text_of(refused), _text_of(refused)
     assert GROUNDS["reagree_why"] in _text_of(refused)
+    assert _present(ostore, tmp_path).ok
+
+
+def test_rendering_without_the_goal_and_done_criterion_is_not_presented(
+        ostore, home, armed_env, tmp_path, monkeypatch):
+    """The product the agreement releases a replan against is the draft's goal and done criterion
+    beside the understanding. A rendering that carries the four grounds but not them leaves the user
+    agreeing to a goal they were never shown: it is refused at present-plan naming both lines to add,
+    and with them it is registered, agreed and the replan to that goal is released."""
+    import test_order_phase
+
+    _approved(ostore, home, tmp_path)
+    submitted, path = _submit_second(ostore, tmp_path)
+    assert submitted.ok and _review(ostore).ok
+    assert "- **Goal:** g2" in submitted.data["order_reagreement_block"]
+    with monkeypatch.context() as m:
+        m.setattr(test_order_phase, "reagreement_lines",
+                  lambda record, doc=None: reagreement_lines(record))
+        refused = _present(ostore, tmp_path)
+
+    text = _text_of(refused)
+    assert refused.ok is False and "re-agreement grounds" in text, text
+    assert "- **Goal:** g2" in text and "- **Done criterion:** d" in text, text
+    assert GROUNDS["reagree_why"] not in text
+    assert _present(ostore, tmp_path).ok
+    _confirm_delivery(ostore)
+    _user_answers(_marker_of(path), at=time.time() + 5)
+    agreed = cli.cmd_order_agree(ns(session=SESSION, note=""), store=ostore)
+    assert agreed.ok, agreed.detail
+    proposal = _proposal(tmp_path, *GOAL2)
+    _redispose_goal_premise(ostore, proposal)
+    assert _replan(ostore, proposal).ok
+
+
+def test_reagreement_lines_inside_the_executor_section_are_not_shown_to_the_user(
+        ostore, home, armed_env, tmp_path):
+    """The grounds and the product lines count only where the user reads what they answer: a
+    rendering that puts them under the executor marker is refused (the message says 'outside the
+    executor section'), and the same lines before the customer marker are accepted."""
+    from test_order_phase import ORDER_EXECUTOR_MARKER, _rendering_naming
+
+    _plan_ready(ostore, home, tmp_path)
+    submitted, path = _submit_second(ostore, tmp_path)
+    assert submitted.ok and _review(ostore).ok
+    block = reagreement_lines(ostore.load(SESSION).order_draft_reagreement, load_order_draft(path)[0])
+    hidden = _rendering_naming(load_order_draft(path)[0]).replace(
+        ORDER_EXECUTOR_MARKER, ORDER_EXECUTOR_MARKER + "\n\n" + "\n".join(block), 1)
+
+    refused = _present(ostore, tmp_path, hidden)
+
+    assert refused.ok is False and "outside the executor section" in _text_of(refused), _text_of(refused)
+    assert "- **Goal:** g2" in _text_of(refused)
     assert _present(ostore, tmp_path).ok
 
 
@@ -316,7 +368,8 @@ def test_reagreement_record_outside_order_digest(ostore, home, armed_env, tmp_pa
     assert state.order_agreement.reagreement["changes"] == GROUNDS["reagree_changes"]
     assert state.order_agreement.understanding_sha256 == first.understanding_sha256 == digest
     assert not any("reagree" in part for part in state.order_agreement.parts)
-    assert agreed.data["order_reagreement_block"] == reagreement_lines(state.order_agreement.reagreement)
+    assert agreed.data["order_reagreement_block"] == reagreement_lines(
+        state.order_agreement.reagreement, load_order_draft(path)[0])
 
 
 def test_reagreement_record_rendered_beside_order():
@@ -736,9 +789,13 @@ def test_in_boundary_method_change_restamps_digest(home_store, tmp_path, lazy):
 
 
 def test_replan_file_is_no_writer_of_an_approval(store, tmp_path):
-    """An approval the file states that differs from the engine's is refused and nothing is stored;
-    one the engine holds on the stored record survives a replan file that leaves it out (the
-    engine's approvals are carried over the file's copy of them)."""
+    """An approval the file states that differs from the engine's is refused and nothing is stored,
+    also after the user's approval (written into `stage_approvals` as `approve-subplan` writes it, by
+    this module's helper; the verb itself is walked in `test_in_boundary_method_change_restamps_digest`):
+    the approval the gates read stays as it was. The record's own copy of the two approvals is
+    written by no verb (the gates read `stage_approvals`), so the last half sets it by hand to show
+    what the carry does with it: it survives a replan file that leaves it out, which is all it
+    proves; it is not evidence that an approval is held anywhere a gate looks."""
     _frame_plan(store, tmp_path)
     means = 'means = "Edit and Write"'
     forged = (means, means + '\nuser_subplan_approval = "forged"')
@@ -747,6 +804,10 @@ def test_replan_file_is_no_writer_of_an_approval(store, tmp_path):
 
     assert refused.ok is False and "leave the field out" in _text_of(refused), _text_of(refused)
     assert _stored(store).user_subplan_approval == ""
+    approved = _approve_in_frame(store)
+    refused_again = _frame_replan(store, tmp_path, forged, name="forged-approved.toml")
+    assert refused_again.ok is False and "leave the field out" in _text_of(refused_again)
+    assert store.load(FRAME).stage_approvals["0:1"]["user_subplan_approval"] == approved
     state = store.load(FRAME)
     state.sub_plan_records["0:1"]["user_subplan_approval"] = "held"
     state.sub_plan_records["0:1"]["parent_resource_approval"] = "held-too"
@@ -929,10 +990,12 @@ def test_method_replan_of_planning_subplan(contour):
     assert read.method == "split it twice" and read.estimate.minutes == before.estimate.minutes
 
 
-def test_mixed_description_method_edit_reapproved_by_own_approver(ostore, home, armed_env, tmp_path):
+def test_mixed_description_method_edit_is_not_a_product_change(ostore, home, armed_env, tmp_path):
     """A stage description beside a method change is class (b) and (c) together: neither is the
-    user's product, so neither goes to order-agree, and no sub-plan approval is carried over (the
-    description's approver is the plan's own). The same fixture refuses it once the goal moves too."""
+    user's product, so neither goes to order-agree, and nothing is re-stamped (`restamps` is False).
+    The same fixture is refused, naming order-agree, once the goal moves too. What this does not
+    prove is the sub-plan approval at the stage's start: that is walked in
+    `test_mixed_method_and_goal_edit_in_a_frame_is_not_carried`."""
     _plan_ready(ostore, home, tmp_path)
     old = load_plan(ostore.load(SESSION).plan_path)
     title = ('title = "the stage under test"', 'title = "the stage, renamed"')
@@ -959,9 +1022,6 @@ def test_mixed_method_and_goal_edit_in_a_frame_is_not_carried(home_store, tmp_pa
 
     store = home_store
     old = _approved_frame_at_dispatch(store, tmp_path, lazy=True)
-    state = store.load(FRAME)
-    state.plan_snapshot_path, state.plan_snapshot_hash = cli_common._snapshot_approved_plan(store, state)
-    store.save(state)
 
     d = _frame_replan(store, tmp_path, METHOD2, ('goal = "g"', 'goal = "g elsewhere"'))
 

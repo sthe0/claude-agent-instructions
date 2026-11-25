@@ -237,7 +237,8 @@ def _beside_the_planning_cost(state, text: str) -> str:
         marker_at = next((i for i, each in enumerate(lines) if each.strip() == ORDER_COST_MARKER), None)
         assert marker_at is not None, f"the rendering has no cost marker line {ORDER_COST_MARKER!r} to add {line!r} under"
         lines[marker_at + 1:marker_at + 1] = ["", line]
-    block = [each for each in reagreement_lines(state.order_draft_reagreement) if each not in lines]
+    draft = load_order_draft(state.order_draft_path)[0] if state.order_draft_path else None
+    block = [each for each in reagreement_lines(state.order_draft_reagreement, draft) if each not in lines]
     if block and ORDER_CUSTOMER_MARKER in lines:
         at = lines.index(ORDER_CUSTOMER_MARKER)
         lines[at:at] = [*block, ""]

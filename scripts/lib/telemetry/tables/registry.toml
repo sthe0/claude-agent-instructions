@@ -1,4 +1,4 @@
-version = 9
+version = 10
 
 [[members]]
 name = "cli:accept"
@@ -1591,3 +1591,11 @@ kind = "elementary"
 part_of = []
 place = "permission_control"
 source_keys = ["cli:estimate-correct"]
+
+[[members]]
+name = "gate:replan_routing"
+since = 10
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["gate:replan_routing", "hook:engine:replan_routing"]

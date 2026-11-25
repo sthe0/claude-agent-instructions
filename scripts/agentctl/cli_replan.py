@@ -1218,7 +1218,7 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
         return Directive(False, state.node, "replan",
                          "replan refused: the change is not the executor's to apply as it stands",
                          data={"blockers": routing})
-    ctx.classes = classes if baseline is not None else gates.ReplanClasses()
+    ctx.classes = classes
     reopen_roots = set(getattr(args, "reopen", None) or [])
     unknown_reopen = sorted(reopen_roots - {s.index for s in state.stages})
     if unknown_reopen:

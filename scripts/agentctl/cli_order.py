@@ -314,7 +314,7 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
     detail = (f"order draft {args.plan} submitted (understanding {state.order_draft_sha256[:12]}); "
               "next: plan-review --scope order, then present-plan --kind order")
     if grounds:
-        data["order_reagreement_block"] = reagreement_lines(grounds)
+        data["order_reagreement_block"] = reagreement_lines(grounds, doc)
         detail += ("; this is a second agreement, so its rendering carries the four grounds the user "
                    "answers on, as the lines in data.order_reagreement_block (order-agree reads them "
                    "from this record and refuses a rendering that omits them)")
@@ -476,7 +476,7 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         "next: author the plan and submit-plan",
         data={"understanding_sha256": digest, "anchor": anchor,
               **({"reagreement": agreement.reagreement,
-                  "order_reagreement_block": reagreement_lines(agreement.reagreement)}
+                  "order_reagreement_block": reagreement_lines(agreement.reagreement, doc)}
                  if agreement.reagreement else {})},
     )
 

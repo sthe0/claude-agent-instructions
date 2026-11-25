@@ -684,11 +684,12 @@ REPLAN_ENGINE_FIELDS = ("reviews", "objections", "building_place", "setter_decis
 
 
 def carry_engine_approvals(state, doc) -> None:
-    """Put the approvals the engine holds for the record `doc` carries over the file's copy of them,
-    before the record is stored: `parent_resource_approval` is written by the approval of the
-    parent's resources and `user_subplan_approval` by `approve-subplan`, never by a plan. A replan
-    file that lacks them would otherwise erase the stored approval, and one that carries them would
-    give an approval nobody asked for. With no stored record both are empty."""
+    """Overwrite the record's two approval fields with the copy of the record stored before the
+    replan (empty when none is stored), so a replan file is no writer of them. The approvals the
+    gates read live in `state.stage_approvals` (written by `approve-subplan` and the resource
+    approvals), not in the record; no gate reads the record's copy. The carry only keeps the stored
+    copy from being erased by a file that lacks the fields and from being replaced by a value a file
+    carries; the forged-value refusal (`REPLAN_ENGINE_FIELDS`) stays the check on the latter."""
     record = doc.meta.sub_plan
     if record is None or record.stage <= 0:
         return
