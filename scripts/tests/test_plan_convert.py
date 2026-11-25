@@ -616,10 +616,14 @@ def test_the_user_authority_verb_set_differs_from_the_stage_five_set_by_the_live
     added_on_main_since = {
         "accept-protected-grant", "adopt-escalation", "mandate-retry", "record-landing",
         "order-submit", "order-agree", "order-challenge-dismiss", "mandate-limits",
-        "approve-subplan", "approve-resources", "condition-decide",
     }
+    # Verbs the order-plan-separation branch adds, none of them on main: `approve-subplan` and
+    # `approve-resources` (stage 6, sub-plans in presentation, dispatch and approval; commits
+    # e16e8306 and 5d1f9242) and `condition-decide` (stage 8 part 2, commit 76175af9).
+    added_by_this_branch = {"approve-subplan", "approve-resources", "condition-decide"}
 
-    assert AGENTCTL_USER_AUTHORITY_VERBS - stage_five - added_on_main_since == {"plan-convert-live"}
+    assert (AGENTCTL_USER_AUTHORITY_VERBS - stage_five - added_on_main_since - added_by_this_branch
+            == {"plan-convert-live"})
     assert stage_five - AGENTCTL_USER_AUTHORITY_VERBS == set()
 
 

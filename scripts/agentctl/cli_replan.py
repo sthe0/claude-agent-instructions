@@ -1175,12 +1175,12 @@ def _objection_refusal(state: SessionState, message: str, **data) -> Directive:
 
 def _own_plan_conditions(state: SessionState) -> dict[str, list[int]]:
     """The binding conditions the session's own plan states on its stages, as condition id -> the
-    stages stating it. This session is the level that set them (the record its own plan carries is
-    where its decisions on them are kept), so it may object to one when it replans and decides that
-    objection itself. A session with no level of its own (the root, whose decisions are the
-    user's) states none that way."""
+    stages stating it. This session is the level that set them, so it may object to one when it
+    replans, and the objection is decided where that level keeps its decisions: by the session's
+    own agent when it is a linked level (the record its own plan carries), by the user's marked
+    answer when it is the root (`root_conditions`, as for the order's own conditions)."""
     site = _setter_site_at(state, state, 0)
-    if site is None or site.is_root:
+    if site is None:
         return {}
     found: dict[str, list[int]] = {}
     for stage in state.stages:
@@ -1226,7 +1226,9 @@ def _condition_objection_gate(ctx: _ReplanContext) -> Directive | None:
     own_plan = _own_plan_conditions(state)
     unknown = [i for i in ids if i not in known and i not in own_plan]
     if unknown and built is None:
-        return _objection_refusal(state, no_built)
+        return _objection_refusal(state, no_built + (
+            f"; --breaks-condition may name the binding conditions of this session's own plan "
+            f"{list(own_plan)}" if own_plan else ""))
     if unknown:
         own_ids = [i for i in own_plan if i not in known]
         return _objection_refusal(
@@ -1252,8 +1254,9 @@ def _condition_objection_gate(ctx: _ReplanContext) -> Directive | None:
             site = _setter_site_at(state, state, 0)
             (stage,) = own_plan[cid]
             carrying_key = site.key
-            storage = state.sub_plan_records.setdefault(
-                site.key, {"stage": int(site.key.rsplit(":", 1)[-1])}).setdefault("objections", [])
+            storage = (state.root_conditions.setdefault("objections", []) if site.is_root else
+                       state.sub_plan_records.setdefault(
+                           site.key, {"stage": int(site.key.rsplit(":", 1)[-1])}).setdefault("objections", []))
             origin_of = (lambda c, site=site:
                          site if c not in {x["id"] for x in site.above or ()}
                          else _origin_site(state, store, parent_state, c))

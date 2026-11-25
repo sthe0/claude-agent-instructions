@@ -2850,6 +2850,11 @@ class SessionState:
     # review-record write -- whole-plan, composed or per-pair -- so records carry a
     # total order that does not depend on wall-clock time.
     next_record_seq: int = 0
+    # objection id -> `next_record_seq` when a `changed` decision answered an objection this
+    # session raised (`condition-decide`): a review recorded at or before it judged the plan
+    # against the condition's earlier text (`gates.condition_change_blockers`). Absent on legacy
+    # states, which read as no change.
+    condition_changes: dict[str, int] = field(default_factory=dict)
     # Every concern any review record raised, by stable id (schema 44) — see ConcernRecord.
     # Never reset: a `re:<id>` must resolve across approve/replan, and a concern's
     # status outlives the record that raised it. Empty on legacy states.
@@ -3782,7 +3787,7 @@ PLAN_BOUND_FIELDS = frozenset({
 SESSION_SCOPED_FIELDS = frozenset({
     "session_id", "plan_task_id", "blocked_from", "plan_verified", "permission_request",
     "difficulty", "plan_review", "plan_stage_reviews", "plan_review_passes",
-    "plan_pair_reviews", "next_record_seq", "concern_ledger", "risk_acceptances",
+    "plan_pair_reviews", "next_record_seq", "condition_changes", "concern_ledger", "risk_acceptances",
     "protected_grant_acceptances", "review_rounds", "stage_reviews", "judge_bypassed",
     "code_reviews", "acceptance_review", "acceptance_bypass", "plan_presentations",
     "recursion_depth", "artifacts", "history", "plan_stack", "cost", "last_user_prompt_ts",

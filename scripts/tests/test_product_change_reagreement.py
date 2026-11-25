@@ -12,6 +12,7 @@ product change is refused, so a router that sends everything to the user (or not
 
 from __future__ import annotations
 
+import copy
 import time
 from pathlib import Path
 import pytest
@@ -1472,6 +1473,8 @@ from agentctl.state import condition_decide_marker  # noqa: E402
 from test_stage_order_subplan import TWO_CONDITIONS  # noqa: E402
 
 _HOW_KEPT_B1 = '[[meta.how_kept]]\ncondition = "B1"\nhow = "no push verb is run"\n'
+_SETTER_KEPT_B1 = ('[[meta.sub_plan.setter_decisions]]\ncondition = "B1"\nvalue = "kept"\n'
+                   'setter = "user"\ndecided_by = "user"\n')
 _HOW_KEPT_B2_ONLY = '[[meta.how_kept]]\ncondition = "B2"\nhow = "nothing is deleted"\n'
 _HOW_KEPT_B2 = ('\n' + _HOW_KEPT_B2_ONLY + '\n[[meta.sub_plan.setter_decisions]]\ncondition = "B2"\n'
                 'value = "kept"\nsetter = "user"\ndecided_by = "user"\n')
@@ -1778,6 +1781,57 @@ def test_binding_condition_break_refused_until_setter_decides(request, tmp_path,
     _BREAK_CASES[case](request, tmp_path)
 
 
+def test_a_changed_condition_text_makes_earlier_plan_reviews_stale_until_one_is_recorded_again(
+        ostore, home, armed_env, tmp_path, monkeypatch):
+    """A plan review PASSES and stands; a replan naming B1 is refused; the user decides `changed`.
+    The decision moves no digest of the plan, so the review (recorded before it) is held stale by
+    the mark the decision writes on the raising session: `approve` and `replan` name the way on
+    (review again), and a review recorded after the decision clears the mark's blocker. A
+    `withdrawn` decision marks nothing."""
+    import hashlib
+
+    from agentctl.cli_review import _next_record_seq
+    from agentctl.state import PlanReview
+
+    store = ostore
+    plan = _root_order_with_condition(store, tmp_path)
+
+    def record_review() -> None:
+        state = store.load(SESSION)
+        digest = hashlib.sha256(Path(plan).read_bytes()).hexdigest()
+        state.plan_review = PlanReview(plan, "pass", "thinker", plan_sha256=digest,
+                                       record_seq=_next_record_seq(state))
+        store.save(state)
+
+    def change_blockers() -> list[str]:
+        monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+        return [b for b in gates.plan_review_blockers(store.load(SESSION), plan)
+                if "text of a binding condition was changed" in b]
+
+    record_review()
+    assert change_blockers() == []
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "0")
+    (objection_id,) = _objection_ids(_root_replan(store, tmp_path, "B1", name="break.toml"))
+    assert change_blockers() == [], "an objection alone changes no text"
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "0")
+
+    assert _root_decision(store, objection_id, "changed", "no change to any branch").ok
+    assert store.load(SESSION).condition_changes == {objection_id: store.load(SESSION).next_record_seq}
+    (stale,) = change_blockers()
+    assert objection_id in stale and "plan-review" in stale
+
+    record_review()
+    assert change_blockers() == []
+
+
+def test_a_withdrawn_decision_leaves_plan_reviews_standing(ostore, home, armed_env, tmp_path, monkeypatch):
+    store = ostore
+    _root_order_with_condition(store, tmp_path)
+    (objection_id,) = _objection_ids(_root_replan(store, tmp_path, "B1", name="break.toml"))
+    assert _root_decision(store, objection_id, "withdrawn").ok
+    assert store.load(SESSION).condition_changes == {}
+
+
 def test_condition_decide_registered_in_every_verb_set():
     from agentctl import own_contour
     from lib import widening_targets
@@ -1899,6 +1953,19 @@ def test_decision_moves_neither_agreed_digest_nor_priced_figures(home_store, tmp
     assert sub_plan.approval_digest(_stored(store)) == approved
     assert store.load(FRAME).stage_approvals["0:1"]["user_subplan_approval"] == approved
     assert sub_plan.estimate_copy(store.load(FRAME), 1, 0) == figure
+
+
+def test_decisions_of_a_session_are_empty_only_when_none_is_on_record(home_store, tmp_path):
+    """A session with no state on record, or no session named, has no decisions to show; a state
+    that is on record but unreadable raises instead of showing a rendering without its decisions."""
+    store = home_store
+    _frame_plan(store, tmp_path)
+    assert cli_common.condition_decisions_of_session("no-such-session", store) == []
+    assert cli_common.condition_decisions_of_session(None, store) == []
+
+    store.path(FRAME).write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError):
+        cli_common.condition_decisions_of_session(FRAME, store)
 
 
 def _middle_level_contour(store, tmp_path: Path, *, user_set: bool = False):
@@ -2061,10 +2128,11 @@ def test_a_decision_on_an_inherited_condition_reads_alike_in_every_session_bound
     assert _break(store, c2_dir, "B1", sid="c2", name="c2-passes.toml", drop=()).ok
 
 
-def test_a_decision_naming_a_busy_session_records_nothing_and_says_to_run_again(home_store, tmp_path):
-    """The decision on a child's objection is also written into that child's state: while another
-    command holds the child's state lock the decision is refused naming the way on (run it again),
-    and nothing is recorded at the setter level either; once the lock is free the same call records."""
+def test_a_decision_naming_a_busy_session_stands_at_the_setter_and_says_to_run_again(home_store, tmp_path):
+    """The decision on a child's objection is also written into that child's state, after the
+    setter level's own record holds it: while another command holds the child's state lock the call
+    is refused naming the way on (run it again), the decision stands at the setter level and the
+    child's copy is missing; once the lock is free the same call writes the copy."""
     store = home_store
     c_dir = _frame_child_contour(store, tmp_path)
     (objection_id,) = _objection_ids(_break(store, c_dir, "B1", sid="c"))
@@ -2074,8 +2142,9 @@ def test_a_decision_naming_a_busy_session_records_nothing_and_says_to_run_again(
         assert held
         busy = _decide(store, objection_id, "withdrawn", by="fedor", sid=FRAME)
     assert busy.ok is False and "run `condition-decide` again" in busy.detail, busy.detail
-    assert objection_id not in str(store.load(FRAME).root_conditions.get("decisions") or [])
-    _none_recorded(store, "c", FRAME)
+    assert [d["objection"] for d in store.load(FRAME).root_conditions["decisions"]] == [objection_id]
+    assert not [d for d in store.load("c").sub_plan_records["1"].get("setter_decisions") or []
+                if d.get("objection") == objection_id]
 
     again = _decide(store, objection_id, "withdrawn", by="fedor", sid=FRAME)
     assert again.ok, again.detail
@@ -2228,8 +2297,130 @@ def _setter_case_a_parent_replanning_its_own_plan_objects_to_its_own_condition(r
     assert _decide(store, objection_id, "withdrawn", sid="p").ok
     (written,) = store.load("p").sub_plan_records["4"]["setter_decisions"]
     assert written["objection"] == objection_id and written["decided_by"] == "agent"
-    past = _break(store, tmp_path, "B1", sid="p", name="past.toml")
-    assert "condition-decide" not in _text_of(past), _text_of(past)
+    from test_stage_order_subplan import _described_parent
+
+    grandparent = _described_parent(store, "g")
+    (stage_one,) = grandparent.stages
+    stage_four = copy.deepcopy(stage_one)
+    stage_four.index, stage_four.title, stage_four.binding_conditions = 4, "stage 4", []
+    grandparent.stages.append(stage_four)
+    store.save(grandparent)
+    (tmp_path / "past.toml").write_text((tmp_path / "plan.toml").read_text(encoding="utf-8"), encoding="utf-8")
+    _edit(tmp_path / "past.toml", (_HOW_KEPT_B1, ""), (_SETTER_KEPT_B1, ""),
+          ("[meta.sub_plan]\nstage = 1", "[meta.sub_plan]\nstage = 4"))
+    past = cli.cmd_replan(ns(session="p", plan=str(tmp_path / "past.toml"), breaks_condition=["B1"]),
+                          store=store)
+    assert past.ok, (past.detail, past.data)
+    assert store.load("p").sub_plan_records["4"]["objections"][0]["status"] == "consumed"
+
+
+def _setter_case_a_failed_copy_into_the_raising_session_is_repaired_by_running_again(request, tmp_path):
+    """The decision is written at the level that set the condition first and the raising session's
+    copy second: when the copy cannot be written the refusal says the decision stands and names the
+    repair, the deciding level's record holds exactly that one decision, and the same call run again
+    writes the copy (and is not refused as already decided); a third call is refused as a second
+    decision."""
+    store, monkeypatch = _by_fixture(request, "home_store", "monkeypatch")
+    root, c_dir, _ = _inherited_chain("frame", store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, c_dir, "B1", sid="c"))
+    raised = sub_plan.stored_record(store.load("c"), 1).objections[0]
+    copy_key = raised["inherited_into"]["key"]
+
+    real_save = store.save
+
+    def save_failing_for_c(state):
+        if state.session_id == "c":
+            raise OSError("no space left on device")
+        real_save(state)
+
+    monkeypatch.setattr(store, "save", save_failing_for_c)
+    failed = _users_decision(store, objection_id, "withdrawn", sid=root)
+    assert failed.ok is False and "is recorded at the level that set the condition" in failed.detail, failed.detail
+    assert "run `condition-decide` again" in failed.detail
+    (at_setter,) = store.load(root).root_conditions["decisions"]
+    assert at_setter["objection"] == objection_id
+    def copies() -> list[dict]:
+        held = store.load("c").sub_plan_records.get(copy_key, {}).get("setter_decisions") or []
+        return [d for d in held if d.get("objection") == objection_id]
+
+    assert copies() == []
+
+    monkeypatch.setattr(store, "save", real_save)
+    repaired = _decide(store, objection_id, "withdrawn", by="fedor", sid=root)
+    assert repaired.ok, repaired.detail
+    assert [d["objection"] for d in store.load(root).root_conditions["decisions"]] == [objection_id]
+    (copied,) = copies()
+    assert copied["value"] == "withdrawn"
+    assert _break(store, c_dir, "B1", sid="c", name="passes.toml").ok
+
+    third = _users_decision(store, objection_id, "withdrawn", sid=root)
+    assert third.ok is False and "takes no second decision" in third.detail
+    assert len(store.load(root).root_conditions["decisions"]) == 1
+
+
+def _setter_case_a_root_session_replanning_its_own_plan_is_decided_by_the_user(request, tmp_path):
+    """`p` is the root session (it has no parent link) and set B1 on stage 1 of its own plan; it
+    replans that plan naming B1. The objection is stored where the root level keeps its decisions
+    (`root_conditions`), the replan stays refused without a decision, the agent cannot decide it
+    (the root level's decision is the user's), and the user's marked answer decides it, after which
+    the same replan passes and the objection is consumed."""
+    from test_stage_order_subplan import _RECORD_HEAD as head, _walk_to_submit_in_contour
+
+    store, = _by_fixture(request, "home_store")
+    submitted = _walk_to_submit_in_contour(store, tmp_path, head + _HOW_KEPT)
+    assert submitted.ok, submitted.data
+    root = store.load("p")
+    assert not root.parent_link
+    root.plan_path = str(tmp_path / "plan.toml")
+    store.save(root)
+
+    refused = _break(store, tmp_path, "B1", sid="p", name="own.toml")
+    assert refused.ok is False and "condition-decide" in _text_of(refused), _text_of(refused)
+    (objection_id,) = _objection_ids(refused)
+    (raised,) = store.load("p").root_conditions["objections"]
+    assert raised["id"] == objection_id and raised["stage"] == 1 and raised["status"] == "open"
+    assert raised["site"] == {"owner": "p", "key": None, "depth": 0}
+    assert _break(store, tmp_path, "B1", sid="p", name="again.toml").ok is False
+    assert len(store.load("p").root_conditions["objections"]) == 1, "no second objection"
+
+    by_agent = _decide(store, objection_id, "withdrawn", sid="p")
+    assert by_agent.ok is False and "only the user decides" in by_agent.detail
+    _none_recorded(store, "p")
+
+    assert _users_decision(store, objection_id, "withdrawn", sid="p").ok
+    (written,) = store.load("p").root_conditions["decisions"]
+    assert written["objection"] == objection_id and written["decided_by"] == "fedor"
+    past = _break(store, tmp_path, "B1", sid="p", name="past.toml",
+                  drop=(_HOW_KEPT_B1, _SETTER_KEPT_B1))
+    assert past.ok, (past.detail, past.data)
+    assert store.load("p").root_conditions["objections"][0]["status"] == "consumed"
+
+
+def _setter_case_an_own_stage_condition_id_on_two_stages_is_refused_and_unknown_ids_name_the_own_ones(
+        request, tmp_path):
+    """The root session `p` states the binding condition B1 on two stages of its own plan:
+    `--breaks-condition B1` does not name one condition, so it is refused and nothing is raised; an
+    id that is no condition of the session is refused listing the ids of its own plan."""
+    from test_stage_order_subplan import _RECORD_HEAD as head, _walk_to_submit_in_contour
+
+    store, = _by_fixture(request, "home_store")
+    submitted = _walk_to_submit_in_contour(store, tmp_path, head + _HOW_KEPT)
+    assert submitted.ok, submitted.data
+    root = store.load("p")
+    root.plan_path = str(tmp_path / "plan.toml")
+    (first,) = root.stages
+    second = copy.deepcopy(first)
+    second.index, second.title = 2, "stage 2"
+    root.stages.append(second)
+    store.save(root)
+
+    ambiguous = _break(store, tmp_path, "B1", sid="p", name="ambiguous.toml")
+    assert ambiguous.ok is False and "more than one stage" in _text_of(ambiguous), _text_of(ambiguous)
+    assert not store.load("p").root_conditions.get("objections")
+
+    unknown = _break(store, tmp_path, "B9", sid="p", name="unknown.toml")
+    assert unknown.ok is False and "own plan ['B1']" in _text_of(unknown), _text_of(unknown)
+    assert not store.load("p").root_conditions.get("objections")
 
 
 def _setter_case_a_session_below_the_setters_plan_is_refused_with_a_way_on(request, tmp_path):
@@ -2304,6 +2495,11 @@ _SETTER_CASES = {
     "second-decision": _setter_case_second_decision_is_refused,
     "parent-decides-its-own-condition": _setter_case_the_parent_decides_the_condition_it_set,
     "parent-replanning-its-own-plan": _setter_case_a_parent_replanning_its_own_plan_objects_to_its_own_condition,
+    "failed-copy-is-repaired-by-running-again":
+        _setter_case_a_failed_copy_into_the_raising_session_is_repaired_by_running_again,
+    "root-replanning-its-own-plan": _setter_case_a_root_session_replanning_its_own_plan_is_decided_by_the_user,
+    "own-stage-id-on-two-stages-and-unknown-ids":
+        _setter_case_an_own_stage_condition_id_on_two_stages_is_refused_and_unknown_ids_name_the_own_ones,
     "below-the-setters-plan": _setter_case_a_session_below_the_setters_plan_is_refused_with_a_way_on,
     "id-held-by-two-sessions": _setter_case_an_id_held_by_two_sessions_decides_nothing,
     "user-set-from-a-child-in-a-frame":

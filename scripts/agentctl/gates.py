@@ -2716,6 +2716,24 @@ def _honours_pair_records(state: SessionState, target_plan: "str | None", doc) -
     )
 
 
+def condition_change_blockers(state: SessionState) -> list[str]:
+    """A `changed` decision (`condition-decide`) rewrote the text of a binding condition this
+    session raised an objection to; a plan review recorded at or before it judged the plan against
+    the earlier text, and the digests of the plan do not move with a decision. [] when no decision
+    changed a text, no review is recorded (the review gate's own message says so), or a review of
+    any kind was recorded after the last such decision."""
+    if not state.condition_changes:
+        return []
+    reviews = [state.plan_review, *state.plan_stage_reviews.values(), *state.plan_pair_reviews.values()]
+    recorded = [r.record_seq for r in reviews if r is not None]
+    through = max(state.condition_changes.values())
+    if not recorded or max(recorded) > through:
+        return []
+    return [f"the text of a binding condition was changed after the last plan review was recorded "
+            f"(objection {', '.join(sorted(state.condition_changes))}): review the plan again "
+            f"(`plan-review`) so that a review judges it against the new text"]
+
+
 def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
     """Precondition guardian for `approve` and every `replan`: a thinker review with
     a passing (or user-overridden) verdict, BOUND to the exact plan version being
@@ -2749,6 +2767,8 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
     message — the review requirement is released as one event, not per sub-reason."""
     if not plan_review_active(state):
         return []
+    if changed := condition_change_blockers(state):
+        return changed
     doc = None
     if target_plan:
         try:

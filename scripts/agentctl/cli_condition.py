@@ -56,26 +56,62 @@ def _matches(state: SessionState, store: StateStore, objection_id: str) -> list[
             for o in sub_plan.session_objections(holder) if o.get("id") == objection_id]
 
 
+_NOT_WRITTEN = ("the decision is recorded at the level that set the condition, but what belongs in "
+                "session {session} (which raised objection {objection}) is not: {why}; run "
+                "`condition-decide` again with the same objection to write it")
+
+
 def _write_into_raising_session(state: SessionState, holder: SessionState, objection: dict,
                                 decision: dict, store: StateStore) -> str | None:
-    """Writes `decision` into the record the raising session's plan carries (for a condition that
-    session inherits). The raising session is another one's state file, so the write is made under
-    its state lock on a fresh load, as `_restamp_on_parent` does for the parent's approval; a lock
-    that stays busy gives the refusal text, and nothing is written anywhere. A store with no state
+    """Writes what the raising session keeps of `decision`, after the decider's own record holds
+    it: a copy in the record its plan carries (for a condition that session inherits) and, for a
+    `changed` text, the mark that makes its earlier plan reviews stale. The raising session is
+    another one's state file, so the write is made under its state lock on a fresh load, as
+    `_restamp_on_parent` does for the parent's approval; a lock that stays busy, or a failed write,
+    gives the refusal text that names the repair (`_raising_session_behind`). A store with no state
     directory has no concurrent writer and needs no lock."""
-    key = objection["inherited_into"]["key"]
+    def write(raising: SessionState) -> None:
+        if objection.get("inherited_into"):
+            raising.sub_plan_records.setdefault(objection["inherited_into"]["key"], {}).setdefault(
+                "setter_decisions", []).append(decision)
+        if decision["value"] == "changed":
+            raising.condition_changes[objection["id"]] = raising.next_record_seq
+
     if holder.session_id == state.session_id:
-        holder.sub_plan_records.setdefault(key, {}).setdefault("setter_decisions", []).append(decision)
+        write(holder)
         return None
     with _state_lock(store, holder.session_id) as locked:
         if not locked and _state_dir(store) is not None:
-            return (f"session {holder.session_id} raised objection {objection['id']} and its state "
-                    f"is being written by another command, so the decision is not recorded: run "
-                    f"`condition-decide` again in a moment")
-        fresh = store.load(holder.session_id) if locked else holder
-        fresh.sub_plan_records.setdefault(key, {}).setdefault("setter_decisions", []).append(decision)
-        store.save(fresh)
+            return _NOT_WRITTEN.format(session=holder.session_id, objection=objection["id"],
+                                       why="its state is being written by another command")
+        try:
+            fresh = store.load(holder.session_id) if locked else holder
+            write(fresh)
+            store.save(fresh)
+        except OSError as failure:
+            return _NOT_WRITTEN.format(session=holder.session_id, objection=objection["id"],
+                                       why=f"writing it failed ({failure})")
     return None
+
+
+def _recorded_decision(state: SessionState, objection: dict) -> dict | None:
+    """The raw decision of the level that set the condition that answers `objection`, if its record
+    holds one."""
+    site = objection["site"]
+    raw = ((state.root_conditions.get("decisions") if site.get("key") is None else
+            (state.sub_plan_records.get(site["key"]) or {}).get("setter_decisions")) or [])
+    return next((d for d in raw if d.get("objection") == objection["id"]), None)
+
+
+def _raising_session_behind(holder: SessionState, objection: dict, decision: dict) -> bool:
+    """Whether `holder` lacks what `_write_into_raising_session` writes for `decision`."""
+    if decision["value"] == "changed" and objection["id"] not in holder.condition_changes:
+        return True
+    if not objection.get("inherited_into"):
+        return False
+    held = (holder.sub_plan_records.get(objection["inherited_into"]["key"]) or {}).get(
+        "setter_decisions") or []
+    return not any(d.get("objection") == objection["id"] for d in held)
 
 
 def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -115,6 +151,16 @@ def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = Non
         decider_stack=len(state.plan_stack), by_user=by_user)
     if blockers:
         return refuse("; ".join(blockers), blockers=blockers)
+    recorded = _recorded_decision(state, objection)
+    if (recorded is not None and objection.get("status") == sub_plan.OBJECTION_OPEN
+            and _raising_session_behind(holder, objection, recorded)):
+        failed = _write_into_raising_session(state, holder, objection, recorded, store)
+        if failed:
+            return refuse(failed)
+        store.save(state)
+        return Directive(True, state.node, "noop",
+                         f"objection {objection['id']} was already decided {recorded['value']}; what "
+                         f"belongs in session {holder.session_id} is now written")
     earlier = _objection_decisions(objection, holder, store)
     if objection.get("status") != sub_plan.OBJECTION_OPEN or gates.objection_decision(objection, earlier):
         return refuse(f"objection {objection['id']} is already decided or used up, and takes no "
@@ -136,14 +182,17 @@ def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = Non
     decision = {"condition": objection["condition"], "value": value, "setter": state.session_id,
                 "decided_by": by, "objection": objection["id"],
                 "new_text": new_text, "version": version}
-    if objection.get("inherited_into"):
-        busy = _write_into_raising_session(state, holder, objection, decision, store)
-        if busy:
-            return refuse(busy)
     _objection_site(state, objection["site"]).write_decision(decision)
     state.log("condition_decide", objection=objection["id"], condition=objection["condition"],
               value=value, by=by, at=time.time())
+    own_session = holder.session_id == state.session_id
+    if own_session:
+        _write_into_raising_session(state, holder, objection, decision, store)
     store.save(state)
+    if not own_session:
+        failed = _write_into_raising_session(state, holder, objection, decision, store)
+        if failed:
+            return refuse(failed)
     return Directive(True, state.node, "noop",
                      f"objection {objection['id']} is decided {value} by {by}"
                      + (f": condition {objection['condition']} now reads {new_text!r} (version {version})"

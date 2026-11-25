@@ -3003,13 +3003,11 @@ def visible_condition_decisions(state: SessionState, store: StateStore | None) -
 
 def condition_decisions_of_session(session_id: str | None, store: StateStore | None) -> list:
     """`visible_condition_decisions` of the session `session_id`; nothing without a session, a
-    store or a state that loads (a rendering is then the plan file as written)."""
+    store or a state on record (a rendering is then the plan file as written). A state that is
+    on record but does not read raises: a rendering must not silently drop a decision."""
     if not session_id or store is None:
         return []
-    try:
-        state = store.load(session_id)
-    except Exception:
-        return []
+    state = store.load(session_id)
     return visible_condition_decisions(state, store) if state is not None else []
 
 

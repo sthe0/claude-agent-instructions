@@ -81,8 +81,8 @@ def test_gates_gained_no_new_blocker_for_the_record_only_scale():
     from agentctl import gates
 
     names = [n for n, _ in inspect.getmembers(gates, inspect.isfunction) if n.endswith("_blockers")]
-    assert len(names) == 40, (
-        f"expected 40 *_blockers functions (parent-accounting stage 3 added escalation_orphan_blockers; "
+    assert len(names) == 43, (
+        f"expected 43 *_blockers functions (parent-accounting stage 3 added escalation_orphan_blockers; "
         f"pretrial-fixes stage 5 added protected_grant_blockers; "
         f"order-agreement stage 2 added order_review_blockers; "
         f"order-agreement stage 3 added order_agreement_blockers; "
@@ -100,6 +100,11 @@ def test_gates_gained_no_new_blocker_for_the_record_only_scale():
         f"outstanding); "
         f"order-plan-separation stage 8 added replan_routing_blockers (a replan that changes the "
         f"root product is refused until the user's re-agreement is recorded); "
+        f"order-plan-separation stage 8 (part 2, commit 86261780) added condition_break_blockers (a "
+        f"replan that names a binding condition it breaks is refused until the level that set it has "
+        f"decided the objection) and condition_decider_blockers (who may decide that objection); "
+        f"order-plan-separation stage 8 (run 8) added condition_change_blockers (a plan review "
+        f"recorded before a condition's changed text no longer counts); "
         f"the record-only scale still adds none), found {len(names)}: {sorted(names)}"
     )
     assert "protected_grant_blockers" in names
