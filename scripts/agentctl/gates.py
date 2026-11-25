@@ -114,7 +114,7 @@ from .state import plan_review_scope_stage_index as _plan_review_scope_stage_ind
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import PLAN_PRESENTATION_KIND_SUBPLAN as _PLAN_PRESENTATION_KIND_SUBPLAN
-from .state import estimate_correction_marker, subplan_receipt_path
+from .state import condition_decide_marker, estimate_correction_marker, subplan_receipt_path
 from .state import Stage as _Stage
 from .state import asserts_landing
 from .state import is_settled, is_skipped
@@ -4629,6 +4629,134 @@ def _cost_tier_moved(old_doc, new_doc, window) -> bool:
         s.index in window and s.index in old_tiers and s.actor.cost_tier != old_tiers[s.index]
         for s in new_doc.stages
     )
+
+
+# --- binding conditions: the objection route (`replan --breaks-condition`, `condition-decide`) ---
+#
+# Difficulty removed: a session bound by a condition could make a replan that breaks it acceptable
+# by itself. The pure rules of that route live here, beside the replan classifier, so that the verbs
+# (`replan`, `condition-decide`) and the stage-9 executor-side check read one predicate; the CLI
+# modules mint objections, read the decision rows and save state.
+
+#: A decision with one of these values lets a replan that names the condition proceed; `kept`
+#: leaves the condition and the refusal, and only `withdrawn` frees the condition from check 13.
+LIFTING_VALUES = ("changed", "withdrawn")
+
+
+class ConditionBreak(NamedTuple):
+    """The verdict on the objections one replan raised or reopened: the ids of those lifted by a
+    decision, the pending ones (no decision names them), the ones a `kept` decision answered, and
+    the refusal texts (empty when nothing stands in the way)."""
+    lifted: tuple[str, ...]
+    pending: tuple[dict, ...]
+    kept: tuple[dict, ...]
+    blockers: tuple[str, ...]
+
+
+def _decision_rows(decisions) -> list:
+    return [sub_plan.SetterDecision.from_dict(d) if isinstance(d, dict) else d for d in decisions]
+
+
+def objection_decision(objection: dict, decisions):
+    """The decision that names `objection`, or None while it stands undecided. A decision answers
+    one objection only (it names the objection's id)."""
+    named = [d for d in _decision_rows(decisions) if d.objection == objection.get("id")]
+    return named[-1] if named else None
+
+
+def objection_lifted(objection: dict, decisions) -> bool:
+    """Whether the setter's level decided this very objection to a change or a withdrawal: the
+    decision names the objection's id. A decision on another objection to the same condition, and a
+    `kept` one, lift nothing."""
+    return any(d.objection == objection.get("id") and d.value in LIFTING_VALUES
+               for d in _decision_rows(decisions))
+
+
+def current_condition_text(condition: dict, decisions) -> tuple[str, int]:
+    """The text of the binding condition `condition` as it stands now, and its version: the text
+    stated with the condition is version 1; the latest `changed` decision on it carries the
+    version after the one it replaces. The one reader of a changed text: everything that shows or
+    compares a condition's text goes through it."""
+    changed = [d for d in _decision_rows(decisions)
+               if d.condition == condition.get("id") and d.value == "changed" and d.new_text]
+    if not changed:
+        return str(condition.get("text", "")), 1
+    latest = max(changed, key=lambda d: d.version)
+    return latest.new_text, latest.version
+
+
+def with_current_text(conditions, decisions) -> tuple[dict, ...]:
+    """`conditions` with each text replaced by `current_condition_text`, and the version added to
+    a condition that has been changed (a text still at version 1 carries none)."""
+    out = []
+    for condition in conditions or ():
+        text, version = current_condition_text(condition, decisions)
+        row = dict(condition, text=text)
+        if version > 1:
+            row["version"] = version
+        out.append(row)
+    return tuple(out)
+
+
+def condition_break_blockers(objections, decisions, *, who: str) -> ConditionBreak:
+    """Whether the replan that named `objections` (one per condition it breaks, each minted or
+    reopened by the caller) may proceed: refused until `who` (the level that set the conditions)
+    has decided each one, by a decision naming that objection (never another one on the same
+    condition). After a `kept` decision the way on is a replan that keeps the condition, or a new
+    objection from a later replan; a second decision for the same objection is refused by
+    `condition-decide`."""
+    lifted, pending, kept = [], [], []
+    for objection in objections:
+        if objection_lifted(objection, decisions):
+            lifted.append(objection["id"])
+        elif objection_decision(objection, decisions) is not None:
+            kept.append(objection)
+        else:
+            pending.append(objection)
+    blockers: list[str] = []
+    for objection in pending:
+        blockers.append(
+            f"condition {objection['condition']} cannot be broken until {who} decides objection "
+            f"{objection['id']}: `condition-decide --objection {objection['id']} --value "
+            f"changed --new-text <text>` or `--value withdrawn` lifts it")
+    for objection in kept:
+        blockers.append(
+            f"the setter level kept condition {objection['condition']} (objection "
+            f"{objection['id']}, now closed; it takes no second decision): revise the replan so the "
+            f"plan keeps the condition and leave --breaks-condition out, or run the replan again "
+            f"naming the condition, which raises a new objection for {who} to decide")
+    return ConditionBreak(tuple(lifted), tuple(pending), tuple(kept), tuple(blockers))
+
+
+def condition_decider_blockers(*, objection: dict, value: str, decider_session: str,
+                               decider_stack: int, by_user: bool) -> list[str]:
+    """Why a session may not decide `objection` ([] == it may). The deciding level keeps its
+    decision in its own session: only that session decides, whoever answers (a user's `--by
+    <name>` is the party's answer, not a way past the level), an agent only while its running plan
+    is the deciding level's own or one above it (a session below it is the one that raised the
+    objection), and the root level's decision is the user's. An objection to a condition inherited
+    from above is decided by the level that set it, not by the nearer one."""
+    site = objection.get("site") or {}
+    owner = site.get("owner", "")
+    if owner != decider_session:
+        return [f"objection {objection['id']!r} is decided by the level that set the condition "
+                f"{objection['condition']!r}, which keeps its decisions in session {owner!r}: run "
+                f"`condition-decide` there"]
+    if site.get("key") is None:
+        if by_user:
+            return []
+        return [f"the condition {objection['condition']!r} was set at the root level, so only the "
+                f"user decides the objection: put it to the user and run `condition-decide --by "
+                f"<name>` once their answer choosing the option marked "
+                f"{condition_decide_marker(objection['id'], value)!r} is recorded"]
+    if decider_stack > int(site.get("depth") or 0):
+        return [f"this session runs a plan below the level that set condition "
+                f"{objection['condition']!r} (its plan stack is {decider_stack} deep, the setter's "
+                f"plan runs at {site.get('depth')}). Way on: let the frame's work resolve without "
+                f"breaking the condition (replan keeping it: leave --breaks-condition out), "
+                f"`pop-subplan` back to the setter's plan, and run `condition-decide` there; the "
+                f"objection stays on record"]
+    return []
 
 
 #: The places a renormalization may not reach, as (dotted path on the stage, what the

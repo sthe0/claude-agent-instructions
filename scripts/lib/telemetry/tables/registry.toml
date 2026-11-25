@@ -1,4 +1,4 @@
-version = 11
+version = 12
 
 [[members]]
 name = "cli:accept"
@@ -1610,7 +1610,7 @@ source_keys = ["cli:condition-decide"]
 
 [[members]]
 name = "gate:condition_objection"
-since = 11
+since = 12
 kind = "elementary"
 part_of = ["order_phase"]
 place = "order_agreement"

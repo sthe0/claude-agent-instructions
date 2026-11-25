@@ -707,7 +707,12 @@ def _text_of(d) -> str:
 
 
 def _approve_in_frame(store) -> str:
-    """The user's approval of the sub-plan as the record stands (what approve-subplan writes)."""
+    """The user's approval of the sub-plan as the record stands, written as `approve-subplan`
+    writes it, under the key `0:1`. The verb cannot be run here: the session is inside the frame
+    it pushed, whose record describes stage 1 of the PARENT plan (stack level 0), while the verb
+    (`cmd_approve_subplan` → `sub_plan.read`, `approval_key`) reads and keys the stage of the plan
+    the session runs now (level 1), so it finds no record and would write under `1:1`. It is the
+    root session's verb, run after the frame pops, which this fixture does not model."""
     state = store.load(FRAME)
     record = sub_plan.stored_record(state, 1)
     state.stage_approvals.setdefault("0:1", {}).update({
@@ -731,17 +736,17 @@ REQUEST = '\n[[meta.sub_plan.resource_request]]\nstage = 1\nallow = ["Edit", "Wr
 NARROWER = ('allow = ["Edit", "Write"]', 'allow = ["Edit"]')
 
 
-def _resolve_and_pop(store):
+def _resolve_and_pop(store, sid=FRAME):
     """Settle every stage of the frame and pop it through the real `pop-subplan`, back to the
     level of the plan whose stage the record describes."""
-    state = store.load(FRAME)
+    state = store.load(sid)
     for stage in state.stages:
         stage.outcome.status = "PASSED"
     state.node = Node.RESOLVED.value
     state.partition = Partition(verdict="single")
     state.resolution = GateRecord("resolution", armed=True, passed=True, by="tester")
     store.save(state)
-    popped = cli.cmd_pop_subplan(ns(session=FRAME), store=store)
+    popped = cli.cmd_pop_subplan(ns(session=sid), store=store)
     assert popped.ok, popped.detail
     return popped
 
@@ -1174,7 +1179,10 @@ def test_a_replans_fire_with_the_approval_owed_again_takes_the_agents_difficulty
     """D10. The planning phase is judged on the replans scale only once the plan was approved (an
     unapproved planning segment carries spend and wall-clock fires alone), so the planning-phase
     replans fire is the one met while a replan has put the approval back to its approver: the
-    session is at PLAN_READY with the approval armed. It names no segment, is the agent's
+    session is at PLAN_READY with the approval armed. (A replans fire cannot arise on a planning
+    segment that was never approved: `effort.replans_divergence` returns None unless the session
+    is armed, `effort.py:602`, and only an approval arms it, `effort.py:577` `armed`; the test
+    therefore walks the approval first and a replan that puts it back.) It names no segment, is the agent's
     (`fire-acknowledge --by agent`), and takes the route a stage's replans fire takes: the
     difficulty cycle, the agent's acknowledgment, then `replan` (a plan exists)."""
     from agentctl.config import Thresholds
@@ -1489,33 +1497,142 @@ def _decide(store, objection: str, value: str, *, by="agent", new_text="", sid=F
         ns(session=sid, objection=objection, value=value, new_text=new_text, by=by), store=store)
 
 
-def _users_decision(store, objection: str, value: str, new_text=""):
-    """The user's marked answer to the ask for this decision, then the decision by their name."""
-    _user_choice(condition_decide_marker(objection, value), session=FRAME)
-    return _decide(store, objection, value, by="fedor", new_text=new_text)
+def _users_decision(store, objection: str, value: str, new_text="", *, sid=FRAME):
+    """The user's marked answer to the ask for this decision, then the decision by their name, run
+    in the session `sid` that keeps the deciding level's decisions."""
+    _user_choice(condition_decide_marker(objection, value), session=sid)
+    return _decide(store, objection, value, by="fedor", new_text=new_text, sid=sid)
 
 
 def _objection_ids(refused) -> list[str]:
     return list(refused.data["objections"])
 
 
-def test_binding_condition_break_refused_until_setter_decides(home_store, tmp_path):
-    """A replan that no longer keeps a binding condition is refused by check 13 as it was; one that
-    names the condition it breaks mints an objection with its own id and is refused until the level
-    that set the condition has decided it. Each way on is walked through the verbs: the agent is
-    refused at the root level, the user's marked answer decides, and the same replan then passes."""
-    store = home_store
+def _by_fixture(request, *names):
+    """The fixtures a case needs, taken when it runs: the root-order cases keep their state under
+    `CLAUDE_CONFIG_DIR` and the frame cases under `CLAUDE_AGENT_HOME`, so one test cannot ask for
+    both sets up front."""
+    return [request.getfixturevalue(name) for name in names]
+
+
+def _root_order_with_condition(store, tmp_path: Path) -> str:
+    """The root session at PLAN_READY on a two-sided order the user agreed with the binding
+    condition B1 kept (set by the user), its plan carrying that order: every verb is the real one."""
+    from test_order_two_sides import BESIDE, SIDES, _agree_two_sided
+
+    _agree_two_sided(store, tmp_path, decisions=["B1=keep"], sides=SIDES + BESIDE)
+    plan = _root_plan(tmp_path, name="plan.toml")
+    assert cli.cmd_plan(ns(session=SESSION), store=store).ok
+    submitted = cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store)
+    assert submitted.ok, (submitted.detail, submitted.data)
+    return plan
+
+
+def _root_plan(tmp_path: Path, *edits: tuple[str, str], name: str) -> str:
+    from test_order_two_sides import BESIDE
+
+    marker = "\n[meta.order.coverage]"
+    return _edit(_plan(tmp_path, name=name), (marker, BESIDE + marker), *edits)
+
+
+def _root_replan(store, tmp_path: Path, *ids: str, name: str, covered: bool = False):
+    proposal = _root_plan(tmp_path, ('title = "the stage under test"', 'title = "renamed"'), name=name)
+    if covered:
+        _cover_order_element(store, proposal)
+    return cli.cmd_replan(ns(session=SESSION, plan=proposal, breaks_condition=list(ids)), store=store)
+
+
+def _root_decision(store, objection: str, value: str, new_text="", *, by="fedor", answered=True):
+    if answered:
+        _user_answers(condition_decide_marker(objection, value), session=SESSION)
+    return cli_condition.cmd_condition_decide(
+        ns(session=SESSION, objection=objection, value=value, new_text=new_text, by=by), store=store)
+
+
+def _case_root_session_replanning_the_root_order(request, tmp_path):
+    """The root session itself objects to a condition the user set on the order it works to: the
+    replan is refused and the objection written where the root level keeps its decisions, the agent
+    cannot decide it, a decision by the user's name with no marked answer is refused, and the user's
+    marked answer decides it and releases the replan (the same replan, then passed)."""
+    store, home, _ = _by_fixture(request, "ostore", "home", "armed_env")
+    _root_order_with_condition(store, tmp_path)
+    assert _past_routing(_root_replan(store, tmp_path, name="quiet.toml")) is None
+
+    refused = _root_replan(store, tmp_path, "B1", name="break.toml")
+    assert refused.ok is False and "condition-decide" in _blockers(refused), _blockers(refused)
+    (objection_id,) = _objection_ids(refused)
+    (raised,) = store.load(SESSION).root_conditions["objections"]
+    assert raised["id"] == objection_id == f"{SESSION}:1" and raised["condition"] == "B1"
+    assert raised["site"] == {"owner": SESSION, "key": None, "depth": 0} and raised["status"] == "open"
+
+    by_agent = _root_decision(store, objection_id, "withdrawn", by="agent", answered=False)
+    assert by_agent.ok is False and "only the user decides" in by_agent.detail
+    unanswered = _root_decision(store, objection_id, "withdrawn", answered=False)
+    assert unanswered.ok is False and condition_decide_marker(objection_id, "withdrawn") in unanswered.detail, (
+        unanswered.detail)
+    assert _root_replan(store, tmp_path, "B1", name="again.toml").ok is False
+
+    assert _root_decision(store, objection_id, "withdrawn").ok
+    passed = _root_replan(store, tmp_path, "B1", name="passes.toml", covered=True)
+    _past_routing(passed)
+    assert passed.ok, (passed.action, passed.detail, passed.data)
+    assert store.load(SESSION).root_conditions["objections"][0]["status"] == "consumed"
+
+
+def _case_changed_text_reaches_the_presented_rendering(request, tmp_path):
+    """After the user's `changed` decision on the order's condition, the rendering of the plan the
+    user is shown (`plan-render`) carries the new text and its version 2; before it, the original
+    text and no version."""
+    store, home, _ = _by_fixture(request, "ostore", "home", "armed_env")
+    plan = _root_order_with_condition(store, tmp_path)
+    render = lambda: cli.cmd_plan_render(ns(plan=plan, session=SESSION, stage=None), store=store).detail
+    before = render()
+    assert "no change to the release branch" in before and "version" not in before.lower()
+
+    (objection_id,) = _objection_ids(_root_replan(store, tmp_path, "B1", name="break.toml"))
+    assert _root_decision(store, objection_id, "changed", "no change to any branch").ok
+
+    after = render()
+    assert "no change to any branch" in after and "no change to the release branch" not in after
+    assert "version 2" in after, after
+    (written,) = store.load(SESSION).root_conditions["decisions"]
+    assert written["version"] == 2 and written["objection"] == objection_id
+
+
+def _case_old_form_order_has_no_condition_to_object_to(request, tmp_path):
+    """An order agreed in the old form carries no binding condition, so `--breaks-condition` names
+    nothing there: it is refused, no objection is written, and the same replan without the option
+    is not stopped by the objection gate."""
+    store, home, _ = _by_fixture(request, "ostore", "home", "armed_env")
+    _old_form_plan_ready(store, home, tmp_path)
+    proposal = _old_form_proposal(tmp_path, name="old-replan.toml")
+
+    refused = cli.cmd_replan(ns(session=SESSION, plan=proposal, breaks_condition=["B1"]), store=store)
+
+    assert refused.ok is False and "agreed order carries none" in _blockers(refused), _blockers(refused)
+    assert not store.load(SESSION).root_conditions.get("objections")
+    _past_routing(cli.cmd_replan(ns(session=SESSION, plan=proposal), store=store))
+
+
+def _walk_one_decision(store, tmp_path, value: str):
+    """One objection in the frame, decided by the user with `value`; returns its id."""
     _frame_plan(store, tmp_path)
     plain = _break(store, tmp_path, name="plain.toml")
     assert plain.ok is False and "does not say how it keeps binding condition 'B1'" in _text_of(plain)
     assert _stored(store).objections == []
+    unknown = _break(store, tmp_path, "ghost", name="unknown.toml")
+    assert unknown.ok is False and "'ghost'" in _text_of(unknown) and "['B1']" in _text_of(unknown)
+    assert _stored(store).objections == []
+    assert _frame_replan(store, tmp_path, name="quiet.toml").ok, "a replan naming no condition is untouched"
 
     refused = _break(store, tmp_path, "B1")
     assert refused.ok is False and "condition-decide" in _text_of(refused), _text_of(refused)
     (objection_id,) = _objection_ids(refused)
     (raised,) = _stored(store).objections
-    assert raised["id"] == objection_id and raised["condition"] == "B1" and raised["status"] == "open"
-    assert raised["raised_by"] == FRAME and raised["site"]["key"] is None
+    assert raised["id"] == objection_id == f"{FRAME}:1" and raised["condition"] == "B1"
+    assert raised["status"] == "open" and raised["raised_by"] == FRAME and raised["site"]["key"] is None
+    assert [d.value for d in _stored(store).setter_decisions] == ["kept"], (
+        "the kept decision of the first agreement is on record and lifts nothing now")
 
     again = _break(store, tmp_path, "B1", name="again.toml")
     assert _objection_ids(again) == [objection_id] and len(_stored(store).objections) == 1
@@ -1524,52 +1641,87 @@ def test_binding_condition_break_refused_until_setter_decides(home_store, tmp_pa
     assert by_agent.ok is False and "only the user decides" in by_agent.detail
     unanswered = _decide(store, objection_id, "withdrawn", by="fedor")
     assert unanswered.ok is False and condition_decide_marker(objection_id, "withdrawn") in unanswered.detail
+    new_text = "no push to main" if value == "changed" else ""
+    assert _users_decision(store, objection_id, value, new_text).ok
+    return objection_id
 
-    assert _users_decision(store, objection_id, "withdrawn").ok
+
+def _case_withdrawn(request, tmp_path):
+    store, = _by_fixture(request, "home_store")
+    objection_id = _walk_one_decision(store, tmp_path, "withdrawn")
     passed = _break(store, tmp_path, "B1", name="passes.toml")
     assert passed.ok, (passed.detail, passed.data)
     assert _stored(store).objections[0]["status"] == "consumed"
+    assert [d["value"] for d in store.load(FRAME).root_conditions["decisions"]] == ["withdrawn"]
+    second = _decide(store, objection_id, "kept", by="fedor")
+    assert second.ok is False and "takes no second decision" in second.detail
+    released = _break(store, tmp_path, name="released.toml")
+    assert released.ok, ("withdrawn releases the condition from check 13", released.detail)
 
 
-def test_condition_decide_only_from_setter_level(home_store, tmp_path):
-    """The raising session cannot decide for itself, a decision names a value and a text that go
-    together, and an objection nobody raised is refused naming those open."""
-    store = home_store
-    _frame_plan(store, tmp_path)
-    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
+def _case_changed(request, tmp_path):
+    """`changed` lifts the refusal of the objection but re-binds the condition to its new text: the
+    plan must still say how it keeps it (check 13) until the setter withdraws it."""
+    store, = _by_fixture(request, "home_store")
+    objection_id = _walk_one_decision(store, tmp_path, "changed")
+    (written,) = store.load(FRAME).root_conditions["decisions"]
+    assert written["version"] == 2 and written["new_text"] == "no push to main"
 
-    assert "no objection 'ghost'" in _decide(store, "ghost", "withdrawn").detail
-    assert "--new-text" in _decide(store, objection_id, "changed", by="fedor").detail
-    assert "`changed` decision only" in _decide(store, objection_id, "withdrawn", new_text="x").detail
-    assert "--value is one of" in _decide(store, objection_id, "ignored").detail
-    refused = _decide(store, objection_id, "changed", new_text="no push to main")
-    assert refused.ok is False and "only the user decides" in refused.detail
-    assert store.load(FRAME).root_conditions.get("decisions") in (None, [])
+    passed = _break(store, tmp_path, "B1", drop=(), name="passes.toml")
+    assert passed.ok, (passed.detail, passed.data)
+    assert _stored(store).objections[0]["status"] == "consumed"
+
+    rebound = _break(store, tmp_path, name="rebound.toml")
+    assert rebound.ok is False and "does not say how it keeps binding condition 'B1'" in _text_of(rebound), (
+        "a changed condition still binds: only a withdrawal releases it")
+    second = _decide(store, objection_id, "withdrawn", by="fedor")
+    assert second.ok is False and "takes no second decision" in second.detail
+    (again,) = _objection_ids(_break(store, tmp_path, "B1", name="raise-again.toml"))
+    assert again == f"{FRAME}:2"
+    assert _users_decision(store, again, "withdrawn").ok
+    assert _break(store, tmp_path, name="released.toml").ok
 
 
-_BREAK_BOTH = (_HOW_KEPT_B1, _HOW_KEPT_B2_ONLY)
+def _case_kept(request, tmp_path):
+    """`kept` keeps the refusal and takes no second decision: the way on is the replan that keeps
+    the condition, or a replan naming it again, which raises a new objection of its own."""
+    store, = _by_fixture(request, "home_store")
+    objection_id = _walk_one_decision(store, tmp_path, "kept")
+
+    still = _break(store, tmp_path, "B1", name="still.toml")
+    assert still.ok is False and "setter level kept condition B1" in _text_of(still)
+    assert "takes no second decision" in _text_of(still) and "--value" not in _text_of(still), (
+        "the refusal does not invite a second decision on the closed objection")
+    assert "leave --breaks-condition out" in _text_of(still) and "raises a new objection" in _text_of(still)
+    assert _stored(store).objections[0]["status"] == "kept"
+    second = _decide(store, objection_id, "withdrawn", by="fedor")
+    assert second.ok is False and "takes no second decision" in second.detail
+
+    assert _break(store, tmp_path, drop=(), name="keeps.toml").ok, "keeping the condition is a way on"
+    (new_id,) = _objection_ids(_break(store, tmp_path, "B1", name="raise-new.toml"))
+    assert new_id == f"{FRAME}:2" != objection_id
+    assert _users_decision(store, new_id, "withdrawn").ok
+    assert _break(store, tmp_path, "B1", name="passes.toml").ok
 
 
-def test_decision_on_one_objection_does_not_lift_another(home_store, tmp_path):
-    """Two conditions, two objections: a decision on B1 leaves B2 refused, and a decision that
-    keeps B2 lifts nothing."""
-    store = home_store
-    _two_condition_frame(store, tmp_path)
-    both = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH)
-    first, second = sorted(_objection_ids(both), key=lambda i: "B2" in i)
-    assert len(_stored(store).objections) == 2 and "B1" in first and "B2" in second
+_BREAK_CASES = {
+    "withdrawn": _case_withdrawn,
+    "changed": _case_changed,
+    "kept": _case_kept,
+    "root-order": _case_root_session_replanning_the_root_order,
+    "root-order-changed-text-shown": _case_changed_text_reaches_the_presented_rendering,
+    "old-form-order": _case_old_form_order_has_no_condition_to_object_to,
+}
 
-    assert _users_decision(store, first, "withdrawn").ok
-    still = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH, name="still.toml")
-    assert still.ok is False and _objection_ids(still) == [second]
 
-    assert _users_decision(store, second, "kept").ok
-    kept = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH, name="kept.toml")
-    assert kept.ok is False and "setter level kept condition B2" in _text_of(kept)
-
-    assert _users_decision(store, second, "withdrawn").ok
-    done = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH, name="done.toml")
-    assert done.ok, (done.detail, done.data)
+@pytest.mark.parametrize("case", list(_BREAK_CASES))
+def test_binding_condition_break_refused_until_setter_decides(request, tmp_path, case):
+    """A replan that no longer keeps a binding condition is refused by check 13 as it was; one that
+    names the condition it breaks mints an objection with its own id and is refused until the level
+    that set the condition has decided it. Each decision value (`withdrawn`, `changed`, `kept`) is
+    walked through the verbs in a frame, the root session's own order, the text a `changed` decision
+    leaves in the rendering the user is shown, and the old-form order that carries no condition."""
+    _BREAK_CASES[case](request, tmp_path)
 
 
 def test_condition_decide_registered_in_every_verb_set():
@@ -1581,11 +1733,37 @@ def test_condition_decide_registered_in_every_verb_set():
     assert "condition-decide" in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
 
 
-def test_any_setter_decision_unblocks_registered():
+def test_any_setter_decision_unblocks_is_registered():
+    """The mutant is registered; the test that kills it is
+    `test_decision_on_one_objection_does_not_lift_another`, not this one."""
     assert "any_setter_decision_unblocks" in MUTANTS
-    decisions = [sub_plan.SetterDecision.from_dict(
-        {"condition": "B2", "value": "kept", "setter": "u", "decided_by": "u", "objection": "o-2"})]
-    assert sub_plan.objection_lifted({"id": "o-1"}, decisions) is False
+
+
+def test_decision_on_one_objection_does_not_lift_another(home_store, tmp_path):
+    """A decision answers the objection it names and no other, even one to the same condition.
+    The setter level decides objection A of B1 `changed`; the replan that raised A is accepted and
+    uses it up. A later replan naming B1 raises objection B: it is refused naming B until a
+    decision naming B exists, and A's decision lifts nothing; then B's decision lifts it.
+    The mutant `any_setter_decision_unblocks` (a decision on the same condition lifts) reads B as
+    lifted from A's decision and lets that replan through."""
+    store = home_store
+    _frame_plan(store, tmp_path)
+    (first,) = _objection_ids(_break(store, tmp_path, "B1"))
+    assert _users_decision(store, first, "changed", "no push to main").ok
+    assert _break(store, tmp_path, "B1", drop=(), name="uses-a-up.toml").ok
+    assert _stored(store).objections[0]["status"] == "consumed"
+
+    refused = _break(store, tmp_path, "B1", drop=(), name="raises-b.toml")
+    assert refused.ok is False, "the decision on objection A lifted the later objection B"
+    (second,) = _objection_ids(refused)
+    assert second != first and second == f"{FRAME}:2"
+    assert f"decides objection {second}" in _text_of(refused), _text_of(refused)
+    assert first not in _text_of(refused).replace(second, "")
+    assert [d["objection"] for d in store.load(FRAME).root_conditions["decisions"]] == [first]
+    assert _break(store, tmp_path, "B1", drop=(), name="still-b.toml").ok is False
+
+    assert _users_decision(store, second, "withdrawn").ok
+    assert _break(store, tmp_path, "B1", drop=(), name="lifted-by-b.toml").ok
 
 
 def test_condition_text_readers_use_the_resolver(tmp_path, monkeypatch):
@@ -1597,11 +1775,11 @@ def test_condition_text_readers_use_the_resolver(tmp_path, monkeypatch):
     doc, _ = load_order_draft(str(_sides(tmp_path, "d.toml", extra=BESIDE)))
     old, new = "no change to the release branch", "no change to any branch"
     decision = {"condition": "B1", "value": "changed", "setter": "user", "decided_by": "user",
-                "objection": "o-1", "new_text": new, "version": 1}
+                "objection": "o-1", "new_text": new, "version": 2}
     plain = "\n".join(render.render_order_md(doc))
     decided = "\n".join(render.render_order_md(doc, [decision]))
     assert old in plain and new not in plain
-    assert new in decided and old not in decided
+    assert new in decided and old not in decided and "version 2" in decided
 
     monkeypatch.setattr(method_statement, "binding_exempt", lambda: False)
     texts = [s.text for s in method_statement.order_statements(doc.meta.order, [decision])
@@ -1614,7 +1792,7 @@ _PLAN_FILE_FIELDS = [
                          'setter = "user"\ndecided_by = "user"\n', "condition-decide"),
     ("objections", '\n[[meta.sub_plan.objections]]\nid = "forged"\ncondition = "B1"\nstatus = "open"\n',
      "replan --breaks-condition"),
-    ("reviews", '\n[[meta.sub_plan.reviews]]\nkind = "x"\nverdict = "pass"\n', "plan-review-compose"),
+    ("reviews", '\n[[meta.sub_plan.reviews]]\nkind = "x"\nverdict = "pass"\n', "plan-review --plan-digest"),
 ]
 
 
@@ -1652,15 +1830,24 @@ def test_decision_moves_neither_agreed_digest_nor_priced_figures(home_store, tmp
     assert sub_plan.estimate_copy(store.load(FRAME), 1, 0) == figure
 
 
-def _middle_level_contour(store, tmp_path: Path):
-    """Parent `p` is itself a contour (linked at stage 4 of its own parent) and set B1 on its stage
-    1; the child contour `c` builds that stage and has submitted its plan."""
-    from test_stage_order_subplan import _RECORD_HEAD as head, _walk_to_submit_in_contour
+def _middle_level_contour(store, tmp_path: Path, *, user_set: bool = False):
+    """Parent `p` is itself a contour (linked at stage 4 of its own parent `g`); the child contour
+    `c` builds p's stage 1 and has submitted its plan. By default `p` set B1 on that stage itself
+    (its norm from `g` carries no condition). With `user_set`, B1 reaches `p` from above, from the
+    user's order that `g` holds (`g` is a saved root session carrying it), and `c` inherits it.
+
+    `p`'s `parent_link` is written here and not by a verb: the only writer is the adoption of a
+    spawn handoff (`cli_common._adopt_norm_handoff`, at `start` under `AGENTCTL_NORM_HANDOFF`),
+    which needs the spawner's handoff file and child-session record of a real spawn; the same
+    holds for `c`'s link in `_walk_to_submit_in_contour`."""
+    from test_stage_order_subplan import _NORM, _RECORD_HEAD as head, _described_parent, _walk_to_submit_in_contour
 
     submitted = _walk_to_submit_in_contour(store, tmp_path, head + _HOW_KEPT)
     assert submitted.ok, submitted.data
+    if user_set:
+        _described_parent(store, "g")
     parent = store.load("p")
-    parent.parent_link = {"parent_session": "g", "stage_index": 4, "norm": {}}
+    parent.parent_link = {"parent_session": "g", "stage_index": 4, "norm": _NORM if user_set else {}}
     store.save(parent)
 
 
@@ -1685,7 +1872,7 @@ def test_below_root_decision_lands_where_check_13_reads_it(home_store, tmp_path)
     assert decided.ok, decided.detail
     (written,) = store.load("p").sub_plan_records["4"]["setter_decisions"]
     assert written["objection"] == objection_id and written["value"] == "changed"
-    assert written["new_text"] == "no push to main" and written["version"] == 1
+    assert written["new_text"] == "no push to main" and written["version"] == 2
     assert store.load("c").sub_plan_records.get("0:1", {}).get("setter_decisions") in (None, [])
 
     seen = cli_common._stage_order_context(store.load("c"), store=store).binding_conditions
@@ -1695,18 +1882,13 @@ def test_below_root_decision_lands_where_check_13_reads_it(home_store, tmp_path)
     assert sub_plan.stored_record(store.load("c"), 1).objections[0]["status"] == "consumed"
 
 
-def test_inherited_condition_refusal_names_who_acts_next_and_each_way_is_walked(home_store, tmp_path):
-    """The child contour `c` builds a stage of the frame session `w`, and B1 reaches it unchanged
-    from the root (w carries it from above): `c` may not break it. The refusal mints no objection
-    and names the two ways on; both are walked through the verbs. (1) Keeping the condition: the
-    same plan without --breaks-condition passes. (2) The level above, `w`, raises the objection
-    against its own carried condition, the user's marked answer decides it at the root, and `w`'s
-    replan passes. What is not walked is the last hop: `w` dispatching `c` again with the handoff
-    norm re-read, which is a spawn."""
+def _frame_child_contour(store, tmp_path: Path) -> Path:
+    """The child contour `c` builds stage 1 of the frame session `w`, which holds the user's order:
+    B1 reaches `c` unchanged from the root. Returns `c`'s plan directory. (`c`'s `parent_link` is
+    written here for the reason given in `_middle_level_contour`.)"""
     from test_submit_plan_surfaces import _session as _classified, _write_plan
     from test_stage_order_subplan import _NORM
 
-    store = home_store
     _frame_plan(store, tmp_path)
     c_dir = tmp_path / "c"
     c_dir.mkdir()
@@ -1720,20 +1902,261 @@ def test_inherited_condition_refusal_names_who_acts_next_and_each_way_is_walked(
                          encoding="utf-8")
     submitted = cli.cmd_submit_plan(ns(session="c", plan=str(plan_file)), store=store)
     assert submitted.ok, submitted.data
+    return c_dir
+
+
+def _inherited_chain(kind: str, store, tmp_path: Path) -> tuple[str, Path, str]:
+    """A user-set condition reaching a child contour `c`: (the session that holds the user's
+    order and decides, `c`'s plan directory, the session between them or `c`'s own parent)."""
+    if kind == "frame":
+        return FRAME, _frame_child_contour(store, tmp_path), FRAME
+    _middle_level_contour(store, tmp_path, user_set=True)
+    return "g", tmp_path, "p"
+
+
+@pytest.mark.parametrize("kind", ["frame", "contour"])
+def test_inherited_condition_objection_is_decided_at_the_root_and_read_by_the_child(
+        home_store, tmp_path, kind):
+    """B1 was set by the user and reaches the child contour `c` unchanged (through the frame `w`
+    that holds the order, or through a middle contour `p` linked to the root session `g`). `c`'s
+    replan naming B1 raises an objection at once (no refusal at raise beyond the pending decision),
+    carried in `c`'s own record; the root decides it by naming that id, with the user's marked
+    answer, and the entry lands in the setter-decision list of the record `c`'s plan carries, which
+    `c`'s replan reads: the last hop. A `changed` decision shows its text and version 2 in `c`'s
+    reading of its conditions."""
+    store = home_store
+    root, c_dir, mid = _inherited_chain(kind, store, tmp_path)
 
     refused = _break(store, c_dir, "B1", sid="c")
-    text = _text_of(refused)
-    assert refused.ok is False and "objections" not in refused.data, text
-    assert f"set above session {FRAME}" in text and f"return `REPLAN:` to {FRAME}" in text
-    assert "replan --breaks-condition B1" in text and "condition-decide --objection <id>" in text
-    assert "leave them out of --breaks-condition" in text
-    assert sub_plan.stored_record(store.load("c"), 1).objections == []
+    assert refused.ok is False and "condition-decide" in _text_of(refused), _text_of(refused)
+    (objection_id,) = _objection_ids(refused)
+    (raised,) = sub_plan.stored_record(store.load("c"), 1).objections
+    assert raised["id"] == objection_id == "c:1" and raised["site"]["owner"] == root
+    assert raised["site"]["key"] is None and raised["inherited_into"] == {"session": "c", "key": "1"}
+    assert str(root) in _text_of(refused) and "marked answer" in _text_of(refused)
 
-    kept = _break(store, c_dir, sid="c", name="kept.toml", drop=())
-    assert kept.ok, (kept.detail, kept.data)
+    unanswered = _decide(store, objection_id, "changed", by="fedor", new_text="no push to main", sid=root)
+    assert unanswered.ok is False and condition_decide_marker(objection_id, "changed") in unanswered.detail
+    assert _users_decision(store, objection_id, "changed", "no push to main", sid=root).ok
+    assert [d["objection"] for d in store.load("c").sub_plan_records["1"]["setter_decisions"]
+            if d.get("objection")] == [objection_id], "the entry is in the record c's plan carries"
+    assert not store.load(root).root_conditions.get("decisions"), "and not in the root's own list"
 
-    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
-    assert _stored(store).objections[0]["site"]["key"] is None
-    assert _users_decision(store, objection_id, "withdrawn").ok
-    passed = _break(store, tmp_path, "B1", name="passes.toml")
+    seen = cli_common._stage_order_context(store.load("c"), store=store).binding_conditions
+    assert [(c["text"], c.get("version")) for c in seen] == [("no push to main", 2)]
+    passed = _break(store, c_dir, "B1", sid="c", name="passes.toml", drop=())
     assert passed.ok, (passed.detail, passed.data)
+    assert sub_plan.stored_record(store.load("c"), 1).objections[0]["status"] == "consumed"
+    second = _decide(store, objection_id, "withdrawn", by="fedor", sid=root)
+    assert second.ok is False and "takes no second decision" in second.detail
+
+
+# --- `condition-decide` is the setter level's act: every refusal paired with the decision that lifts
+
+
+def _none_recorded(store, *sids: str) -> None:
+    for sid in sids:
+        state = store.load(sid)
+        assert not (state.root_conditions.get("decisions") or []), sid
+        assert all(not raw.get("setter_decisions") or
+                   all(not d.get("objection") for d in raw["setter_decisions"])
+                   for raw in state.sub_plan_records.values()), sid
+
+
+def _setter_case_unknown_id_and_argument_pairing(request, tmp_path):
+    store, = _by_fixture(request, "home_store")
+    _frame_plan(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
+
+    ghost = _decide(store, "ghost", "withdrawn", by="fedor")
+    assert ghost.ok is False and "no objection 'ghost'" in ghost.detail and objection_id in ghost.detail
+    bad = _decide(store, objection_id, "bogus", by="fedor")
+    assert bad.ok is False and "--value is one of" in bad.detail
+    no_text = _decide(store, objection_id, "changed", by="fedor")
+    assert no_text.ok is False and "--new-text" in no_text.detail
+    stray = _decide(store, objection_id, "withdrawn", by="fedor", new_text="x")
+    assert stray.ok is False and "`changed` decision only" in stray.detail
+    _none_recorded(store, FRAME)
+    assert _break(store, tmp_path, "B1", name="still.toml").ok is False
+
+    assert _users_decision(store, objection_id, "withdrawn").ok
+    assert _break(store, tmp_path, "B1", name="passes.toml").ok
+
+
+def _setter_case_root_session_replanning_the_root_order(request, tmp_path):
+    _case_root_session_replanning_the_root_order(request, tmp_path)
+
+
+def _setter_case_own_channel_names_only_the_callers_own_level(request, tmp_path):
+    """The own channel names the calling session (`AGENTCTL_OWN_SESSION`): a decision for another
+    session's level through it is refused and records nothing; the same call from the level's own
+    session, by the user on the marked answer, lifts the replan."""
+    from agentctl.own_contour import OWN_SESSION_ENV
+
+    store, monkeypatch = _by_fixture(request, "home_store", "monkeypatch")
+    _frame_plan(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
+
+    monkeypatch.setenv(OWN_SESSION_ENV, "c")
+    foreign = _users_decision(store, objection_id, "withdrawn")
+    assert foreign.ok is False and "calling session's own level" in foreign.detail, foreign.detail
+    _none_recorded(store, FRAME)
+    assert _break(store, tmp_path, "B1", name="still.toml").ok is False
+
+    monkeypatch.setenv(OWN_SESSION_ENV, FRAME)
+    assert _users_decision(store, objection_id, "withdrawn").ok
+    assert _break(store, tmp_path, "B1", name="passes.toml").ok
+
+
+def _setter_case_a_specialist_is_granted_no_decision(request, tmp_path):
+    """`condition-decide` is a user-authority verb: a rule granting it through `agentctl-cli.py` is
+    refused at validation, so no spawned specialist holds it (a linked child reaches it only
+    through `agentctl-own.py`, whose channel fixes its session: the case above)."""
+    from agentctl import grants
+
+    rule = f"Bash(python3 {Path(__file__).resolve().parent.parent}/agentctl-cli.py condition-decide:*)"
+    with pytest.raises(grants.GrantValidationError) as refused:
+        grants.validate_rule(rule)
+    assert "condition-decide" in str(refused.value) and "user-authority verb" in str(refused.value)
+
+
+def _setter_case_second_decision_is_refused(request, tmp_path):
+    store, = _by_fixture(request, "home_store")
+    _frame_plan(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
+    assert _users_decision(store, objection_id, "withdrawn").ok
+    again = _users_decision(store, objection_id, "withdrawn")
+    other = _users_decision(store, objection_id, "kept")
+    assert again.ok is False and other.ok is False and "takes no second decision" in other.detail
+    assert [d["objection"] for d in store.load(FRAME).root_conditions["decisions"]] == [objection_id]
+    assert _break(store, tmp_path, "B1", name="passes.toml").ok
+    used_up = _users_decision(store, objection_id, "changed", "no push to main")
+    assert used_up.ok is False and "takes no second decision" in used_up.detail
+    assert len(store.load(FRAME).root_conditions["decisions"]) == 1
+
+
+def _middle_level_that_carries_no_condition(store, tmp_path: Path) -> None:
+    """`_middle_level_contour` with the middle level's norm stating a stage description that holds
+    no condition: its carried conditions are then known to be none, so a `withdrawn` decision on
+    the condition it set itself releases it (with an empty norm they are unknown, and the
+    withdrawal releases nothing: `cli_common._setter_level_released`)."""
+    _middle_level_contour(store, tmp_path)
+    parent = store.load("p")
+    parent.parent_link["norm"] = {"description_place": [["description", "the engine", [], None, [], None]]}
+    store.save(parent)
+
+
+def _setter_case_the_parent_decides_the_condition_it_set(request, tmp_path):
+    """B1 was set by the middle contour `p` itself. The raising child `c` cannot decide the
+    objection, whatever it is called by (a user's `--by <name>` and a marked answer are no way past
+    the level), and its replan stays refused; `p`'s agent decides it, the entry lands in `p`'s
+    record of the stage it was linked at, and `c`'s replan passes."""
+    store, = _by_fixture(request, "home_store")
+    _middle_level_that_carries_no_condition(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1", sid="c"))
+
+    by_agent =_decide(store, objection_id, "withdrawn", sid="c")
+    by_name = _users_decision(store, objection_id, "withdrawn", sid="c")
+    for refused in (by_agent, by_name):
+        assert refused.ok is False and "keeps its decisions in session 'p'" in refused.detail, refused.detail
+    _none_recorded(store, "c", "p")
+    assert _break(store, tmp_path, "B1", sid="c", name="still.toml").ok is False
+
+    assert _decide(store, objection_id, "withdrawn", sid="p").ok
+    (written,) = store.load("p").sub_plan_records["4"]["setter_decisions"]
+    assert written["decided_by"] == "agent" and written["objection"] == objection_id
+    passed = _break(store, tmp_path, "B1", sid="c", name="passes.toml")
+    assert passed.ok, (passed.detail, passed.data)
+
+
+def _setter_case_a_session_below_the_setters_plan_is_refused_with_a_way_on(request, tmp_path):
+    """`p` set B1 for its stage 1 but has pushed a frame, so it runs a plan below the one that set
+    it: its agent is refused naming the ways on, and each is walked: the child replans keeping the
+    condition; the frame resolves and pops (`pop-subplan`), and the same decision then records."""
+    store, = _by_fixture(request, "home_store")
+    _middle_level_that_carries_no_condition(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1", sid="c"))
+    pushed =cli.cmd_push_subplan(ns(session="p", plan=str(tmp_path / "plan.toml"), task=None,
+                                     originating_stage=1), store=store)
+    assert pushed.ok, pushed.detail
+
+    below = _decide(store, objection_id, "withdrawn", sid="p")
+    assert below.ok is False and "pop-subplan" in below.detail and "leave --breaks-condition out" in below.detail
+    _none_recorded(store, "p")
+    assert _break(store, tmp_path, sid="c", drop=(), name="keeps.toml").ok, "keeping the condition is a way on"
+
+    _resolve_and_pop(store, "p")
+    assert _decide(store, objection_id, "withdrawn", sid="p").ok
+    passed = _break(store, tmp_path, "B1", sid="c", name="passes.toml")
+    assert passed.ok, (passed.detail, passed.data)
+
+
+def _setter_case_an_id_held_by_two_sessions_decides_nothing(request, tmp_path):
+    """No verb mints an id twice (`<raising session>:<n>` over that session's own objections), so
+    the duplicate is placed in the middle session's record by hand: the decision names an id two
+    sessions hold, so it is refused and records nothing rather than answer the first match."""
+    store, = _by_fixture(request, "home_store")
+    _middle_level_contour(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1", sid="c"))
+    twin = dict(sub_plan.stored_record(store.load("c"), 1).objections[0])
+    parent = store.load("p")
+    parent.sub_plan_records.setdefault("4", {})["objections"] = [twin]
+    store.save(parent)
+
+    refused = _decide(store, objection_id, "withdrawn", sid="p")
+    assert refused.ok is False and "more than one session" in refused.detail, refused.detail
+    _none_recorded(store, "p", "c")
+
+
+def _setter_case_a_user_set_condition_is_decided_at_the_root(request, tmp_path, kind):
+    """B1 was set by the user and reaches the child contour `c` (and, in the contour kind, the
+    middle contour `p` between `c` and the root session `g`). Neither `c` nor the middle level can
+    decide the objection `c` raised, by agent or by a user's name with a marked answer; the root
+    session's agent cannot either (the root level's decision is the user's); the user at the root,
+    on the marked answer, can, and `c`'s replan then passes."""
+    store, = _by_fixture(request, "home_store")
+    root, c_dir, mid = _inherited_chain(kind, store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, c_dir, "B1", sid="c"))
+
+    sessions = ["c"] if mid == root else ["c", mid]
+    for sid in sessions:
+        for refused in (_decide(store, objection_id, "withdrawn", sid=sid),
+                        _users_decision(store, objection_id, "withdrawn", sid=sid)):
+            assert refused.ok is False, (sid, refused.detail)
+            assert f"keeps its decisions in session {root!r}" in refused.detail, (sid, refused.detail)
+    by_agent = _decide(store, objection_id, "withdrawn", sid=root)
+    assert by_agent.ok is False and "only the user decides" in by_agent.detail
+    _none_recorded(store, "c", mid, root)
+    assert _break(store, c_dir, "B1", sid="c", name="still.toml").ok is False
+
+    assert _users_decision(store, objection_id, "withdrawn", sid=root).ok
+    assert _break(store, c_dir, "B1", sid="c", name="passes.toml").ok
+
+
+_SETTER_CASES = {
+    "unknown-id-and-argument-pairing": _setter_case_unknown_id_and_argument_pairing,
+    "root-session-replanning-the-root-order": _setter_case_root_session_replanning_the_root_order,
+    "own-channel": _setter_case_own_channel_names_only_the_callers_own_level,
+    "specialist": _setter_case_a_specialist_is_granted_no_decision,
+    "second-decision": _setter_case_second_decision_is_refused,
+    "parent-decides-its-own-condition": _setter_case_the_parent_decides_the_condition_it_set,
+    "below-the-setters-plan": _setter_case_a_session_below_the_setters_plan_is_refused_with_a_way_on,
+    "id-held-by-two-sessions": _setter_case_an_id_held_by_two_sessions_decides_nothing,
+    "user-set-from-a-child-in-a-frame":
+        lambda request, tmp_path: _setter_case_a_user_set_condition_is_decided_at_the_root(
+            request, tmp_path, "frame"),
+    "user-set-from-a-child-and-a-middle-contour":
+        lambda request, tmp_path: _setter_case_a_user_set_condition_is_decided_at_the_root(
+            request, tmp_path, "contour"),
+}
+
+
+@pytest.mark.parametrize("case", list(_SETTER_CASES))
+def test_condition_decide_only_from_setter_level(request, tmp_path, case):
+    """Only the level that set a condition decides an objection to it, and only on its own session:
+    the root level's decision is the user's marked answer; a level set by a contour or frame is the
+    agent's of that session while it runs the setter's plan or one above. Not the session that
+    raised the objection, not a session below the setter's plan, not another session through the
+    own channel, not a spawned specialist (no grant), not a second time for the same objection, not
+    for an unknown or ambiguous id; each refusal is paired with the decision that lifts it."""
+    _SETTER_CASES[case](request, tmp_path)

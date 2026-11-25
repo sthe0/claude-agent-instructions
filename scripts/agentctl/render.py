@@ -32,7 +32,7 @@ from pathlib import Path
 from lib import kind_baselines, principle_provenance
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
-from . import grants as _grants, plan_refs, plan_store, protected_actions, sub_plan
+from . import gates, grants as _grants, plan_refs, plan_store, protected_actions, sub_plan
 from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
 from .plan import (
@@ -309,8 +309,9 @@ def _two_sided_order_md(order, condition_decisions=()) -> list[str]:
         lines.append("- **Binding conditions:**")
         for b in order.binding_conditions:
             objection = f" — objection ({b.objection_by}): {b.objection_text}" if b.objection_text else ""
-            text, _ = sub_plan.current_condition_text({"id": b.id, "text": b.text}, condition_decisions)
-            lines.append(f"  - **{b.id}** (set by {b.set_by}): {text}{objection}")
+            text, version = gates.current_condition_text({"id": b.id, "text": b.text}, condition_decisions)
+            changed = f" (version {version}, changed by the setter level)" if version > 1 else ""
+            lines.append(f"  - **{b.id}** (set by {b.set_by}): {text}{changed}{objection}")
     lines += ["", ORDER_EXECUTOR_MARKER, "", *_requirement_lines(order), *_understanding_lines(order)]
     executor = order.executor_side
     if executor is not None:
@@ -423,11 +424,13 @@ def _lazy_lines(s) -> list[str]:
     return ["- **Lazy:** yes — a sub-plan unfolds it; its budget then is the planning fallback"] if s.lazy else []
 
 
-def render_plan_md(doc: PlanDoc) -> str:
-    """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order."""
+def render_plan_md(doc: PlanDoc, condition_decisions=()) -> str:
+    """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order.
+    `condition_decisions`: see `render_order_md`; a view the user or a reviewer reads passes the
+    session's, a render that is hashed passes none."""
     lines: list[str] = []
     lines.extend(render_meta_md(doc))
-    lines.extend(render_order_md(doc))
+    lines.extend(render_order_md(doc, condition_decisions))
 
     for s in doc.stages:
         lines.append(f"## Stage {s.index}: {s.title}")
@@ -741,13 +744,15 @@ METHOD_CONCERN_ROUTING = (
 )
 
 
-def node_file_text(doc: PlanDoc, node: "int | str") -> str:
+def node_file_text(doc: PlanDoc, node: "int | str", condition_decisions=()) -> str:
     """One node's own FULL file: the order block for `base` (empty when the
     plan declares no order), `render_stage_brief` for a stage. The bundle's
     inlined text and the materialized file are both this one function's
-    output. The `base` unit's own fields (`unit_base_text`) add the meta."""
+    output. The `base` unit's own fields (`unit_base_text`) add the meta.
+    The file digests (`plan.py`) hash it with no `condition_decisions`: a digest binds the plan's
+    bytes, which a decision does not change."""
     if node == PAIR_BASE_NODE:
-        lines = render_order_md(doc)
+        lines = render_order_md(doc, condition_decisions)
         return _lines_text(lines) if lines else ""
     if _is_description_stage(doc, int(node)):
         return render_stage_order(doc, int(node))
@@ -774,11 +779,11 @@ def render_stage_order(doc: PlanDoc, stage_index: int) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def unit_base_text(doc: PlanDoc) -> str:
+def unit_base_text(doc: PlanDoc, condition_decisions=()) -> str:
     """Every field of the `base` unit: the meta (goal, done criterion), the order
     (customer, functional place, requirements with derivations), its coverage map
     and the final checks."""
-    return _lines_text(_meta_node_lines(doc) + render_final_checks_md(doc))
+    return _lines_text(_meta_node_lines(doc, condition_decisions) + render_final_checks_md(doc))
 
 
 def row_part_text(doc: PlanDoc, review_id: str) -> str:
@@ -1540,12 +1545,12 @@ _DRAFT_COVERAGE_LINE = (
 )
 
 
-def _meta_node_lines(doc: PlanDoc) -> list[str]:
+def _meta_node_lines(doc: PlanDoc, condition_decisions=()) -> list[str]:
+    order = render_order_md(doc, condition_decisions)
     if not doc.stages:
-        return (render_meta_md(doc) + render_order_md(doc) + render_order_understanding_md(doc)
+        return (render_meta_md(doc) + order + render_order_understanding_md(doc)
                 + [_DRAFT_COVERAGE_LINE, ""])
-    return (render_meta_md(doc) + render_order_md(doc) + render_order_understanding_md(doc)
-            + render_order_coverage_md(doc))
+    return render_meta_md(doc) + order + render_order_understanding_md(doc) + render_order_coverage_md(doc)
 
 
 def _meta_extra_lines(doc: PlanDoc) -> list[str]:
@@ -2560,6 +2565,19 @@ def _externalized_section(entries: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _root_condition_decisions(session: "str | None", store) -> list:
+    """The decisions the root level recorded on the order's binding conditions in `session`, so
+    the rendering the user reads shows a changed condition as it stands now. A render with no
+    session, or whose session has no state, is the plan file as written."""
+    if not session or store is None:
+        return []
+    try:
+        state = store.load(session)
+    except Exception:
+        return []
+    return list(state.root_conditions.get("decisions") or []) if state is not None else []
+
+
 def cmd_plan_render(args, *, store=None, runner=None) -> Directive:
     """Render the declared TOML plan to markdown on demand — a read-only PROJECTION,
     never written to disk by the engine. The markdown is the Directive's detail (the
@@ -2577,8 +2595,9 @@ def cmd_plan_render(args, *, store=None, runner=None) -> Directive:
     `render_stage_brief` in the single-stage case."""
     doc = load_plan(args.plan)
     stage_indices = _parse_stage_arg(getattr(args, "stage", None))
+    decisions = _root_condition_decisions(getattr(args, "session", None), store)
     if stage_indices is None:
-        md = render_plan_md(doc)
+        md = render_plan_md(doc, decisions)
     elif len(stage_indices) == 1:
         try:
             md = render_stage_brief(doc, stage_indices[0])

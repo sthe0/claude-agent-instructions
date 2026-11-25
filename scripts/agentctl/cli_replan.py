@@ -99,7 +99,10 @@ from .cli_common import (
     _submission_problems,
     _stage_order_context,
     _state_lock,
+    SetterSite,
     _setter_site,
+    _origin_site,
+    _objection_decisions,
     _parent_state_of,
     _conditions_securing_required,
     _clear_open_fires_if_customer,
@@ -1180,78 +1183,79 @@ def _condition_objection_gate(ctx: _ReplanContext) -> Directive | None:
     ids = list(dict.fromkeys(getattr(args, "breaks_condition", None) or ()))
     if not ids:
         return None
-    order = _stage_order_context(state, store=store)
-    if order.expected_stage is None or not order.binding_conditions:
-        return _objection_refusal(
-            state, "--breaks-condition names a binding condition of the stage this session's plan "
-            "builds, and no stage's binding conditions bind this session: leave the option out")
-    site = _setter_site(state, _parent_state_of(state, store))
-    if site is None:
-        return _objection_refusal(
-            state, "the level that set these conditions cannot be read from this session (its "
-            "state is not available): run the replan again once the parent session's state exists")
-    conditions = order.binding_conditions
+    parent_state = _parent_state_of(state, store)
+    root_order = not state.plan_stack and not state.parent_link
+    if root_order:
+        site = SetterSite(state, None, None, 0)
+        stage = None
+        conditions = gates.with_current_text(_root_order_conditions(state), site.decisions())
+        storage = state.root_conditions.setdefault("objections", [])
+        if not conditions:
+            return _objection_refusal(
+                state, "--breaks-condition names a binding condition of the order this session "
+                "works to, and the agreed order carries none: leave the option out")
+    else:
+        order = _stage_order_context(state, store=store)
+        if order.expected_stage is None or not order.binding_conditions:
+            return _objection_refusal(
+                state, "--breaks-condition names a binding condition of the stage this session's plan "
+                "builds, and no stage's binding conditions bind this session: leave the option out")
+        site = _setter_site(state, parent_state)
+        if site is None:
+            return _objection_refusal(
+                state, "the level that set these conditions cannot be read from this session (its "
+                "state is not available): run the replan again once the parent session's state exists")
+        stage, conditions = order.expected_stage, order.binding_conditions
+        storage = _objection_storage(state, stage)
     known = [c["id"] for c in conditions]
     unknown = [i for i in ids if i not in known]
     if unknown:
         return _objection_refusal(
-            state, f"--breaks-condition names {unknown}, which are not binding conditions of this "
-            f"stage; its binding conditions are {known}")
+            state, f"--breaks-condition names {unknown}, which are not binding conditions of "
+            f"{'the order' if root_order else 'this stage'}; its binding conditions are {known}")
     own = frozenset(known) if site.is_root else sub_plan.parent_set_ids(conditions, site.above)
-    inherited = [i for i in ids if i not in own]
-    if inherited:
-        owner = site.owner.session_id
-        ids_arg = " ".join(f"--breaks-condition {i}" for i in inherited)
-        return _objection_refusal(
-            state, f"condition(s) {inherited} were set above session {owner}, the level directly "
-            f"above this stage, and reach it unchanged: neither this session nor {owner} decides "
-            f"them (a session never decides a condition set above its own level). Ways on: (1) keep "
-            f"them: leave them out of --breaks-condition and have the plan's record say how it keeps "
-            f"them; (2) return `REPLAN:` to {owner} naming {inherited}: {owner} runs `replan "
-            f"{ids_arg}` on its own plan (through agentctl-own.py when it is itself a child), which "
-            f"raises the objection to the level that set them; that level decides it with "
-            f"`condition-decide --objection <id> --value changed|withdrawn` (the user's marked "
-            f"answer, `--by <name>`, at the root); once {owner}'s replan has passed it dispatches "
-            f"this stage again with the conditions as they now stand",
-            way_on={"keep": "leave --breaks-condition out", "ask": owner, "verb": "replan",
-                    "ids": inherited})
-    storage = _objection_storage(state, order.expected_stage)
-    decisions = site.decisions()
-    where = {"owner": site.owner.session_id, "key": site.key, "depth": site.depth}
-    pending, lifted, kept = [], [], []
+    carrying_key = None if stage is None else sub_plan.record_key(stage, sub_plan.record_level(state))
+    existing = sub_plan.session_objections(state)
+    lifted, pending, kept, blockers = [], [], [], []
     for cid in ids:
         objection = sub_plan.open_objection_for(storage, cid)
         if objection is None:
-            objection = sub_plan.new_objection(
-                state.session_id, order.expected_stage, cid, storage, time.time())
-            objection["site"] = where
+            objection = sub_plan.new_objection(state.session_id, stage, cid, existing, time.time())
+            origin = site if cid in own else _origin_site(state, store, parent_state, cid)
+            objection["site"] = {"owner": origin.owner.session_id, "key": origin.key,
+                                 "depth": origin.depth}
+            if (origin.owner.session_id, origin.key) != (site.owner.session_id, site.key):
+                objection["inherited_into"] = {"session": state.session_id, "key": carrying_key}
             storage.append(objection)
-        if sub_plan.objection_lifted(objection, decisions):
-            lifted.append(objection["id"])
-        elif sub_plan.objection_decision(objection, decisions) is not None:
-            kept.append(objection)
-        else:
-            pending.append(objection)
-    if not pending and not kept:
+            existing.append(objection)
+        origin_site = objection["site"]
+        who = ("the user, on their marked answer (`condition-decide --by <name>` run in session "
+               f"{origin_site['owner']})" if origin_site.get("key") is None
+               else f"session {origin_site['owner']}, the level that set the condition")
+        verdict = gates.condition_break_blockers(
+            [objection], _objection_decisions(objection, state, store), who=who)
+        lifted += verdict.lifted
+        pending += verdict.pending
+        kept += verdict.kept
+        blockers += verdict.blockers
+    for objection in kept:
+        objection["status"] = sub_plan.OBJECTION_KEPT
+    if not blockers:
         _log_gate(state, "condition_objection", [], passed=True)
         ctx.objections_to_consume = lifted
         return None
     store.save(state)
-    who = ("the user, on their marked answer (`--by <name>`)" if site.is_root
-           else f"session {site.owner.session_id}, the level that set them")
-    parts = []
-    for objection in pending:
-        parts.append(
-            f"condition {objection['condition']} cannot be broken until {who} decides objection "
-            f"{objection['id']}: `condition-decide --objection {objection['id']} --value "
-            f"changed --new-text <text>` or `--value withdrawn` lifts it")
-    for objection in kept:
-        parts.append(
-            f"the setter level kept condition {objection['condition']} (objection "
-            f"{objection['id']}): revise the replan so the plan keeps it and leave "
-            f"--breaks-condition out, or ask for a new decision with `condition-decide`")
-    return _objection_refusal(
-        state, "; ".join(parts), objections=[o["id"] for o in pending + kept])
+    return _objection_refusal(state, "; ".join(blockers),
+                              objections=[o["id"] for o in pending + kept])
+
+
+def _root_order_conditions(state: SessionState) -> tuple[dict, ...]:
+    """The binding conditions of the agreed order the user kept (a dropped one binds nothing)."""
+    agreement = state.order_agreement
+    if agreement is None:
+        return ()
+    dropped = {d["id"] for d in agreement.binding_decisions if d.get("decision") == "drop"}
+    return tuple(c for c in agreement.binding_conditions if c["id"] not in dropped)
 
 
 def _consume_objections(ctx: _ReplanContext) -> None:

@@ -667,10 +667,15 @@ def _old_form_mark_ignored(mp):
 
 
 def _any_setter_decision_unblocks(mp):
-    """An objection reads as lifted when ANY decision exists at the setter's level, whichever
-    objection it answers or whatever it decided: one decision on one condition lifts the others."""
-    mp.setattr("agentctl.sub_plan.objection_lifted",
-               lambda objection, decisions: bool(decisions), raising=True)
+    """An objection reads as lifted when a lifting decision exists for the same CONDITION, whichever
+    objection it answers: the decision on an earlier objection lifts a later one to that condition."""
+    from agentctl import gates
+
+    mp.setattr("agentctl.gates.objection_lifted",
+               lambda objection, decisions: any(
+                   d.condition == objection.get("condition") and d.value in gates.LIFTING_VALUES
+                   for d in gates._decision_rows(decisions)),
+               raising=True)
 
 
 MUTANTS = {

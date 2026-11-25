@@ -2960,7 +2960,8 @@ class SessionState:
     sub_plan_records: dict[str, dict] = field(default_factory=dict)
     # Objections to, and decisions on, the binding conditions the root level set (the order's own,
     # which no sub-plan record answers for): `{"objections": [...], "decisions": [...]}`, the shape
-    # and its writers are sub_plan.py's and `condition-decide`'s.
+    # and its writers are sub_plan.py's and `condition-decide`'s. A replan of the root order
+    # raises its objections here; the user's marked answer at this session decides them.
     root_conditions: dict = field(default_factory=dict)
     # The engine's last-written approvals per stage of this session's plan (the parent's
     # copy): the resources the parent approved, the sub-plan the user approved, and the

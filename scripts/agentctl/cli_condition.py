@@ -6,8 +6,9 @@ session writes. A replan that names a condition it breaks (`replan --breaks-cond
 an objection with its own id, stored beside the record the replan's plan carries, and stays refused
 until the level that set the condition has decided that objection here. The decision is written
 where the reader of check 13 reads it (the setter level's own record, or `root_conditions` for the
-root), never into the raising session's record, and a session below the setter's level cannot make
-it.
+root; for a condition inherited from above the nearest level, the record the raising session's plan
+carries), never by the raising session, and a session below the setter's level cannot make it.
+The predicate that says who may decide is `gates.condition_decider_blockers`.
 """
 from __future__ import annotations
 
@@ -16,8 +17,8 @@ import time
 
 from lib import config_root
 
-from . import sub_plan
-from .cli_common import SetterSite, _require
+from . import gates, sub_plan
+from .cli_common import _objection_decisions, _objection_site, _require
 from .cli_order import _no_marked_answer_refusal, _user_answered_after
 from .directive import Directive
 from .dispatch import Runner
@@ -28,47 +29,28 @@ from .store import StateStore
 AGENT_ACTOR = "agent"
 
 
-def _objections_of(state: SessionState) -> list[dict]:
-    """Every objection a session holds: in the records its plans carry and, for a root
-    session, its own."""
-    found = list(state.root_conditions.get("objections") or [])
-    for raw in state.sub_plan_records.values():
-        found += [o for o in raw.get("objections") or []]
+def _descendants(state: SessionState, store: StateStore) -> list[SessionState]:
+    """Every session linked below `state`, at any depth."""
+    found, seen, queue = [], {state.session_id}, [state]
+    while queue:
+        for child in sub_plan.linked_children(queue.pop(0), store):
+            if child.session_id not in seen:
+                seen.add(child.session_id)
+                found.append(child)
+                queue.append(child)
     return found
 
 
-def _visible_objections(state: SessionState, store: StateStore) -> list[dict]:
-    """The objections this session may decide: its own and those of the sessions linked below."""
-    found = _objections_of(state)
-    for child in sub_plan.linked_children(state, store):
-        found += _objections_of(child)
-    return found
+def _holders(state: SessionState, store: StateStore) -> list[SessionState]:
+    """The sessions whose objections this session may decide: itself and those linked below it,
+    at any depth (a condition set at the root is decided at the root whichever session below it
+    raised the objection)."""
+    return [state, *_descendants(state, store)]
 
 
-def condition_decider_blockers(*, objection: dict, value: str, decider: SessionState,
-                               decider_stack: int, by_user: bool) -> list[str]:
-    """Why `decider` may not decide `objection` ([] == it may). The setter level keeps its decision
-    in its own session: only that session decides, an agent only while its running plan is the
-    setter's own or one above it (a session below the setter's level is the one that raised the
-    objection), and the root level's decision is the user's."""
-    site = objection.get("site") or {}
-    owner = site.get("owner", "")
-    if owner != decider.session_id:
-        return [f"objection {objection['id']!r} is decided by the level that set the condition, "
-                f"which keeps its decisions in session {owner!r}: run `condition-decide` there"]
-    if by_user:
-        return []
-    if site.get("key") is None:
-        return [f"the condition {objection['condition']!r} was set at the root level, so only the "
-                f"user decides the objection: put it to the user and run `condition-decide --by "
-                f"<name>` once their answer choosing the option marked "
-                f"{condition_decide_marker(objection['id'], value)!r} is recorded"]
-    if decider_stack > int(site.get("depth") or 0):
-        return [f"this session is running a plan below the level that set condition "
-                f"{objection['condition']!r} (its plan stack is {decider_stack} deep, the setter's "
-                f"plan runs at {site.get('depth')}): finish or `pop-subplan` back to the setter's "
-                f"plan, then decide"]
-    return []
+def _matches(state: SessionState, store: StateStore, objection_id: str) -> list[tuple[dict, SessionState]]:
+    return [(o, holder) for holder in _holders(state, store)
+            for o in sub_plan.session_objections(holder) if o.get("id") == objection_id]
 
 
 def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -90,19 +72,29 @@ def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = Non
     if value != "changed" and new_text:
         return refuse(f"--new-text belongs to a `changed` decision only; a `{value}` decision "
                       f"leaves the text as it stands")
-    known = _visible_objections(state, store)
-    objection = next((o for o in known if o.get("id") == args.objection), None)
-    if objection is None:
-        ids = ", ".join(sorted(o["id"] for o in known if o.get("status") == sub_plan.OBJECTION_OPEN))
+    matches = _matches(state, store, args.objection)
+    if not matches:
+        open_ids = sorted(o["id"] for h in _holders(state, store) for o in sub_plan.session_objections(h)
+                          if o.get("status") == sub_plan.OBJECTION_OPEN)
         return refuse(f"no objection {args.objection!r} is on record in this session or the "
-                      f"sessions linked below it; open objections: {ids or 'none'}")
+                      f"sessions linked below it; open objections: {', '.join(open_ids) or 'none'}")
+    if len(matches) > 1:
+        return refuse(f"objection id {args.objection!r} is held by more than one session "
+                      f"({', '.join(sorted(h.session_id for _, h in matches))}): the decision would "
+                      f"answer an unknown one, so none is recorded")
+    objection, holder = matches[0]
     by = (args.by or "").strip() or AGENT_ACTOR
     by_user = by.casefold() != AGENT_ACTOR
-    blockers = condition_decider_blockers(
-        objection=objection, value=value, decider=state,
+    blockers = gates.condition_decider_blockers(
+        objection=objection, value=value, decider_session=state.session_id,
         decider_stack=len(state.plan_stack), by_user=by_user)
     if blockers:
         return refuse("; ".join(blockers), blockers=blockers)
+    earlier = _objection_decisions(objection, holder, store)
+    if objection.get("status") != sub_plan.OBJECTION_OPEN or gates.objection_decision(objection, earlier):
+        return refuse(f"objection {objection['id']} is already decided or used up, and takes no "
+                      f"second decision: after `kept` run the replan with the condition kept, or "
+                      f"run a replan naming the condition again, which raises a new objection")
     if by_user:
         marker = condition_decide_marker(objection["id"], value)
         state_file = config_root.resolve_agentctl_state_file(state.session_id)
@@ -113,32 +105,26 @@ def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = Non
         if not chosen:
             return refuse(_no_marked_answer_refusal(
                 f"deciding objection {objection['id']!r} as {by}", marker, ledger_read, since))
-    site = objection["site"]
-    earlier = [d for d in _site_decisions(state, site)
-               if d.condition == objection["condition"] and d.value == "changed"]
+    version = 0
+    if value == "changed":
+        version = gates.current_condition_text({"id": objection["condition"], "text": ""}, earlier)[1] + 1
     decision = {"condition": objection["condition"], "value": value, "setter": state.session_id,
                 "decided_by": by, "objection": objection["id"],
-                "new_text": new_text, "version": len(earlier) + 1 if value == "changed" else 0}
-    _write_decision(state, site, decision)
+                "new_text": new_text, "version": version}
+    if objection.get("inherited_into"):
+        raw = holder.sub_plan_records.setdefault(objection["inherited_into"]["key"], {})
+        raw.setdefault("setter_decisions", []).append(decision)
+        if holder.session_id != state.session_id:
+            store.save(holder)
+    else:
+        _objection_site(state, objection["site"]).write_decision(decision)
     state.log("condition_decide", objection=objection["id"], condition=objection["condition"],
               value=value, by=by, at=time.time())
     store.save(state)
     return Directive(True, state.node, "noop",
                      f"objection {objection['id']} is decided {value} by {by}"
-                     + (f": condition {objection['condition']} now reads {new_text!r}"
+                     + (f": condition {objection['condition']} now reads {new_text!r} (version {version})"
                         if value == "changed" else ""))
-
-
-def _setter_site_of(state: SessionState, site: dict) -> SetterSite:
-    return SetterSite(state, site.get("key"), None, int(site.get("depth") or 0))
-
-
-def _site_decisions(state: SessionState, site: dict) -> list:
-    return _setter_site_of(state, site).decisions()
-
-
-def _write_decision(state: SessionState, site: dict, decision: dict) -> None:
-    _setter_site_of(state, site).write_decision(decision)
 
 
 def register(sub, add):

@@ -2814,9 +2814,63 @@ def _setter_site(state: SessionState, parent_state: SessionState | None) -> Sett
     runs in). The root level builds no stage and carries no record: its decisions are
     `root_conditions` of the session that holds the order (the session itself, or the linked
     parent). None when no level above exists, or the parent state was not given."""
-    depth = len(state.plan_stack)
+    return _setter_site_at(state, parent_state, len(state.plan_stack))
+
+
+def _origin_site(state: SessionState, store: StateStore | None,
+                 parent_state: SessionState | None, condition_id: str) -> SetterSite | None:
+    """The level that set the condition `condition_id` the plan carrying the sub-plan record of
+    `state` is bound by: the setter level of that plan, or, when that level carries the condition
+    from above, the level above it, and so on up to the root (the user). A condition keeps its
+    original setter however far down it was inherited. Stops at the nearest level whose own
+    carried conditions are unknown, or above which no level can be read."""
+    site = _setter_site(state, parent_state)
+    while (site is not None and not site.is_root and site.above is not None
+           and condition_id in {c["id"] for c in site.above}):
+        owner = site.owner
+        parent = None
+        if site.depth == 0 and owner.parent_link and store is not None:
+            parent = store.load(owner.parent_link["parent_session"])
+        above = _setter_site_at(owner, parent, site.depth)
+        if above is None:
+            break
+        site = above
+    return site
+
+
+def _inherited_decisions(state: SessionState) -> list:
+    """The decisions the carrying records of this session hold that answer an objection this
+    session raised against a condition it inherits (`condition-decide` writes them there when the
+    level that set the condition is above the nearest one): `sub_plan.SetterDecision` rows."""
+    mine = {o["id"] for o in sub_plan.session_objections(state) if o.get("inherited_into")}
+    return [sub_plan.SetterDecision.from_dict(d) for raw in state.sub_plan_records.values()
+            for d in raw.get("setter_decisions") or [] if d.get("objection") in mine]
+
+
+def _objection_site(owner: SessionState, site: dict) -> SetterSite:
+    """The `SetterSite` an objection's recorded `site` (`owner`, `key`, `depth`) names, with
+    `owner` the loaded state of the session that keeps the decisions."""
+    return SetterSite(owner, site.get("key"), None, int(site.get("depth") or 0))
+
+
+def _objection_decisions(objection: dict, holder: SessionState, store: StateStore) -> list:
+    """The decisions that may answer `objection`, raised in session `holder`: those of the level
+    that set the condition (its recorded `site`) and, for a condition inherited from above the
+    nearest level, those written into the record `holder`'s plan carries."""
+    site = objection.get("site") or {}
+    owner = store.load(site["owner"]) if site.get("owner") else None
+    found = _objection_site(owner, site).decisions() if owner is not None else []
+    if objection.get("inherited_into"):
+        raw = holder.sub_plan_records.get(objection["inherited_into"]["key"]) or {}
+        found += [sub_plan.SetterDecision.from_dict(d) for d in raw.get("setter_decisions") or []]
+    return found
+
+
+def _setter_site_at(state: SessionState, parent_state: SessionState | None,
+                    depth: int) -> SetterSite | None:
+    """`_setter_site` for the plan of `state` that runs when its plan stack is `depth` deep."""
     if depth >= 2:
-        frame = state.plan_stack[-2]
+        frame = state.plan_stack[depth - 2]
         return SetterSite(state, sub_plan.record_key(frame.originating_stage, depth - 2),
                           _frame_stage_conditions(frame), depth - 1)
     if depth == 1:
@@ -2868,19 +2922,22 @@ def _setter_level_released(state: SessionState, parent_state: SessionState | Non
     site = _setter_site(state, parent_state)
     if site is None or not conditions:
         return frozenset()
+    inherited = sub_plan.root_released_ids(_inherited_decisions(state), conditions)
     if site.is_root:
-        return sub_plan.root_released_ids(site.decisions(), conditions)
+        return sub_plan.root_released_ids(site.decisions(), conditions) | inherited
     record = site.owner.sub_plan_records.get(site.key)
     if not record or site.above is None:
-        return frozenset()
-    return sub_plan.released_ids(sub_plan.SubPlanRecord.from_dict(record), conditions, site.above)
+        return inherited
+    return sub_plan.released_ids(sub_plan.SubPlanRecord.from_dict(record), conditions,
+                                 site.above) | inherited
 
 
 def _current_conditions(state: SessionState, parent_state: SessionState | None,
                         conditions) -> tuple[dict, ...] | None:
     """`conditions` with the text the setter level's `changed` decisions give them
-    (`sub_plan.with_current_text`): the decisions on ids that level set itself, or at the root
-    any of them."""
+    (`gates.with_current_text`): the decisions on ids that level set itself, or at the root any of
+    them, and the decisions the original setter wrote into this session's carrying records for a
+    condition it inherits (`_inherited_decisions`)."""
     if conditions is None:
         return None
     site = _setter_site(state, parent_state)
@@ -2890,7 +2947,7 @@ def _current_conditions(state: SessionState, parent_state: SessionState | None,
     if not site.is_root:
         own = sub_plan.parent_set_ids(conditions, site.above)
         decisions = [d for d in decisions if d.condition in own]
-    return sub_plan.with_current_text(conditions, decisions)
+    return gates.with_current_text(conditions, [*decisions, *_inherited_decisions(state)])
 
 
 def _stage_order_context(state: SessionState, *, store: StateStore | None = None) -> StageOrderContext:

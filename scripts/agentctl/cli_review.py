@@ -1792,7 +1792,7 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
     stages = sorted(stage_indices)
     pairs = gates.pairs_hint_for(_carried_view(store, state, target), doc, target)
     if whole_plan_needed:
-        md = render_plan_md(doc)
+        md = render_plan_md(doc, state.root_conditions.get("decisions") or ())
         detail = (
             f"whole-plan review needed for {target}: its meta/order changed since "
             "the last whole-plan review, or none has been recorded yet; the topological "

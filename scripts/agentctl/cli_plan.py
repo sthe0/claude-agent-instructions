@@ -1480,9 +1480,9 @@ def register(sub, add):
              "indices (e.g. '3,5'), as a brief projection instead of the whole "
              "plan (the spawn prompt's per-dispatch projection, or a reviewer's "
              "scoped delta)")
-    # Accept (and ignore) --session so the harness-session auto-injection
-    # (_inject_default_session) is a no-op here: rendering is a pure, session-free
-    # read of the plan file, unlike every other verb which drives session state.
+    # The session (given, or injected from the harness) only supplies the root level's decisions
+    # on the order's binding conditions, so a changed condition reads as it stands now; no
+    # session state is changed, and a render without one is the plan file as written.
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("plan-grants"); sp.add_argument("--plan", required=True,
         help="TOML plan whose per-stage grant set (declared + derived) to render "

@@ -698,7 +698,7 @@ REPLAN_ENGINE_FIELDS = ("reviews", "objections", "building_place", "setter_decis
 ENGINE_FIELD_WRITERS = {
     "setter_decisions": "condition-decide",
     "objections": "replan --breaks-condition",
-    "reviews": "plan-review-compose",
+    "reviews": "plan-review --plan-digest",
 }
 
 
@@ -754,8 +754,9 @@ def replan_record_blockers(state, doc, store_=None) -> list[str]:
                    f"review is written by the engine, never by the record it judges")
     kept_from = stored.to_dict() if stored is not None else {}
     for name, verb in ENGINE_FIELD_WRITERS.items():
-        carried = record.to_dict()[name]
-        if carried and carried != kept_from.get(name):
+        stored_rows = kept_from.get(name) or []
+        carried = [row for row in record.to_dict()[name] if row not in stored_rows]
+        if carried:
             out.append(f"the replan carries `{name}` in stage {record.stage}'s sub-plan record, a "
                        f"field the engine writes: leave it out of the plan file; it is written by "
                        f"`{verb}`")
@@ -885,7 +886,9 @@ def mirror_into_record(state, stage_index: int, store_, *, minutes, usd, basis: 
     store_.save(child)
 
 
-RELEASING_VALUES = ("changed", "withdrawn")
+#: The one value that frees a condition from check 13 for good: a `changed` decision re-binds the
+#: condition to its new text instead (the plan states how it keeps the new version).
+RELEASING_VALUES = ("withdrawn",)
 
 
 def parent_set_ids(conditions, carried_above) -> frozenset[str]:
@@ -899,17 +902,17 @@ def parent_set_ids(conditions, carried_above) -> frozenset[str]:
 
 
 def released_ids(record: SubPlanRecord, conditions, carried_above) -> frozenset[str]:
-    """The conditions `record`, the record of the parent level, changed or withdrew among those
-    that level set itself (`parent_set_ids`): a decision on a condition it carries from above
-    releases nothing."""
+    """The conditions `record`, the record of the parent level, withdrew among those that level
+    set itself (`parent_set_ids`): a decision on a condition it carries from above releases
+    nothing."""
     own = parent_set_ids(conditions, carried_above)
     return frozenset(d.condition for d in record.setter_decisions
                      if d.value in RELEASING_VALUES and d.condition in own)
 
 
 def root_released_ids(decisions, conditions) -> frozenset[str]:
-    """The conditions among `conditions` that the root level (the order, the user) changed or
-    withdrew: the root builds no stage and carries no record, so its decisions sit in
+    """The conditions among `conditions` that the root level (the order, the user) withdrew: the
+    root builds no stage and carries no record, so its decisions sit in
     `SessionState.root_conditions` and every condition a root-set stage carries is its own."""
     ids = {c["id"] for c in conditions or ()}
     return frozenset(d.condition for d in decisions
@@ -918,62 +921,33 @@ def root_released_ids(decisions, conditions) -> frozenset[str]:
 
 OBJECTION_OPEN = "open"
 OBJECTION_CONSUMED = "consumed"
+#: A `kept` decision answered the objection: it is closed and takes no second decision.
+OBJECTION_KEPT = "kept"
+
+
+def session_objections(state) -> list[dict]:
+    """Every objection a session holds: in the records its plans carry and, for a session that
+    holds the order, in `root_conditions`."""
+    found = list(state.root_conditions.get("objections") or [])
+    for raw in state.sub_plan_records.values():
+        found += [o for o in raw.get("objections") or []]
+    return found
 
 
 def new_objection(session_id: str, stage: int | None, condition: str, existing, at: float) -> dict:
     """An objection to the binding condition `condition`, raised by a replan that names it as
-    broken (`replan --breaks-condition`). Its id is minted here: the session, the stage (`root`
-    for a session that builds none), the condition and a running number, so a decision names the
-    one objection it answers and no other."""
-    where = "root" if stage is None else str(stage)
-    prefix = f"{session_id[:8]}-{where}-{condition}-"
-    taken = sum(1 for o in existing if str(o.get("id", "")).startswith(prefix))
-    return {"id": f"{prefix}{taken + 1}", "condition": condition, "raised_by": session_id,
-            "stage": stage, "at": at, "status": OBJECTION_OPEN}
+    broken (`replan --breaks-condition`). Its id is `<raising session id>:<n>`, `n` running over
+    every objection the session raised at any plan level (`existing`: `session_objections`), so
+    a decision names the one objection it answers and no other."""
+    prefix = f"{session_id}:"
+    numbers = [int(str(o["id"])[len(prefix):]) for o in existing
+               if str(o.get("id", "")).startswith(prefix) and str(o["id"])[len(prefix):].isdigit()]
+    return {"id": f"{prefix}{max(numbers, default=0) + 1}", "condition": condition,
+            "raised_by": session_id, "stage": stage, "at": at, "status": OBJECTION_OPEN}
 
 
 def open_objection_for(objections, condition: str) -> dict | None:
-    """The objection to `condition` a replan raised and no accepted replan has used yet."""
+    """The objection to `condition` a replan raised and neither a decision nor an accepted replan
+    has closed yet."""
     return next((o for o in objections
                  if o.get("condition") == condition and o.get("status") == OBJECTION_OPEN), None)
-
-
-def objection_lifted(objection: dict, decisions) -> bool:
-    """Whether the setter's level decided this very objection to a change or a withdrawal: the
-    decision names the objection's id. A decision on another objection, and a `kept` one, lift
-    nothing."""
-    return any(d.objection == objection.get("id") and d.value in RELEASING_VALUES
-               for d in decisions)
-
-
-def objection_decision(objection: dict, decisions) -> "SetterDecision | None":
-    """The latest decision that names `objection`, or None while it stands undecided."""
-    named = [d for d in decisions if d.objection == objection.get("id")]
-    return named[-1] if named else None
-
-
-def current_condition_text(condition: dict, decisions) -> tuple[str, int]:
-    """The text of the binding condition `condition` as it stands now, and its version: the text
-    the latest `changed` decision on it carries (version 1 for the first change), else the text
-    the condition was stated with (version 0). The one reader of a changed text; everything that
-    shows or compares a condition's text goes through it."""
-    rows = [SetterDecision.from_dict(d) if isinstance(d, dict) else d for d in decisions]
-    changed = [d for d in rows
-               if d.condition == condition.get("id") and d.value == "changed" and d.new_text]
-    if not changed:
-        return str(condition.get("text", "")), 0
-    latest = max(changed, key=lambda d: d.version)
-    return latest.new_text, latest.version
-
-
-def with_current_text(conditions, decisions) -> tuple[dict, ...]:
-    """`conditions` with each text replaced by `current_condition_text`, and the version added to
-    a condition that has been changed."""
-    out = []
-    for condition in conditions or ():
-        text, version = current_condition_text(condition, decisions)
-        row = dict(condition, text=text)
-        if version:
-            row["version"] = version
-        out.append(row)
-    return tuple(out)
