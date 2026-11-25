@@ -13,7 +13,7 @@ import re
 
 from opencode_probe import core
 
-# The scan list the plugin was written against (OpenCode 2.3.2): a binary whose list differs has a route this
+# The scan list the plugin was written against (the pinned OpenCode): a binary whose list differs has a route this
 # probe's reading of the loader did not cover.
 EXPECTED_SCAN_NAMES = (".agents", ".claude", ".opencode")
 
@@ -39,7 +39,7 @@ def context(text: str, pattern: str, before: int = 250, after: int = 350, limit:
 
 
 def config_file_names(text: str) -> list[str] | None:
-    """The config file names (``opencode.json``, ``opencode.jsonc`` on 2.3.2): the array the discovery scan list
+    """The config file names (``opencode.json``, ``opencode.jsonc`` in the pinned binary): the array the discovery scan list
     spreads in after the directory names."""
     names = _scan_declaration(text)
     return names[1] if names else None
@@ -47,7 +47,7 @@ def config_file_names(text: str) -> list[str] | None:
 
 def scan_names(text: str) -> list[str] | None:
     """The directory names config discovery looks for in the session directory and every parent (``.claude``,
-    ``.agents``, ``.opencode`` on 2.3.2), sorted."""
+    ``.agents``, ``.opencode`` in the pinned binary), sorted."""
     names = _scan_declaration(text)
     return sorted(names[0]) if names else None
 

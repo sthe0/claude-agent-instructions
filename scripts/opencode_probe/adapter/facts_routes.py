@@ -2,7 +2,7 @@
 into OpenCode load, with and without ``OPENCODE_DISABLE_PROJECT_CONFIG``.
 
 The routes are derived from the pinned binary (``binary_facts``), not listed by hand: every directory name its
-config discovery scans (``.agents``, ``.claude``, ``.opencode`` on 2.3.2) crossed with every directory name its
+config discovery scans (``.agents``, ``.claude``, ``.opencode`` in the pinned binary) crossed with every directory name its
 plugin loader lists (``plugin``, ``plugins``) and the three forms a plugin takes there (flat ``.js``, flat
 ``.ts``, a directory with its own ``package.json``), and every config file name crossed with every place it is
 read (the session directory and inside each scanned directory) and the two keys that name a plugin (``plugin``,
