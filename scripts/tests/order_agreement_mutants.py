@@ -644,9 +644,14 @@ def _small_task_gets_phase_segments(mp):
 
 
 def _product_replan_unrouted(mp):
-    """A replan that changes the order's product no longer needs a re-agreement record."""
-    mp.setattr("agentctl.gates.replan_routing_blockers",
-               lambda state, old, new, change=None: [], raising=True)
+    """Every replan is classified as a method change (class (c)), whatever its diff touches: a
+    changed root product, executor side or stage description is routed as one the executor decides,
+    so the routing refuses nothing and the in-boundary route re-stamps."""
+    from agentctl import gates
+
+    mp.setattr("agentctl.gates.classify_replan",
+               lambda old, new, change=None: gates.ReplanClasses(method=("every diff",)),
+               raising=True)
 
 
 OLD_FORM_MARK_TARGETS = ("agentctl.gates.is_two_sided",)

@@ -286,6 +286,9 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
             f"order draft {args.plan} is not fit to put to the user: " + "; ".join(problems),
             data={"problems": problems},
         )
+    grounds = _reagreement_grounds(args, due=_reagreement_due(state, doc))
+    if isinstance(grounds, str):
+        return Directive(False, state.node, "noop", f"order draft {args.plan} cannot be submitted: " + grounds)
     in_cycle = _effort_return_blockers(state, "understanding")
     if in_cycle:
         return Directive(
@@ -298,6 +301,7 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
     state.order_draft_path = args.plan
     state.order_draft_sha256 = understanding_digest(doc)
     state.order_beside = _beside_records(doc)
+    state.order_draft_reagreement = grounds or {}
     _price_understanding(state, doc.meta.order)
     state.log("order_submit", plan=args.plan, understanding_sha256=state.order_draft_sha256)
     fire = _judge_understanding(state, store, args, effort_segments.ACT_ORDER_SUBMIT)
@@ -309,6 +313,11 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
     data = {"order_draft_path": args.plan, "understanding_sha256": state.order_draft_sha256}
     detail = (f"order draft {args.plan} submitted (understanding {state.order_draft_sha256[:12]}); "
               "next: plan-review --scope order, then present-plan --kind order")
+    if grounds:
+        data["order_reagreement_block"] = reagreement_lines(grounds)
+        detail += ("; this is a second agreement, so its rendering carries the four grounds the user "
+                   "answers on, as the lines in data.order_reagreement_block (order-agree reads them "
+                   "from this record and refuses a rendering that omits them)")
     estimate_line = gates.understanding_estimate_line(state)
     if estimate_line is not None and is_two_sided(doc.meta.order):
         data["order_cost_block"] = order_cost_block_lines(doc.meta.order, estimate_line)
@@ -399,9 +408,11 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
             "before the order was split into two sides; rewrite it with [meta.order.customer_side] "
             "and the executor side, and submit it again"
         )
-    grounds = _reagreement_grounds(args, first=state.order_agreement is None)
-    if isinstance(grounds, str):
-        return refuse("cannot record the agreement: " + grounds)
+    grounds = state.order_draft_reagreement or None
+    if grounds is None and _reagreement_due(state, doc):
+        return refuse("cannot record the agreement: " + _REAGREEMENT_DUE + "; this draft was submitted "
+                      "with none, so submit it again with the four grounds and present the rendering "
+                      "that carries them")
     decisions = _parse_binding_decisions(args, order)
     if isinstance(decisions, str):
         return refuse("cannot record the agreement: " + decisions)
@@ -480,18 +491,28 @@ REAGREEMENT_GROUNDS = (
 )
 
 
-def _reagreement_grounds(args, *, first: bool) -> "dict | str | None":
-    """The four grounds of a second agreement in a session that already agreed an order, or the
-    refusal text naming the ones missing. None for the session's first agreement, which has
-    nothing it changes."""
-    if first:
+_REAGREEMENT_DUE = ("this session already agreed an order, so agreeing a new-form order again is a "
+                    "change of the root product the user decides, and it is put to them with its four "
+                    "grounds")
+
+
+def _reagreement_due(state: SessionState, doc) -> bool:
+    """Whether a draft is a second agreement that carries the four grounds: the session already
+    agreed an order and the draft is new-form. A first agreement has nothing it changes; an
+    old-form draft (put again unchanged, `_old_form_unadmitted`) has no customer side to re-agree."""
+    return state.order_agreement is not None and is_two_sided(doc.meta.order)
+
+
+def _reagreement_grounds(args, *, due: bool) -> "dict | str | None":
+    """The four grounds `order-submit` takes with a second draft, one line each, or the refusal
+    text naming the ones missing. None when none are due."""
+    if not due:
         return None
-    given = {key: (getattr(args, attr, "") or "").strip() for key, attr, _, _ in REAGREEMENT_GROUNDS}
+    given = {key: " ".join((getattr(args, attr, "") or "").split())
+             for key, attr, _, _ in REAGREEMENT_GROUNDS}
     missing = [f"{flag} <{meaning}>" for key, _, flag, meaning in REAGREEMENT_GROUNDS if not given[key]]
     if missing:
-        return ("this session already agreed an order, so agreeing it again is a change of the "
-                "root product the user decides, and it is recorded with its four grounds; missing: "
-                + "; ".join(missing))
+        return _REAGREEMENT_DUE + "; missing: " + "; ".join(missing)
     return {**given, "at": time.time()}
 
 
@@ -713,6 +734,11 @@ def register(sub, add):
     sp.add_argument("--plan", required=True,
                     help="order draft file (a TOML with [meta.order] and no stages) to submit "
                          "for review and presentation; only records it, the node does not move")
+    for _key, attr, flag, meaning in REAGREEMENT_GROUNDS:
+        sp.add_argument(flag, dest=attr, default="",
+                        help=f"a second new-form draft in a session that already agreed an order "
+                             f"needs all four --reagree-* grounds; this one: {meaning}. They are "
+                             f"recorded with the draft and shown in the rendering the user answers")
 
     sp = add("order-agree"); sp.add_argument("--session", required=True)
     sp.add_argument("--note", default="",
@@ -724,10 +750,6 @@ def register(sub, add):
     sp.add_argument("--binding-decision", action="append", default=[], metavar="ID=keep|drop",
                     help="the user's decision on one binding condition of the draft; repeat per "
                          "condition")
-    for _key, attr, flag, meaning in REAGREEMENT_GROUNDS:
-        sp.add_argument(flag, dest=attr, default="",
-                        help=f"a second agreement in a session that already agreed an order needs "
-                             f"all four --reagree-* grounds; this one: {meaning}")
 
     sp = add("order-search"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="id the recorded search is kept under")

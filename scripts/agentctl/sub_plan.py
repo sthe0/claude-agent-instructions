@@ -667,16 +667,34 @@ def record_carried_by(state, doc, store_=None) -> None:
     store(state, record, level)
 
 
-# What a replan may change in the record its plan carries. The method fields, the resource request
-# and the estimate are the executor's to rewrite (the estimate under `confirm_estimate`); the
-# engine's own fields are written by their own verbs and a replan file's copy of them is not read.
-# Every other field is refused when it differs from the stored record, so a field added to
-# `SubPlanRecord` later is refused until it is listed here.
+# What a replan may change in the record its plan carries. The method fields, the answers to the
+# stage's binding conditions (how it keeps each, and the plans compared with: they move with the
+# method, and check 13 grades them again at the replan's submission), the resource request and the
+# estimate are the executor's to rewrite (the estimate under `confirm_estimate`). The engine's own
+# fields are written by their own verbs: a replan file's copy of the two approvals is never stored
+# (`carry_engine_approvals`), and the others are listed so they are not refused. Every other field
+# is refused when it differs from the stored record, so a field added to `SubPlanRecord` later is
+# refused until it is listed here.
 REPLAN_METHOD_FIELDS = ("means", "method", "procedure", "conditions")
+REPLAN_ANSWER_FIELDS = ("compared_plans", "how_kept")
 REPLAN_REQUEST_FIELD = "resource_request"
 REPLAN_ESTIMATE_FIELD = "estimate"
 REPLAN_ENGINE_FIELDS = ("reviews", "objections", "building_place", "setter_decisions",
                         "parent_resource_approval", "user_subplan_approval", "malformed")
+
+
+def carry_engine_approvals(state, doc) -> None:
+    """Put the approvals the engine holds for the record `doc` carries over the file's copy of them,
+    before the record is stored: `parent_resource_approval` is written by the approval of the
+    parent's resources and `user_subplan_approval` by `approve-subplan`, never by a plan. A replan
+    file that lacks them would otherwise erase the stored approval, and one that carries them would
+    give an approval nobody asked for. With no stored record both are empty."""
+    record = doc.meta.sub_plan
+    if record is None or record.stage <= 0:
+        return
+    stored = stored_record(state, record.stage)
+    record.parent_resource_approval = stored.parent_resource_approval if stored else ""
+    record.user_subplan_approval = stored.user_subplan_approval if stored else ""
 
 
 def record_level(state) -> int | None:
@@ -701,11 +719,11 @@ def replan_record_blockers(state, doc, store_=None) -> list[str]:
     out: list[str] = []
     if stored is not None:
         new_d, old_d = record.to_dict(), stored.to_dict()
-        listed = {*REPLAN_METHOD_FIELDS, REPLAN_REQUEST_FIELD, REPLAN_ESTIMATE_FIELD,
-                  *REPLAN_ENGINE_FIELDS}
+        writable = (*REPLAN_METHOD_FIELDS, *REPLAN_ANSWER_FIELDS, REPLAN_REQUEST_FIELD,
+                    REPLAN_ESTIMATE_FIELD)
+        listed = {*writable, *REPLAN_ENGINE_FIELDS}
         out += [f"the replan changes `{name}` of stage {record.stage}'s sub-plan record, a field a "
-                f"replan does not write (it may change {', '.join(REPLAN_METHOD_FIELDS)}, "
-                f"{REPLAN_REQUEST_FIELD} and {REPLAN_ESTIMATE_FIELD})"
+                f"replan does not write (it may change {', '.join(writable[:-1])} and {writable[-1]})"
                 for name in new_d if name not in listed and new_d[name] != old_d.get(name)]
     if any(r.get("kind") == METHOD_REVIEW_KIND for r in record.reviews):
         out.append(f"stage {record.stage}'s record carries a `{METHOD_REVIEW_KIND}` review: that "

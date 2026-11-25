@@ -172,11 +172,7 @@ def _confirm_delivery(store, session=SESSION):
 
 
 def _agree(store, *, note: str = ""):
-    grounds = {}
-    if store.load(SESSION).order_agreement is not None:
-        grounds = {"reagree_changes": "a part of the understanding", "reagree_why": "the user said so",
-                   "reagree_earlier_plan": "none yet", "reagree_difficulty": "the part was wrong"}
-    return cli.cmd_order_agree(ns(session=SESSION, note=note, **grounds), store=store)
+    return cli.cmd_order_agree(ns(session=SESSION, note=note), store=store)
 
 
 def _presented(store, tmp_path: Path, **draft_kw) -> Path:

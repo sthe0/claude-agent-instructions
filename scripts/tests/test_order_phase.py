@@ -41,6 +41,7 @@ from agentctl.plan import (
     planning_cost_line,
     understanding_digest,
 )
+from agentctl.render import reagreement_lines
 from agentctl.state import (
     PLAN_PRESENTATION_KIND_ORDER,
     SCHEMA_VERSION,
@@ -159,8 +160,15 @@ def _start(store, session=SESSION):
                      criterion_type="measurable", recursion_depth=0), store=store)
 
 
+REAGREE_FLAGS = {"reagree_changes": "a part of the understanding", "reagree_why": "the user said so",
+                 "reagree_earlier_plan": "none yet", "reagree_difficulty": "the part was wrong"}
+
+
 def _submit(store, path: Path, session=SESSION):
-    return cli.cmd_order_submit(ns(session=session, plan=str(path)), store=store)
+    """order-submit of a draft; a session that already agreed an order submits its next new-form
+    draft with the four grounds, as the verb requires."""
+    grounds = REAGREE_FLAGS if store.load(session).order_agreement is not None else {}
+    return cli.cmd_order_submit(ns(session=session, plan=str(path), **grounds), store=store)
 
 
 def _review(store, verdict="pass", *, reviewer="thinker", target=None, note="", concerns=None,
@@ -224,12 +232,15 @@ def _beside_the_planning_cost(state, text: str) -> str:
     """`text` with the session's understanding estimate added to its cost section, as the
     presentation gate requires of a rendering when the session priced an understanding segment."""
     line = gates.understanding_estimate_line(state)
-    if line is None or line in text:
-        return text
     lines = text.splitlines()
-    marker_at = next((i for i, each in enumerate(lines) if each.strip() == ORDER_COST_MARKER), None)
-    assert marker_at is not None, f"the rendering has no cost marker line {ORDER_COST_MARKER!r} to add {line!r} under"
-    lines[marker_at + 1:marker_at + 1] = ["", line]
+    if line is not None and line not in text:
+        marker_at = next((i for i, each in enumerate(lines) if each.strip() == ORDER_COST_MARKER), None)
+        assert marker_at is not None, f"the rendering has no cost marker line {ORDER_COST_MARKER!r} to add {line!r} under"
+        lines[marker_at + 1:marker_at + 1] = ["", line]
+    block = [each for each in reagreement_lines(state.order_draft_reagreement) if each not in lines]
+    if block and ORDER_CUSTOMER_MARKER in lines:
+        at = lines.index(ORDER_CUSTOMER_MARKER)
+        lines[at:at] = [*block, ""]
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 

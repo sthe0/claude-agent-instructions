@@ -22,6 +22,7 @@ import pytest
 from agentctl import delivery
 from agentctl.state import order_dismiss_marker
 from test_order_agreement import DIVERGED, _plan
+from agentctl.plan import ORDER_CUSTOMER_MARKER
 from test_order_phase import RENDERING, _draft
 
 SCRIPTS = Path(__file__).resolve().parent.parent
@@ -129,8 +130,10 @@ def _present_order(cli: Cli, tmp_path: Path) -> str:
     return _present_draft(cli, tmp_path, _draft(tmp_path))
 
 
-def _present_draft(cli: Cli, tmp_path: Path, draft: Path) -> str:
-    submitted = cli.ok("order-submit", "--session", SESSION, "--plan", str(draft))
+def _present_draft(cli: Cli, tmp_path: Path, draft: Path, grounds: tuple[str, ...] = ()) -> str:
+    """Submit, review and present a draft; `grounds`: the `--reagree-*` flags of a second agreement,
+    whose lines (`data.order_reagreement_block`) the rendering then carries above the customer side."""
+    submitted = cli.ok("order-submit", "--session", SESSION, "--plan", str(draft), *grounds)
     cli.ok("plan-review", "--session", SESSION, "--scope", "order", "--verdict", "pass",
            "--reviewer", "thinker")
     cli.ok("question-raise", "--session", SESSION, "--id", "BC", "--target", "plan.goal",
@@ -142,7 +145,11 @@ def _present_draft(cli: Cli, tmp_path: Path, draft: Path) -> str:
     rendering = tmp_path / "order-rendering.txt"
     block = submitted["data"]["order_cost_block"]
     marker, estimate = block[0], next(line for line in block if line.startswith("- **Understanding estimate:**"))
-    rendering.write_text(RENDERING.replace(f"{marker}\n", f"{marker}\n\n{estimate}\n", 1), encoding="utf-8")
+    text = RENDERING.replace(f"{marker}\n", f"{marker}\n\n{estimate}\n", 1)
+    block = "\n".join(submitted["data"].get("order_reagreement_block", ()))
+    if block:
+        text = text.replace(ORDER_CUSTOMER_MARKER, f"{block}\n{ORDER_CUSTOMER_MARKER}", 1)
+    rendering.write_text(text, encoding="utf-8")
     presented = cli.ok("present-plan", "--session", SESSION, "--kind", "order",
                        "--rendering-file", str(rendering))
     cli.ok("confirm-delivery", "--session", SESSION, "--kind", "order", "--by", "fedor",
@@ -212,12 +219,12 @@ REAGREEMENT_GROUNDS = ("--reagree-changes", "the difficulty line", "--reagree-wh
 
 
 def _agree(cli: Cli, tmp_path: Path, draft: Path | None = None, *, again: bool = False) -> str:
-    """The user's agreement of a draft; `again`: a second agreement in the session, which states
-    the four grounds of the change."""
-    marker = _present_draft(cli, tmp_path, draft or _draft(tmp_path))
+    """The user's agreement of a draft; `again`: a second agreement in the session, whose four
+    grounds go to order-submit and stand in the rendering the user answers."""
+    marker = _present_draft(cli, tmp_path, draft or _draft(tmp_path),
+                            REAGREEMENT_GROUNDS if again else ())
     cli.answer(marker, choose_marked=True)
-    cli.ok("order-agree", "--session", SESSION, "--note", "as stated",
-           *(REAGREEMENT_GROUNDS if again else ()))
+    cli.ok("order-agree", "--session", SESSION, "--note", "as stated")
     return marker
 
 

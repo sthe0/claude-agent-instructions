@@ -1571,7 +1571,7 @@ class OrderAgreement:
     planning_budget: dict | None = None
     # The customer side's criterion type as agreed; "" for an old-form agreement.
     criterion_type: str = ""
-    # The four grounds a second agreement in a session states (`what`, `why`, `earlier_plan`,
+    # The four grounds a second agreement in a session states (`changes`, `why`, `earlier_plan`,
     # `difficulty`) and the `product_sha256` of the draft it agreed; None for a first agreement.
     # Beside the order: never an input of `understanding_parts` or `order_digest`.
     reagreement: dict | None = None
@@ -2941,6 +2941,10 @@ class SessionState:
     # `order_beside` is replaced at each order-submit and each accepted executor-side revision.
     order_searches: list[dict] = field(default_factory=list)
     order_beside: dict = field(default_factory=dict)
+    # The four grounds order-submit took with a second draft (`changes`, `why`, `earlier_plan`,
+    # `difficulty`; {} when none were due), replaced at each order-submit. The order rendering must
+    # carry them; order-agree stores them with the agreement, bound to the product it agreed.
+    order_draft_reagreement: dict = field(default_factory=dict)
     executor_side_revisions: list[dict] = field(default_factory=list)
     # The executor's sub-plan records, keyed by the parent stage index (schema 64); the shape
     # and its one reader are sub_plan.py's.
@@ -3780,7 +3784,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
     "order_draft_path", "order_draft_sha256", "order_reviews",
-    "order_searches", "order_beside", "executor_side_revisions", "sub_plan_records",
+    "order_searches", "order_beside", "order_draft_reagreement", "executor_side_revisions", "sub_plan_records",
     "stage_approvals", "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
 })
 

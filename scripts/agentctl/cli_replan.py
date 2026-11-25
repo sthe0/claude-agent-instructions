@@ -1423,6 +1423,7 @@ def _store_replanned_record(ctx: _ReplanContext) -> None:
     if record is None or record.stage <= 0:
         return
     moved = sub_plan.method_moved(state, new)
+    sub_plan.carry_engine_approvals(state, new)
     sub_plan.record_carried_by(state, new, store)
     if moved and ctx.classes is not None and ctx.classes.restamps:
         restamp_subplan_digest(state, record.stage, record, sub_plan.record_level(state))

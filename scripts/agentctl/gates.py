@@ -3214,8 +3214,26 @@ def order_rendering_problems(state: SessionState, doc, text: str) -> list[str]:
         problems.append("the planning cost must come after both sides, outside the order's text")
     problems += _planning_budget_problems(state, doc, lines, at["cost"])
     problems += _understanding_estimate_problems(state, lines, at["cost"])
+    problems += _reagreement_problems(state, lines)
     problems += _binding_conditions_problems(state, order)
     return problems
+
+
+def _reagreement_problems(state: SessionState, lines: list[str]) -> list[str]:
+    """The four grounds `order-submit` recorded with a second draft stand in the rendering the user
+    answers, each line as the engine renders it: what the user agrees to is what was presented,
+    so `order-agree` reads the grounds from the record and not from flags given after the answer.
+    A draft submitted with no grounds (a first agreement) has none to show."""
+    record = state.order_draft_reagreement
+    if not record:
+        return []
+    from .render import reagreement_lines
+    missing = [line for line in reagreement_lines(record) if line and line not in lines]
+    if not missing:
+        return []
+    return ["the rendering does not carry the re-agreement grounds the draft was submitted with: add "
+            "these lines (data.order_reagreement_block of order-submit) to the rendering, outside the "
+            "executor section: " + " | ".join(missing)]
 
 
 def order_presentation_stale_reason(state: SessionState, receipt) -> str | None:
@@ -4634,17 +4652,18 @@ STAGE_DESCRIPTION_LEAVES = (
     "title", "subject.result", "criterion.done_criterion", "place", "binding_conditions",
     "binding_conditions_stated", "declared_size", "size_flags", "expected_minutes",
 )
-#: The leaves of a stage that state the executor's method (class (c) when the executor is the
-#: parent's stage); a two-sided order's stage carries none of them.
-STAGE_METHOD_LEAVES = ("means.means", "means.method", "means.procedure", "conditions")
+#: The leaves of a stage that state the executor's method: the means, the way of acting, the
+#: procedure, who acts (`actor.executor`) and the conditions of acting (class (c): the executor's
+#: to change, never the customer's). The stage description's leaves above are the root order's.
+STAGE_METHOD_LEAVES = ("means.means", "means.method", "means.procedure", "actor.executor", "conditions")
 
 
 class ReplanClasses(NamedTuple):
     """What a replan's diff touches, by who decides it. `product`: the names of the root product
     moved (class (a): the plan's goal and done criterion, every understanding part); `executor_side`:
     the executor side of a two-sided order moved (class (a')); `description`: stage-description
-    leaves moved (class (b)); `method`: method leaves, or the sub-plan record's method, moved
-    (class (c))."""
+    leaves moved (class (b)); `method`: method leaves of the plan's stages moved (class (c)). The
+    sub-plan record's own method is not in the plan file; `sub_plan.method_moved` reads it."""
     product: tuple[str, ...] = ()
     executor_side: bool = False
     description: tuple[str, ...] = ()
@@ -4688,11 +4707,12 @@ def classify_replan(old, new, change=None) -> ReplanClasses:
 
 
 def _reagreed_product(state: SessionState, new) -> bool:
-    """Whether the user re-agreed exactly the product `new` carries: some agreement of this
-    session holds a four-ground record bound to its `product_digest`."""
-    target = product_digest(new)
-    return any(a is not None and a.reagreement and a.reagreement.get("product_sha256") == target
-               for a in (*state.order_agreement_history, state.order_agreement))
+    """Whether the user re-agreed exactly the product `new` carries: the session's CURRENT agreement
+    holds a four-ground record bound to its `product_digest`. An earlier agreement of the same
+    product, since replaced by another, releases nothing."""
+    agreement = state.order_agreement
+    return (agreement is not None and bool(agreement.reagreement)
+            and agreement.reagreement.get("product_sha256") == product_digest(new))
 
 
 def _executor_side_recorded(state: SessionState, new) -> bool:
@@ -4707,8 +4727,8 @@ def _executor_side_recorded(state: SessionState, new) -> bool:
 def replan_routing_blockers(state: SessionState, old, new, change=None, *,
                             product_only: bool = False) -> list[str]:
     """Where the replan's change must be decided before it is applied ([] == it may be): a root
-    product change needs the user's re-agreement of exactly that product (a four-ground record
-    from `order-agree`), and an executor-side change needs `order-executor-revise`'s record. A
+    product change needs the user's re-agreement of exactly that product (the four-ground record
+    `order-submit` took and `order-agree` stored with the agreement), and an executor-side change needs `order-executor-revise`'s record. A
     description change and a method change are no business of the order; they follow the approval
     rule of the plan they change. `product_only`: before approval, where only the root product is
     routed. Inert unless the order-agreement gate applies (an armed substantive root with an
@@ -4723,9 +4743,10 @@ def replan_routing_blockers(state: SessionState, old, new, change=None, *,
         return [
             f"the replan changes the root product ({', '.join(classes.product)}): that is the "
             "user's to agree, not a plan edit — put the changed order in a draft whose goal and "
-            "done_criterion are the plan's, order-submit it, have it reviewed and presented, and "
-            "run order-agree again with the four grounds (--reagree-changes, --reagree-why, "
-            "--reagree-earlier-plan, --reagree-difficulty); then replan again"]
+            "done_criterion are the plan's, order-submit it with the four grounds (--reagree-changes, "
+            "--reagree-why, --reagree-earlier-plan, --reagree-difficulty), have it reviewed, put the "
+            "rendering carrying them (data.order_reagreement_block) to the user, and run order-agree "
+            "on their answer; then replan again"]
     if classes.executor_side and not product_only and not _executor_side_recorded(state, new):
         return [
             "the replan changes the executor side of the agreed order: record the revision with "
