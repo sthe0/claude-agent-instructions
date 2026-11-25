@@ -32,7 +32,7 @@ from pathlib import Path
 from lib import kind_baselines, principle_provenance
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
-from . import grants as _grants, plan_refs, plan_store, protected_actions
+from . import grants as _grants, plan_refs, plan_store, protected_actions, sub_plan
 from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
 from .plan import (
@@ -204,17 +204,19 @@ def render_meta_md(doc: PlanDoc) -> list[str]:
     return lines
 
 
-def render_order_md(doc: PlanDoc) -> list[str]:
+def render_order_md(doc: PlanDoc, condition_decisions=()) -> list[str]:
     """The `## Order` block (customer / functional_place / requirements
     only — NOT `coverage`/`requires_traceability`; see
     `render_order_coverage_md`), as raw lines. `[]` when the plan declares
     no order. Factored verbatim out of `render_plan_md`. A new-form order (one with a customer
     side) is rendered by `_two_sided_order_md` instead: the customer side first, the executor
-    side second, the planning cost beside them."""
+    side second, the planning cost beside them. `condition_decisions` are the root level's
+    decisions on binding conditions: a caller that has the session passes them so a changed
+    condition reads as it stands now; the hashed renders pass none and are unchanged."""
     m = doc.meta
     lines: list[str] = []
     if is_two_sided(m.order):
-        return _two_sided_order_md(m.order)
+        return _two_sided_order_md(m.order, condition_decisions)
     if m.order is not None:
         lines += [*_order_header_lines(m.order), *_requirement_lines(m.order), ""]
     return lines
@@ -286,7 +288,7 @@ def _proposal_lines(proposals, indent: str = "  ") -> list[str]:
     return lines
 
 
-def _two_sided_order_md(order) -> list[str]:
+def _two_sided_order_md(order, condition_decisions=()) -> list[str]:
     """A new-form order as the user reads it: who and where, then the customer side (the agent's
     reconstruction, with its acceptance checks and the binding conditions), then the executor side
     (the agent's professional understanding, shown and not put to agreement), then the cost
@@ -307,7 +309,8 @@ def _two_sided_order_md(order) -> list[str]:
         lines.append("- **Binding conditions:**")
         for b in order.binding_conditions:
             objection = f" — objection ({b.objection_by}): {b.objection_text}" if b.objection_text else ""
-            lines.append(f"  - **{b.id}** (set by {b.set_by}): {b.text}{objection}")
+            text, _ = sub_plan.current_condition_text({"id": b.id, "text": b.text}, condition_decisions)
+            lines.append(f"  - **{b.id}** (set by {b.set_by}): {text}{objection}")
     lines += ["", ORDER_EXECUTOR_MARKER, "", *_requirement_lines(order), *_understanding_lines(order)]
     executor = order.executor_side
     if executor is not None:

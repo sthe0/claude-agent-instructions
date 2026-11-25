@@ -67,7 +67,7 @@ OWN_CONTOUR_VERBS = {
     "question-dispose", "question-research", "question-candidate-dispose",
     "order-raise", "order-dispose",
     "plan-review-walk", "plan-review-pair-history", "plan-review-compose",
-    "approve-stage-resources", "estimate-correct",
+    "approve-stage-resources", "estimate-correct", "condition-decide",
 }
 PARTITION_MARKER_FLAGS = ("--m1", "--m2", "--m3", "--m4", "--m3-severe", "--m4-severe")
 NAMED_EXCLUDED_VERBS = (

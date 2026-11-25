@@ -15,7 +15,7 @@ import tempfile
 import time
 import tomllib
 from contextlib import contextmanager
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from lib import argv_text, config_root, difficulty_phase, engine_session_binding, fix_firings, hook_telemetry
 try:
@@ -2767,49 +2767,127 @@ def _linked_norm_conditions(parent_link: dict) -> tuple[dict, ...] | None:
     return tuple({"id": c[0], "text": c[1], "set_by": c[2]} for c in tagged[2])
 
 
-def _setter_level(state: SessionState,
-                  parent_state: SessionState | None) -> tuple[dict | None, tuple[dict, ...] | None]:
-    """The record of the level that set the conditions of the stage the plan carrying the
-    sub-plan record builds, and the conditions that level itself carries from above. That level
-    is the plan above the carrying one: for a plan in a frame nested in another frame, the
-    record of the frame below it; for a frame directly under a child contour's plan, the record
-    that contour carries; for a child contour's own plan, the record its parent session carries
-    (the parent's own contour, or the frame it runs in). The root level builds no stage and
-    carries no record: what the order states is released by the order's own binding decisions
-    and a root plan's own condition is changed by editing the plan the user approves."""
+@dataclass(frozen=True)
+class SetterSite:
+    """Where the level that set the conditions of a stage keeps its decisions. `owner` is the
+    session whose state holds them; `key` is the record in `owner.sub_plan_records` (None for the
+    root level, whose decisions sit in `owner.root_conditions`); `above` are the conditions that
+    level itself carries from above (None at the root); `depth` is `len(owner.plan_stack)` while
+    the setter's own plan is the one running there: a session whose stack is deeper is below the
+    setter's level."""
+    owner: SessionState
+    key: str | None
+    above: tuple[dict, ...] | None
+    depth: int
+
+    @property
+    def is_root(self) -> bool:
+        return self.key is None
+
+    def decisions(self) -> list:
+        """The decisions the setter level recorded, as `sub_plan.SetterDecision` rows."""
+        if self.key is None:
+            raw = self.owner.root_conditions.get("decisions") or []
+            return [sub_plan.SetterDecision.from_dict(r) for r in raw]
+        record = self.owner.sub_plan_records.get(self.key)
+        return list(sub_plan.SubPlanRecord.from_dict(record).setter_decisions) if record else []
+
+    def write_decision(self, decision: dict) -> None:
+        """Append a decision where the setter level keeps them (the reader of check 13 reads it
+        from here)."""
+        if self.key is None:
+            self.owner.root_conditions.setdefault("decisions", []).append(decision)
+        else:
+            self.owner.sub_plan_records.setdefault(self.key, {}).setdefault(
+                "setter_decisions", []).append(decision)
+
+
+def _setter_site(state: SessionState, parent_state: SessionState | None) -> SetterSite | None:
+    """The level that set the conditions of the stage the plan carrying the sub-plan record
+    builds, and where its decisions are kept. That level is the plan above the carrying one: for a
+    plan in a frame nested in another frame, the record of the frame below it; for a frame
+    directly under a child contour's plan, the record that contour carries; for a child contour's
+    own plan, the record its parent session carries (the parent's own contour, or the frame it
+    runs in). The root level builds no stage and carries no record: its decisions are
+    `root_conditions` of the session that holds the order (the session itself, or the linked
+    parent). None when no level above exists, or the parent state was not given."""
     depth = len(state.plan_stack)
     if depth >= 2:
         frame = state.plan_stack[-2]
-        return (state.sub_plan_records.get(sub_plan.record_key(frame.originating_stage, depth - 2)),
-                _frame_stage_conditions(frame))
-    if depth == 1 and state.parent_link:
-        link = state.parent_link
-        return (state.sub_plan_records.get(sub_plan.record_key(link.get("stage_index"))),
-                _linked_norm_conditions(link))
-    if depth == 0 and parent_state is not None:
+        return SetterSite(state, sub_plan.record_key(frame.originating_stage, depth - 2),
+                          _frame_stage_conditions(frame), depth - 1)
+    if depth == 1:
+        if state.parent_link:
+            link = state.parent_link
+            return SetterSite(state, sub_plan.record_key(link.get("stage_index")),
+                              _linked_norm_conditions(link), 0)
+        return SetterSite(state, None, None, 0)
+    if parent_state is not None:
         if parent_state.plan_stack:
             frames = len(parent_state.plan_stack)
             frame = parent_state.plan_stack[-1]
-            return (parent_state.sub_plan_records.get(
-                sub_plan.record_key(frame.originating_stage, frames - 1)),
-                _frame_stage_conditions(frame))
+            return SetterSite(parent_state, sub_plan.record_key(frame.originating_stage, frames - 1),
+                              _frame_stage_conditions(frame), frames)
         if parent_state.parent_link:
             link = parent_state.parent_link
-            return (parent_state.sub_plan_records.get(sub_plan.record_key(link.get("stage_index"))),
-                    _linked_norm_conditions(link))
-    return None, None
+            return SetterSite(parent_state, sub_plan.record_key(link.get("stage_index")),
+                              _linked_norm_conditions(link), 0)
+        return SetterSite(parent_state, None, None, 0)
+    return None
+
+
+def _setter_level(state: SessionState,
+                  parent_state: SessionState | None) -> tuple[dict | None, tuple[dict, ...] | None]:
+    """The record of the level that set the conditions of the stage the plan carrying the
+    sub-plan record builds, and the conditions that level itself carries from above (see
+    `_setter_site`); (None, None) at the root, whose decisions are not a record."""
+    site = _setter_site(state, parent_state)
+    if site is None or site.is_root:
+        return None, None
+    return site.owner.sub_plan_records.get(site.key), site.above
+
+
+def _parent_state_of(state: SessionState, store: StateStore | None) -> SessionState | None:
+    """The linked parent's state for a session with no frame open, the only case that reads the
+    setter level from the parent session (`_stage_order_context` loads it the same way)."""
+    if state.plan_stack or not state.parent_link or store is None:
+        return None
+    return store.load(state.parent_link["parent_session"])
 
 
 def _setter_level_released(state: SessionState, parent_state: SessionState | None,
                            conditions) -> frozenset[str]:
     """The conditions of the stage the carrying plan builds (`conditions`) that the level above
-    set itself and released in its own record: the decisions of the setter level on ids it does
-    not carry from above (`sub_plan.released_ids`). Never the carrying record's own decisions,
-    and nothing when the setter level's own carried conditions are unknown."""
-    record, above = _setter_level(state, parent_state)
-    if not record or above is None or not conditions:
+    set itself and released: the setter level's decisions on ids it does not carry from above
+    (`sub_plan.released_ids`), or at the root level its decisions on any of them
+    (`sub_plan.root_released_ids`). Never the carrying record's own decisions, and nothing when
+    the setter level's own carried conditions are unknown."""
+    site = _setter_site(state, parent_state)
+    if site is None or not conditions:
         return frozenset()
-    return sub_plan.released_ids(sub_plan.SubPlanRecord.from_dict(record), conditions, above)
+    if site.is_root:
+        return sub_plan.root_released_ids(site.decisions(), conditions)
+    record = site.owner.sub_plan_records.get(site.key)
+    if not record or site.above is None:
+        return frozenset()
+    return sub_plan.released_ids(sub_plan.SubPlanRecord.from_dict(record), conditions, site.above)
+
+
+def _current_conditions(state: SessionState, parent_state: SessionState | None,
+                        conditions) -> tuple[dict, ...] | None:
+    """`conditions` with the text the setter level's `changed` decisions give them
+    (`sub_plan.with_current_text`): the decisions on ids that level set itself, or at the root
+    any of them."""
+    if conditions is None:
+        return None
+    site = _setter_site(state, parent_state)
+    if site is None:
+        return tuple(conditions)
+    decisions = site.decisions()
+    if not site.is_root:
+        own = sub_plan.parent_set_ids(conditions, site.above)
+        decisions = [d for d in decisions if d.condition in own]
+    return sub_plan.with_current_text(conditions, decisions)
 
 
 def _stage_order_context(state: SessionState, *, store: StateStore | None = None) -> StageOrderContext:
@@ -2851,7 +2929,7 @@ def _stage_order_context(state: SessionState, *, store: StateStore | None = None
     return StageOrderContext(
         engine_approvals=engine_approvals,
         expected_stage=expected,
-        binding_conditions=conditions,
+        binding_conditions=_current_conditions(state, parent_state, conditions),
         released=_setter_level_released(state, parent_state, conditions),
         parent_ancestors=ancestors,
         search_resolver=lambda search_id: cli_order._search_recorded(state, search_id),
@@ -4003,7 +4081,7 @@ _SESSION_COMMANDS = (
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
-    "approve-subplan", "approve-resources", "approve-stage-resources", "estimate-correct", "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "approve-subplan", "approve-resources", "approve-stage-resources", "estimate-correct", "condition-decide", "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "record-landing", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
@@ -4028,6 +4106,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("reagree_why", ("order-submit",)),
     ("reagree_earlier_plan", ("order-submit",)),
     ("reagree_difficulty", ("order-submit",)),
+    ("new_text", ("condition-decide",)),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
@@ -4128,7 +4207,9 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("mandate_id", ("mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry",
                     "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
-    ("by", ("confirm-delivery", "approve", "approve-subplan", "approve-resources", "estimate-correct", "resolve", "fire-acknowledge", "resolve-permission",
+    ("objection", ("condition-decide",), "objection id a replan minted — an id, not narrative"),
+    ("breaks_condition", ("replan",), "binding condition id the replan breaks — an id, not narrative"),
+    ("by", ("confirm-delivery", "approve", "approve-subplan", "approve-resources", "estimate-correct", "condition-decide", "resolve", "fire-acknowledge", "resolve-permission",
             "task-reset", "mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume",
             "mandate-retry", "order-executor-revise"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "

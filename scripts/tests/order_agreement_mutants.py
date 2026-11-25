@@ -654,7 +654,7 @@ def _product_replan_unrouted(mp):
                raising=True)
 
 
-OLD_FORM_MARK_TARGETS = ("agentctl.gates.is_two_sided",)
+OLD_FORM_MARK_TARGETS = ("agentctl.gates.is_two_sided", "agentctl.cli_approval.is_two_sided")
 
 
 def _old_form_mark_ignored(mp):
@@ -666,7 +666,15 @@ def _old_form_mark_ignored(mp):
         mp.setattr(target, lambda order: True, raising=True)
 
 
+def _any_setter_decision_unblocks(mp):
+    """An objection reads as lifted when ANY decision exists at the setter's level, whichever
+    objection it answers or whatever it decided: one decision on one condition lifts the others."""
+    mp.setattr("agentctl.sub_plan.objection_lifted",
+               lambda objection, decisions: bool(decisions), raising=True)
+
+
 MUTANTS = {
+    "any_setter_decision_unblocks": _any_setter_decision_unblocks,
     "product_replan_unrouted": _product_replan_unrouted,
     "old_form_mark_ignored": _old_form_mark_ignored,
     "disclosure_omits_phases": _disclosure_omits_phases,

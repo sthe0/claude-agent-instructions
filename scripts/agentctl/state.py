@@ -32,7 +32,7 @@ from .script_effects import StageEffectDeclaration
 
 SCHEMA_VERSION = 64  # 64: Stage gains place/binding_conditions(_stated)/declared_size/
                      # size_flags/expected_minutes (the stage as an order); SessionState gains
-                     # sub_plan_records and stage_approvals. No-op migration.
+                     # sub_plan_records, stage_approvals and root_conditions. No-op migration.
                      # 63: SessionState gains order_searches/order_beside/
                      # executor_side_revisions (the two-sided order: recorded searches,
                      # the records beside the order, executor-side revisions);
@@ -1531,6 +1531,15 @@ def order_dismiss_marker(challenge_id: str) -> str:
     return f"{ORDER_DISMISS_MARKER_PREFIX}{challenge_id}]"
 
 
+CONDITION_DECIDE_MARKER_PREFIX = "[condition-decide:"
+
+
+def condition_decide_marker(objection_id: str, value: str) -> str:
+    """The option marker of the ask that puts one objection to the user: it names the objection
+    and the decision value, so the answer evidences both."""
+    return f"{CONDITION_DECIDE_MARKER_PREFIX}{objection_id}:{value}]"
+
+
 ORDER_AGREEMENT_EVIDENCE_ASK = "ask"
 ORDER_AGREEMENT_ANCHOR_STAMP = "stamp"
 ORDER_AGREEMENT_ANCHOR_CONFIRMED = "confirmed"
@@ -2949,6 +2958,10 @@ class SessionState:
     # The executor's sub-plan records, keyed by the parent stage index (schema 64); the shape
     # and its one reader are sub_plan.py's.
     sub_plan_records: dict[str, dict] = field(default_factory=dict)
+    # Objections to, and decisions on, the binding conditions the root level set (the order's own,
+    # which no sub-plan record answers for): `{"objections": [...], "decisions": [...]}`, the shape
+    # and its writers are sub_plan.py's and `condition-decide`'s.
+    root_conditions: dict = field(default_factory=dict)
     # The engine's last-written approvals per stage of this session's plan (the parent's
     # copy): the resources the parent approved, the sub-plan the user approved, and the
     # planning-dispatch mark. Written by the approval verbs only, never read from a plan.
@@ -3785,7 +3798,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
     "order_draft_path", "order_draft_sha256", "order_reviews",
     "order_searches", "order_beside", "order_draft_reagreement", "executor_side_revisions", "sub_plan_records",
-    "stage_approvals", "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
+    "root_conditions", "stage_approvals", "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
 })
 
 

@@ -752,6 +752,29 @@ def test_tr4_compose_over_all_current_pair_passes_writes_an_ordinary_whole_plan_
     assert _blockers(env) == []
 
 
+def test_a_composed_pass_of_a_sub_plan_says_its_method_review_is_still_owed(make_env, monkeypatch):
+    """The composed pass satisfies the plan-review gate and nothing else: a plan that carries a
+    sub-plan record of a stage says in the same Directive that the method review of that
+    sub-plan is not written by it, and names the way to get it; a plan without one does not."""
+    from agentctl import sub_plan
+
+    monkeypatch.setattr(cli_review, "_record_first_thinker_verdict", lambda *a, **k: None)
+    plain = make_env()
+    plain.record_all()
+    said = _compose(plain)
+    assert said.ok, said.detail
+    assert sub_plan.METHOD_REVIEW_WAY not in said.detail
+
+    data = _data()
+    data["meta"]["sub_plan"] = {"stage": 1, "means": "the tools", "method": "write it",
+                                "procedure": "run it", "conditions": "- the tools exist [risk: none]"}
+    sub = make_env(data)
+    sub.record_all()
+    owed = _compose(sub)
+    assert owed.ok, owed.detail
+    assert "still owed" in owed.detail and sub_plan.METHOD_REVIEW_WAY in owed.detail, owed.detail
+
+
 def test_tr5_compose_refuses_and_names_the_failing_pairs(make_env):
     env = make_env()
     for rid in review_ids(env.doc()):

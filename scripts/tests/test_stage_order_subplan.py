@@ -182,16 +182,23 @@ def test_a_stage_put_into_the_description_form_with_another_result_still_moves()
     assert not stage_carried(old.stages, new.stages, 1)
 
 
-def test_a_stage_put_into_the_description_form_with_another_method_is_no_form_change():
+@pytest.mark.parametrize("part, leaf", [
+    ("method", "means.method"),
+    ("means", "means.means"),
+    ("procedure", "means.procedure"),
+    ("conditions", "conditions"),
+])
+def test_a_stage_put_into_the_description_form_with_another_method_is_no_form_change(part, leaf):
     """The exemption covers a stage that brings in the description and nothing else of the
-    executor's parts: a stage that also states a method moves it, so its verdict is not
-    carried and the frozen-stage check sees the method leaf."""
+    executor's parts: a stage that also states a method, means, procedure or conditions keeps
+    that part, so its verdict is not carried and the frozen-stage check sees its leaf."""
     from agentctl.stage_norm import stage_carried
 
-    old, new = _form_change({"method": "do it another way"})
+    old, new = _form_change({part: "- the tools are fast [risk: none]" if part == "conditions"
+                             else "another " + part})
     assert not plan.is_stage_form_migration(old.stages[0], new.stages[0])
     change = plan.change_tier(old, new).stages[1]
-    assert ("means.method", "O") in change.verdict_moved
+    assert leaf in [path for path, _ in change.verdict_moved], change.verdict_moved
     assert change.form_moved == ()
     assert not stage_carried(old.stages, new.stages, 1)
 
@@ -1148,10 +1155,10 @@ decided_by = "user"
 """
 
 
-def _walk_to_submit(store, tmp_path, record_toml):
+def _walk_to_submit(store, tmp_path, record_toml, conditions=BINDING):
     from test_submit_plan_surfaces import _write_plan
 
-    _described_parent(store, "w")
+    _described_parent(store, "w", conditions)
     pushed = cli.cmd_push_subplan(Namespace(session="w", plan=str(tmp_path / "plan.toml"),
                                             task=None, originating_stage=1), store=store)
     assert pushed.ok, pushed

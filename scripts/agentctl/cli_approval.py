@@ -781,7 +781,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # never casefold-match any --by, so this is a no-op for every plan
     # authored before [meta.order] existed.
     by_customer = False
-    no_customer_to_match = True
+    no_customer_to_match = False
     if _approved_doc is not None:
         order = _approved_doc.meta.order
         customer_id = order.customer_id if order is not None else ""

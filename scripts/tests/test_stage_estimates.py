@@ -1082,6 +1082,31 @@ def test_the_approval_of_a_plan_with_no_two_sided_order_keeps_agreeing_as_the_us
     assert copy["agreed"] and copy["authority"] == sub_plan.AUTHORITY_USER and not copy.get("held")
 
 
+def test_an_approval_that_cannot_read_the_plan_does_not_take_the_user_for_the_approver(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    """Whether the approver is the user rests on the order the plan states; when the plan cannot
+    be read at the approval there is no order to rest on, and a non-customer `--by` gets no
+    user's authority: its figure past the allowed overrun is held."""
+    from agentctl.plan import PlanError
+
+    base._planning(store)
+    plan = _plan_naming_customer(venued_fixtures_dir, tmp_path, None)
+    assert cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=store).ok
+    state = store.load(SESSION)
+    sub_plan.store(state, _record(400, 1.0, "the whole module is rewritten"), level=0)
+    store.save(state)
+
+    def unreadable(path):
+        raise PlanError("the plan file cannot be read")
+
+    monkeypatch.setattr(cli_approval, "load_plan_with_digest", unreadable)
+    approved = cli.cmd_approve(ns(session=SESSION, by="fedor"), store=store)
+    assert approved.ok, approved
+    copy = sub_plan.estimate_copy(store.load(SESSION), 1)
+    assert not copy.get("agreed") and copy["held"]["minutes"] == 400.0
+    assert sub_plan.user_figure(store.load(SESSION), 1) is None
+
+
 def test_a_mandate_approval_agrees_as_the_users_standing_authority(
         store, venued_fixtures_dir, tmp_path, monkeypatch):
     from agentctl import mandate as mandate_rules

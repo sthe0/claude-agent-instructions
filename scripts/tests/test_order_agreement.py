@@ -663,6 +663,12 @@ def test_replan_of_an_old_form_plan_with_described_stages_is_accepted_and_carrie
     assert state.plan_path == proposal
     assert state.stage(1).outcome.status == StageStatus.PASSED.value
     assert state.stage(1).outcome.actual == "done before the order chose the form"
+    assert state.node == "PLAN_READY" and state.approval.armed and not state.approval.passed, \
+        "the form migration re-arms the plan approval"
+    from agentctl import effort
+    replans = [e for e in state.history if e.get("event") == "replan"]
+    assert replans and replans[-1]["change_class"] == effort.OPERATIVE_CLASS, \
+        "the migration replan is counted operative"
 
 
 def test_approve_refuses_a_plan_rewritten_in_the_old_form(ostore, home, armed_env, tmp_path):

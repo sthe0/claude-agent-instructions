@@ -4726,12 +4726,13 @@ def _reagreed_product(state: SessionState, new) -> bool:
 
 
 def _executor_side_recorded(state: SessionState, new) -> bool:
-    """Whether the executor side `new` carries is the one the user was shown at agreement or one
-    `order-executor-revise` recorded."""
+    """Whether the executor side `new` carries is the one the user was shown at agreement or the
+    latest one `order-executor-revise` recorded (an earlier revision is not a way back)."""
     digest = executor_side_digest(new)
     agreement = state.order_agreement
-    return digest == (agreement.executor_side_sha256 if agreement is not None else None) or any(
-        r.get("executor_side_sha256") == digest for r in state.executor_side_revisions)
+    latest = state.executor_side_revisions[-1].get("executor_side_sha256") \
+        if state.executor_side_revisions else None
+    return digest in (agreement.executor_side_sha256 if agreement is not None else None, latest)
 
 
 def replan_routing_blockers(state: SessionState, old, new, change=None, *,
@@ -4751,9 +4752,7 @@ def replan_routing_blockers(state: SessionState, old, new, change=None, *,
         return []
     if classes is None:
         classes = classify_replan(old, new, change)
-    if classes.product:
-        if _reagreed_product(state, new):
-            return []
+    if classes.product and not _reagreed_product(state, new):
         return [
             f"the replan changes the root product ({', '.join(classes.product)}): that is the "
             "user's to agree, not a plan edit — put the changed order in a draft whose goal and "

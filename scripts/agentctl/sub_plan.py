@@ -111,12 +111,23 @@ class HowKept:
 class SetterDecision:
     """The decision on one binding condition: kept, changed or withdrawn, by the setter's
     leave or the user's. `objection` names the in-flight objection the decision answers and is
-    empty for a decision that answers none."""
+    empty for a decision that answers none. A `changed` decision made by `condition-decide`
+    carries the condition's `new_text` and its `version` (1 for the first change)."""
     condition: str = ""
     value: str = ""
     setter: str = ""
     decided_by: str = ""
     objection: str = ""
+    new_text: str = ""
+    version: int = 0
+
+    @classmethod
+    def from_dict(cls, r: dict) -> "SetterDecision":
+        version = r.get("version")
+        return cls(_text(r.get("condition")), _text(r.get("value")), _text(r.get("setter")),
+                   _text(r.get("decided_by")), _text(r.get("objection")),
+                   _text(r.get("new_text")),
+                   version if isinstance(version, int) and not isinstance(version, bool) else 0)
 
 
 @dataclass
@@ -185,9 +196,7 @@ class SubPlanRecord:
             how_kept=[HowKept(_text(r.get("condition")), _text(r.get("how")))
                       for r in _rows(d.get("how_kept"), malformed, "how_kept")],
             setter_decisions=[
-                SetterDecision(_text(r.get("condition")), _text(r.get("value")),
-                               _text(r.get("setter")), _text(r.get("decided_by")),
-                               _text(r.get("objection")))
+                SetterDecision.from_dict(r)
                 for r in _rows(d.get("setter_decisions"), malformed, "setter_decisions")],
             building_place=place,
             reviews=list(_rows(d.get("reviews"), malformed, "reviews")),
@@ -671,8 +680,10 @@ def record_carried_by(state, doc, store_=None) -> None:
 # stage's binding conditions (how it keeps each, and the plans compared with: they move with the
 # method, and check 13 grades them again at the replan's submission), the resource request and the
 # estimate are the executor's to rewrite (the estimate under `confirm_estimate`). The engine's own
-# fields are written by their own verbs: a replan file's copy of the two approvals is never stored
-# (`carry_engine_approvals`), and the others are listed so they are not refused. Every other field
+# fields are written by their own verbs: a replan file's copy of the two approvals, the setter
+# decisions and the objections is never stored (`carry_engine_fields`), a file value of those or of
+# the reviews that differs from the stored one is refused (`ENGINE_FIELD_WRITERS` names the verb),
+# and the others are listed so they are not refused. Every other field
 # is refused when it differs from the stored record, so a field added to `SubPlanRecord` later is
 # refused until it is listed here.
 REPLAN_METHOD_FIELDS = ("means", "method", "procedure", "conditions")
@@ -683,19 +694,31 @@ REPLAN_ENGINE_FIELDS = ("reviews", "objections", "building_place", "setter_decis
                         "parent_resource_approval", "user_subplan_approval", "malformed")
 
 
-def carry_engine_approvals(state, doc) -> None:
-    """Overwrite the record's two approval fields with the copy of the record stored before the
-    replan (empty when none is stored), so a replan file is no writer of them. The approvals the
-    gates read live in `state.stage_approvals` (written by `approve-subplan` and the resource
-    approvals), not in the record; no gate reads the record's copy. The carry only keeps the stored
-    copy from being erased by a file that lacks the fields and from being replaced by a value a file
-    carries; the forged-value refusal (`REPLAN_ENGINE_FIELDS`) stays the check on the latter."""
+#: The verb that writes each engine field a replan file may not carry a value for.
+ENGINE_FIELD_WRITERS = {
+    "setter_decisions": "condition-decide",
+    "objections": "replan --breaks-condition",
+    "reviews": "plan-review-compose",
+}
+
+
+def carry_engine_fields(state, doc) -> None:
+    """Overwrite the record's engine-written fields with the copy of the record stored before the
+    replan (empty when none is stored), so a replan file is no writer of them: the two approvals,
+    the setter decisions and the objections. The approvals the gates read live in
+    `state.stage_approvals` (written by `approve-subplan` and the resource approvals), not in the
+    record; no gate reads the record's copy. The carry keeps a stored copy from being erased by a
+    file that lacks the fields; a value a file carries that differs from the stored one is refused
+    (`replan_record_blockers`). Reviews are not carried here: `store` keeps the stored ones when
+    the record has none."""
     record = doc.meta.sub_plan
     if record is None or record.stage <= 0:
         return
     stored = stored_record(state, record.stage)
     record.parent_resource_approval = stored.parent_resource_approval if stored else ""
     record.user_subplan_approval = stored.user_subplan_approval if stored else ""
+    record.setter_decisions = list(stored.setter_decisions) if stored else []
+    record.objections = list(stored.objections) if stored else []
 
 
 def record_level(state) -> int | None:
@@ -729,6 +752,13 @@ def replan_record_blockers(state, doc, store_=None) -> list[str]:
     if any(r.get("kind") == METHOD_REVIEW_KIND for r in record.reviews):
         out.append(f"stage {record.stage}'s record carries a `{METHOD_REVIEW_KIND}` review: that "
                    f"review is written by the engine, never by the record it judges")
+    kept_from = stored.to_dict() if stored is not None else {}
+    for name, verb in ENGINE_FIELD_WRITERS.items():
+        carried = record.to_dict()[name]
+        if carried and carried != kept_from.get(name):
+            out.append(f"the replan carries `{name}` in stage {record.stage}'s sub-plan record, a "
+                       f"field the engine writes: leave it out of the plan file; it is written by "
+                       f"`{verb}`")
     try:
         confirm_estimate(copy.deepcopy(record), state.session_id,
                          _parent_copy(state, record.stage, record_level(state), store_))
@@ -875,3 +905,75 @@ def released_ids(record: SubPlanRecord, conditions, carried_above) -> frozenset[
     own = parent_set_ids(conditions, carried_above)
     return frozenset(d.condition for d in record.setter_decisions
                      if d.value in RELEASING_VALUES and d.condition in own)
+
+
+def root_released_ids(decisions, conditions) -> frozenset[str]:
+    """The conditions among `conditions` that the root level (the order, the user) changed or
+    withdrew: the root builds no stage and carries no record, so its decisions sit in
+    `SessionState.root_conditions` and every condition a root-set stage carries is its own."""
+    ids = {c["id"] for c in conditions or ()}
+    return frozenset(d.condition for d in decisions
+                     if d.value in RELEASING_VALUES and d.condition in ids)
+
+
+OBJECTION_OPEN = "open"
+OBJECTION_CONSUMED = "consumed"
+
+
+def new_objection(session_id: str, stage: int | None, condition: str, existing, at: float) -> dict:
+    """An objection to the binding condition `condition`, raised by a replan that names it as
+    broken (`replan --breaks-condition`). Its id is minted here: the session, the stage (`root`
+    for a session that builds none), the condition and a running number, so a decision names the
+    one objection it answers and no other."""
+    where = "root" if stage is None else str(stage)
+    prefix = f"{session_id[:8]}-{where}-{condition}-"
+    taken = sum(1 for o in existing if str(o.get("id", "")).startswith(prefix))
+    return {"id": f"{prefix}{taken + 1}", "condition": condition, "raised_by": session_id,
+            "stage": stage, "at": at, "status": OBJECTION_OPEN}
+
+
+def open_objection_for(objections, condition: str) -> dict | None:
+    """The objection to `condition` a replan raised and no accepted replan has used yet."""
+    return next((o for o in objections
+                 if o.get("condition") == condition and o.get("status") == OBJECTION_OPEN), None)
+
+
+def objection_lifted(objection: dict, decisions) -> bool:
+    """Whether the setter's level decided this very objection to a change or a withdrawal: the
+    decision names the objection's id. A decision on another objection, and a `kept` one, lift
+    nothing."""
+    return any(d.objection == objection.get("id") and d.value in RELEASING_VALUES
+               for d in decisions)
+
+
+def objection_decision(objection: dict, decisions) -> "SetterDecision | None":
+    """The latest decision that names `objection`, or None while it stands undecided."""
+    named = [d for d in decisions if d.objection == objection.get("id")]
+    return named[-1] if named else None
+
+
+def current_condition_text(condition: dict, decisions) -> tuple[str, int]:
+    """The text of the binding condition `condition` as it stands now, and its version: the text
+    the latest `changed` decision on it carries (version 1 for the first change), else the text
+    the condition was stated with (version 0). The one reader of a changed text; everything that
+    shows or compares a condition's text goes through it."""
+    rows = [SetterDecision.from_dict(d) if isinstance(d, dict) else d for d in decisions]
+    changed = [d for d in rows
+               if d.condition == condition.get("id") and d.value == "changed" and d.new_text]
+    if not changed:
+        return str(condition.get("text", "")), 0
+    latest = max(changed, key=lambda d: d.version)
+    return latest.new_text, latest.version
+
+
+def with_current_text(conditions, decisions) -> tuple[dict, ...]:
+    """`conditions` with each text replaced by `current_condition_text`, and the version added to
+    a condition that has been changed."""
+    out = []
+    for condition in conditions or ():
+        text, version = current_condition_text(condition, decisions)
+        row = dict(condition, text=text)
+        if version:
+            row["version"] = version
+        out.append(row)
+    return tuple(out)

@@ -1066,7 +1066,10 @@ def _method_statement_pass_refusal(args, state: SessionState, doc, method_runner
     the old form is not judged."""
     if args.verdict != gates._PLAN_REVIEW_PASS:
         return None
-    found = method_statement.site_defects(method_statement.order_statements(doc.meta.order), runner=method_runner)
+    found = method_statement.site_defects(
+        method_statement.order_statements(
+            doc.meta.order, state.root_conditions.get("decisions") or ()),
+        runner=method_runner)
     if not found:
         return None
     return Directive(
@@ -2008,10 +2011,14 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
             "composed pass recorded but does not clear the gate",
             data={"blockers": blockers, "plan_path": target},
         )
+    record = doc.meta.sub_plan
+    owes_method_review = record is not None and record.stage > 0
     return Directive(
         True, state.node, "continue",
         f"composed whole-plan pass recorded for {target} from {len(pairs)} pair review(s); "
-        "the plan-review gate is now satisfied for this plan version",
+        "the plan-review gate is now satisfied for this plan version"
+        + (f"; the sub-plan's own method review is not written by it and is still owed: "
+           f"{sub_plan.METHOD_REVIEW_WAY}" if owes_method_review else ""),
         data={"plan_path": target, "pairs": list(pairs), "overridden": overridden},
     )
 

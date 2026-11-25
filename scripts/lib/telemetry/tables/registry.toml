@@ -1,4 +1,4 @@
-version = 10
+version = 11
 
 [[members]]
 name = "cli:accept"
@@ -1599,3 +1599,19 @@ kind = "elementary"
 part_of = ["order_phase"]
 place = "order_agreement"
 source_keys = ["gate:replan_routing", "hook:engine:replan_routing"]
+
+[[members]]
+name = "cli:condition-decide"
+since = 11
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:condition-decide"]
+
+[[members]]
+name = "gate:condition_objection"
+since = 11
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["gate:condition_objection", "hook:engine:condition_objection"]

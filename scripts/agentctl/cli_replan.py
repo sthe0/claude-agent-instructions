@@ -55,6 +55,7 @@ from . import effort_segments
 from .cli_common import _judge_and_refuse
 from .cli_review import TOPOLOGICAL_COMPOSITION_REVIEWER
 import hashlib
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,8 @@ from .cli_common import (
     _submission_advice,
     _submission_problems,
     _stage_order_context,
+    _setter_site,
+    _parent_state_of,
     _conditions_securing_required,
     _clear_open_fires_if_customer,
     _effort_fire_escalation_data,
@@ -745,6 +748,7 @@ class _ReplanContext:
     continuation: Any = None
     continuation_base: Any = None
     classes: Any = None
+    objections_to_consume: list = field(default_factory=list)
 
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
@@ -1151,9 +1155,114 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
     return None
 
 
+def _objection_storage(state: SessionState, stage: int) -> list:
+    """The list a replan of this session keeps its objections to the stage's binding conditions
+    in: the record the plan it carries stores for that stage."""
+    key = sub_plan.record_key(stage, sub_plan.record_level(state))
+    return state.sub_plan_records.setdefault(key, {"stage": stage}).setdefault("objections", [])
+
+
+def _objection_refusal(state: SessionState, message: str, **data) -> Directive:
+    _log_gate(state, "condition_objection", [message], passed=False)
+    return Directive(False, state.node, "replan", f"replan refused: {message}",
+                     data={"blockers": [message], **data})
+
+
+def _condition_objection_gate(ctx: _ReplanContext) -> Directive | None:
+    """A replan that names binding conditions it breaks (`--breaks-condition`) is refused until the
+    level that set each one has decided the objection this replan raised (`condition-decide`): the
+    bound session cannot decide it for itself. The objection is minted here, with its own id, and
+    saved even though the replan is refused; a replan that names no condition passes untouched.
+    Past the gate, every objection that was lifted is booked to be used up by the replan once it is
+    accepted (`_consume_objections`)."""
+    state, store, args = ctx.state, ctx.store, ctx.args
+    ids = list(dict.fromkeys(getattr(args, "breaks_condition", None) or ()))
+    if not ids:
+        return None
+    order = _stage_order_context(state, store=store)
+    if order.expected_stage is None or not order.binding_conditions:
+        return _objection_refusal(
+            state, "--breaks-condition names a binding condition of the stage this session's plan "
+            "builds, and no stage's binding conditions bind this session: leave the option out")
+    site = _setter_site(state, _parent_state_of(state, store))
+    if site is None:
+        return _objection_refusal(
+            state, "the level that set these conditions cannot be read from this session (its "
+            "state is not available): run the replan again once the parent session's state exists")
+    conditions = order.binding_conditions
+    known = [c["id"] for c in conditions]
+    unknown = [i for i in ids if i not in known]
+    if unknown:
+        return _objection_refusal(
+            state, f"--breaks-condition names {unknown}, which are not binding conditions of this "
+            f"stage; its binding conditions are {known}")
+    own = frozenset(known) if site.is_root else sub_plan.parent_set_ids(conditions, site.above)
+    inherited = [i for i in ids if i not in own]
+    if inherited:
+        return _objection_refusal(
+            state, f"condition(s) {inherited} were set above the level that set this stage and "
+            f"reach it unchanged, so the level directly above cannot decide them: leave them out "
+            f"of --breaks-condition and keep them, or replan the level above, which carries them")
+    storage = _objection_storage(state, order.expected_stage)
+    decisions = site.decisions()
+    where = {"owner": site.owner.session_id, "key": site.key, "depth": site.depth}
+    pending, lifted, kept = [], [], []
+    for cid in ids:
+        objection = sub_plan.open_objection_for(storage, cid)
+        if objection is None:
+            objection = sub_plan.new_objection(
+                state.session_id, order.expected_stage, cid, storage, time.time())
+            objection["site"] = where
+            storage.append(objection)
+        if sub_plan.objection_lifted(objection, decisions):
+            lifted.append(objection["id"])
+        elif sub_plan.objection_decision(objection, decisions) is not None:
+            kept.append(objection)
+        else:
+            pending.append(objection)
+    if not pending and not kept:
+        _log_gate(state, "condition_objection", [], passed=True)
+        ctx.objections_to_consume = lifted
+        return None
+    store.save(state)
+    who = ("the user, on their marked answer (`--by <name>`)" if site.is_root
+           else f"session {site.owner.session_id}, the level that set them")
+    parts = []
+    for objection in pending:
+        parts.append(
+            f"condition {objection['condition']} cannot be broken until {who} decides objection "
+            f"{objection['id']}: `condition-decide --objection {objection['id']} --value "
+            f"changed --new-text <text>` or `--value withdrawn` lifts it")
+    for objection in kept:
+        parts.append(
+            f"the setter level kept condition {objection['condition']} (objection "
+            f"{objection['id']}): revise the replan so the plan keeps it and leave "
+            f"--breaks-condition out, or ask for a new decision with `condition-decide`")
+    return _objection_refusal(
+        state, "; ".join(parts), objections=[o["id"] for o in pending + kept])
+
+
+def _consume_objections(ctx: _ReplanContext) -> None:
+    """Mark the objections an accepted replan went through as used, so the next replan that breaks
+    the same condition raises a new one."""
+    state = ctx.state
+    used = set(ctx.objections_to_consume)
+    if not used:
+        return
+    holders = [state.root_conditions.get("objections") or []]
+    holders += [raw.get("objections") or [] for raw in state.sub_plan_records.values()]
+    for objections in holders:
+        for objection in objections:
+            if objection.get("id") in used:
+                objection["status"] = sub_plan.OBJECTION_CONSUMED
+
+
 def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     state, store, args, runner = ctx.state, ctx.store, ctx.args, ctx.runner
     reopen_ignored = ctx.reopen_ignored
+    refusal = _condition_objection_gate(ctx)
+    if refusal is not None:
+        return refusal
 
     # Submission seam (b): the single NEW-side load and the check it feeds. Its placement
     # answers one ordering: before the plan_approval plugin block below, so a command that
@@ -1424,7 +1533,7 @@ def _store_replanned_record(ctx: _ReplanContext) -> None:
     if record is None or record.stage <= 0:
         return
     moved = sub_plan.method_moved(state, new)
-    sub_plan.carry_engine_approvals(state, new)
+    sub_plan.carry_engine_fields(state, new)
     sub_plan.record_carried_by(state, new, store)
     if moved and ctx.classes is not None and ctx.classes.restamps:
         restamp_subplan_digest(state, record.stage, record, sub_plan.record_level(state))
@@ -1450,6 +1559,7 @@ def _replan_record_acceptance(ctx: _ReplanContext) -> None:
         reopened.extend(sorted(reopening))
     state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
     _store_replanned_record(ctx)
+    _consume_objections(ctx)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
     # settled and the next loop starts from zero. Placed here — past every refusal of this
@@ -2366,6 +2476,12 @@ def register(sub, add):
                     help="re-arm PASSED stage N (repeatable) together with every PASSED stage "
                          "that depends on it, so the replan may edit what N was built from or "
                          "promises; without it such an edit to a PASSED stage is refused")
+    sp.add_argument("--breaks-condition", dest="breaks_condition", action="append", default=None,
+                    metavar="ID",
+                    help="declare that the corrected plan breaks binding condition ID of the stage "
+                         "it builds (repeatable); the replan is refused until the level that set "
+                         "the condition has decided the objection this raises, with "
+                         "`condition-decide`")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp.add_argument("--renegotiation-decision", dest="renegotiation_decision", default=None,

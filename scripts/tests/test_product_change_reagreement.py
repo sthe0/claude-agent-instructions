@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 import pytest
 
-from agentctl import cli, cli_common, gates, plan as plan_mod, sub_plan
+from agentctl import cli, cli_common, cli_condition, gates, plan as plan_mod, sub_plan
 from agentctl.gates import ReplanClasses, classify_replan
 from agentctl.machine import Node
 from agentctl.state import GateRecord, Partition
@@ -504,6 +504,42 @@ def test_executor_side_change_needs_no_reagreement(ostore, home, armed_env, tmp_
     _past_routing(d)
     assert product.ok is False and "order-agree" in _blockers(product)
     assert ostore.load(SESSION).order_agreement.understanding_sha256 == agreed
+
+
+def _revise_executor_side(store, tmp_path: Path, replace, name: str, *draft_edits):
+    from test_method_statement_rule import Judge
+
+    path = _draft(tmp_path, name=name, replace=replace)
+    _edit(path, *draft_edits)
+    revised = cli.cmd_order_executor_revise(
+        ns(session=SESSION, plan=str(path), why="the way it is built changed", by="agent"),
+        store=store, method_runner=Judge())
+    assert revised.ok, revised.detail
+
+
+def test_executor_side_must_match_the_agreed_or_the_latest_revision_also_after_a_reagreement(
+        ostore, home, armed_env, tmp_path):
+    """A replan whose executor side is neither the one agreed nor the latest recorded revision is
+    refused naming `order-executor-revise`, when the product is unchanged and when the product was
+    re-agreed alike; an earlier revision is no way back. Each way on is the real verb."""
+    _approved(ostore, home, tmp_path)
+    first = _replacing("requirements", "releases are tagged by a command", "releases are tagged by a signed command")
+    second = _replacing("requirements", "removes the hand-work", "removes the hand-work and the wait")
+
+    agreed = _reagree(ostore, tmp_path)
+    assert agreed.ok, agreed.detail
+    both_first = _edit(_plan(tmp_path, replace=first, name="both-first.toml"), *GOAL2)
+    refused = _replan(ostore, both_first)
+    assert refused.ok is False and "order-executor-revise" in _blockers(refused), _blockers(refused)
+
+    _revise_executor_side(ostore, tmp_path, first, "rev-first.toml", *GOAL2)
+    _past_routing(_replan(ostore, both_first))
+
+    _revise_executor_side(ostore, tmp_path, {**first, **second}, "rev-second.toml", *GOAL2)
+    back = _replan(ostore, both_first)
+    assert back.ok is False and "order-executor-revise" in _blockers(back), "an earlier revision is no way back"
+    latest = _edit(_plan(tmp_path, replace={**first, **second}, name="both-latest.toml"), *GOAL2)
+    _past_routing(_replan(ostore, latest))
 
 
 def test_executor_side_change_unrecorded_refused(ostore, home, armed_env, tmp_path):
@@ -1213,3 +1249,240 @@ def test_order_executor_revise_is_refused_while_the_method_judge_is_silent(ostor
     assert silent.ok is False and "judge did not answer" in silent.detail, silent.detail
     assert ostore.load(SESSION).executor_side_revisions == []
     assert revise(Judge()).ok and len(ostore.load(SESSION).executor_side_revisions) == 1
+
+
+# --- binding-condition objections and `condition-decide` ---------------------------------------
+
+from agentctl.state import condition_decide_marker  # noqa: E402
+from test_stage_order_subplan import TWO_CONDITIONS  # noqa: E402
+
+_HOW_KEPT_B1 = '[[meta.how_kept]]\ncondition = "B1"\nhow = "no push verb is run"\n'
+_HOW_KEPT_B2_ONLY = '[[meta.how_kept]]\ncondition = "B2"\nhow = "nothing is deleted"\n'
+_HOW_KEPT_B2 = ('\n' + _HOW_KEPT_B2_ONLY + '\n[[meta.sub_plan.setter_decisions]]\ncondition = "B2"\n'
+                'value = "kept"\nsetter = "user"\ndecided_by = "user"\n')
+
+
+def _two_condition_frame(store, tmp_path: Path) -> None:
+    submitted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT + _HOW_KEPT_B2,
+                                conditions=TWO_CONDITIONS)
+    assert submitted.ok, submitted.data
+
+
+def _break(store, tmp_path: Path, *ids: str, drop=(_HOW_KEPT_B1,), name="break.toml", sid=FRAME):
+    """A replan whose plan no longer says how it keeps the conditions in `drop`, declaring that it
+    breaks `ids`."""
+    path = tmp_path / name
+    path.write_text((tmp_path / "plan.toml").read_text(encoding="utf-8"), encoding="utf-8")
+    _edit(path, *[(text, "") for text in drop])
+    return cli.cmd_replan(ns(session=sid, plan=str(path), breaks_condition=list(ids)), store=store)
+
+
+def _decide(store, objection: str, value: str, *, by="agent", new_text="", sid=FRAME):
+    return cli_condition.cmd_condition_decide(
+        ns(session=sid, objection=objection, value=value, new_text=new_text, by=by), store=store)
+
+
+def _users_decision(store, objection: str, value: str, new_text=""):
+    """The user's marked answer to the ask for this decision, then the decision by their name."""
+    _user_choice(condition_decide_marker(objection, value), session=FRAME)
+    return _decide(store, objection, value, by="fedor", new_text=new_text)
+
+
+def _objection_ids(refused) -> list[str]:
+    return list(refused.data["objections"])
+
+
+def test_binding_condition_break_refused_until_setter_decides(home_store, tmp_path):
+    """A replan that no longer keeps a binding condition is refused by check 13 as it was; one that
+    names the condition it breaks mints an objection with its own id and is refused until the level
+    that set the condition has decided it. Each way on is walked through the verbs: the agent is
+    refused at the root level, the user's marked answer decides, and the same replan then passes."""
+    store = home_store
+    _frame_plan(store, tmp_path)
+    plain = _break(store, tmp_path, name="plain.toml")
+    assert plain.ok is False and "does not say how it keeps binding condition 'B1'" in _text_of(plain)
+    assert _stored(store).objections == []
+
+    refused = _break(store, tmp_path, "B1")
+    assert refused.ok is False and "condition-decide" in _text_of(refused), _text_of(refused)
+    (objection_id,) = _objection_ids(refused)
+    (raised,) = _stored(store).objections
+    assert raised["id"] == objection_id and raised["condition"] == "B1" and raised["status"] == "open"
+    assert raised["raised_by"] == FRAME and raised["site"]["key"] is None
+
+    again = _break(store, tmp_path, "B1", name="again.toml")
+    assert _objection_ids(again) == [objection_id] and len(_stored(store).objections) == 1
+
+    by_agent = _decide(store, objection_id, "withdrawn")
+    assert by_agent.ok is False and "only the user decides" in by_agent.detail
+    unanswered = _decide(store, objection_id, "withdrawn", by="fedor")
+    assert unanswered.ok is False and condition_decide_marker(objection_id, "withdrawn") in unanswered.detail
+
+    assert _users_decision(store, objection_id, "withdrawn").ok
+    passed = _break(store, tmp_path, "B1", name="passes.toml")
+    assert passed.ok, (passed.detail, passed.data)
+    assert _stored(store).objections[0]["status"] == "consumed"
+
+
+def test_condition_decide_only_from_setter_level(home_store, tmp_path):
+    """The raising session cannot decide for itself, a decision names a value and a text that go
+    together, and an objection nobody raised is refused naming those open."""
+    store = home_store
+    _frame_plan(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
+
+    assert "no objection 'ghost'" in _decide(store, "ghost", "withdrawn").detail
+    assert "--new-text" in _decide(store, objection_id, "changed", by="fedor").detail
+    assert "`changed` decision only" in _decide(store, objection_id, "withdrawn", new_text="x").detail
+    assert "--value is one of" in _decide(store, objection_id, "ignored").detail
+    refused = _decide(store, objection_id, "changed", new_text="no push to main")
+    assert refused.ok is False and "only the user decides" in refused.detail
+    assert store.load(FRAME).root_conditions.get("decisions") in (None, [])
+
+
+_BREAK_BOTH = (_HOW_KEPT_B1, _HOW_KEPT_B2_ONLY)
+
+
+def test_decision_on_one_objection_does_not_lift_another(home_store, tmp_path):
+    """Two conditions, two objections: a decision on B1 leaves B2 refused, and a decision that
+    keeps B2 lifts nothing."""
+    store = home_store
+    _two_condition_frame(store, tmp_path)
+    both = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH)
+    first, second = sorted(_objection_ids(both), key=lambda i: "B2" in i)
+    assert len(_stored(store).objections) == 2 and "B1" in first and "B2" in second
+
+    assert _users_decision(store, first, "withdrawn").ok
+    still = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH, name="still.toml")
+    assert still.ok is False and _objection_ids(still) == [second]
+
+    assert _users_decision(store, second, "kept").ok
+    kept = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH, name="kept.toml")
+    assert kept.ok is False and "setter level kept condition B2" in _text_of(kept)
+
+    assert _users_decision(store, second, "withdrawn").ok
+    done = _break(store, tmp_path, "B1", "B2", drop=_BREAK_BOTH, name="done.toml")
+    assert done.ok, (done.detail, done.data)
+
+
+def test_condition_decide_registered_in_every_verb_set():
+    from agentctl import own_contour
+    from lib import widening_targets
+
+    assert "condition-decide" in cli.COMMANDS
+    assert "condition-decide" in own_contour.OWN_CONTOUR_VERBS
+    assert "condition-decide" in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
+
+
+def test_any_setter_decision_unblocks_registered():
+    assert "any_setter_decision_unblocks" in MUTANTS
+    decisions = [sub_plan.SetterDecision.from_dict(
+        {"condition": "B2", "value": "kept", "setter": "u", "decided_by": "u", "objection": "o-2"})]
+    assert sub_plan.objection_lifted({"id": "o-1"}, decisions) is False
+
+
+def test_condition_text_readers_use_the_resolver(tmp_path, monkeypatch):
+    """The root level's `changed` decision is the text of the condition wherever the order is shown
+    or judged: the rendering the user answers and the statements the method judge reads."""
+    from agentctl import method_statement, render
+    from test_order_two_sides import BESIDE, _sides
+
+    doc, _ = load_order_draft(str(_sides(tmp_path, "d.toml", extra=BESIDE)))
+    old, new = "no change to the release branch", "no change to any branch"
+    decision = {"condition": "B1", "value": "changed", "setter": "user", "decided_by": "user",
+                "objection": "o-1", "new_text": new, "version": 1}
+    plain = "\n".join(render.render_order_md(doc))
+    decided = "\n".join(render.render_order_md(doc, [decision]))
+    assert old in plain and new not in plain
+    assert new in decided and old not in decided
+
+    monkeypatch.setattr(method_statement, "binding_exempt", lambda: False)
+    texts = [s.text for s in method_statement.order_statements(doc.meta.order, [decision])
+             if s.label == "binding condition B1"]
+    assert texts and new in texts[0] and old not in texts[0]
+
+
+_PLAN_FILE_FIELDS = [
+    ("setter_decisions", '\n[[meta.sub_plan.setter_decisions]]\ncondition = "B1"\nvalue = "withdrawn"\n'
+                         'setter = "user"\ndecided_by = "user"\n', "condition-decide"),
+    ("objections", '\n[[meta.sub_plan.objections]]\nid = "forged"\ncondition = "B1"\nstatus = "open"\n',
+     "replan --breaks-condition"),
+    ("reviews", '\n[[meta.sub_plan.reviews]]\nkind = "x"\nverdict = "pass"\n', "plan-review-compose"),
+]
+
+
+@pytest.mark.parametrize("field, toml, verb", _PLAN_FILE_FIELDS, ids=[f[0] for f in _PLAN_FILE_FIELDS])
+def test_replan_file_is_no_writer_of_an_engine_field(home_store, tmp_path, field, toml, verb):
+    """A replan file carrying a value for a field the engine writes is refused naming the verb that
+    writes it and stores nothing; the same replan without the field is taken."""
+    store = home_store
+    _frame_plan(store, tmp_path)
+    before = getattr(_stored(store), field)
+
+    refused = _frame_replan(store, tmp_path, append=toml)
+
+    assert refused.ok is False, (refused.detail, refused.data)
+    assert f"carries `{field}`" in _text_of(refused) and f"`{verb}`" in _text_of(refused), _text_of(refused)
+    assert getattr(_stored(store), field) == before
+    assert _frame_replan(store, tmp_path, name="without.toml").ok
+
+
+def test_decision_moves_neither_agreed_digest_nor_priced_figures(home_store, tmp_path):
+    """An objection and its decision touch the objection list and the decision list only: the
+    digest of the sub-plan the user approved, the approval itself and the figure the parent agreed
+    stay as they were."""
+    store = home_store
+    _frame_plan(store, tmp_path)
+    _agree_figure_in_frame(store)
+    approved = _approve_in_frame(store)
+    figure = dict(sub_plan.estimate_copy(store.load(FRAME), 1, 0))
+
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
+    assert _users_decision(store, objection_id, "changed", "no push to main").ok
+
+    assert sub_plan.approval_digest(_stored(store)) == approved
+    assert store.load(FRAME).stage_approvals["0:1"]["user_subplan_approval"] == approved
+    assert sub_plan.estimate_copy(store.load(FRAME), 1, 0) == figure
+
+
+def _middle_level_contour(store, tmp_path: Path):
+    """Parent `p` is itself a contour (linked at stage 4 of its own parent) and set B1 on its stage
+    1; the child contour `c` builds that stage and has submitted its plan."""
+    from test_stage_order_subplan import _RECORD_HEAD as head, _walk_to_submit_in_contour
+
+    submitted = _walk_to_submit_in_contour(store, tmp_path, head + _HOW_KEPT)
+    assert submitted.ok, submitted.data
+    parent = store.load("p")
+    parent.parent_link = {"parent_session": "g", "stage_index": 4, "norm": {}}
+    store.save(parent)
+
+
+def test_below_root_decision_lands_where_check_13_reads_it(home_store, tmp_path):
+    """The condition was set by a middle level that is a contour of its own: the agent of that
+    level decides (the raising session cannot), the decision is written into the middle level's
+    record of the stage it was linked at, and the child's replan then passes check 13, which
+    reads it there. The decided text is what the readers of the condition show."""
+    store = home_store
+    _middle_level_contour(store, tmp_path)
+    refused = _break(store, tmp_path, "B1", sid="c")
+    assert refused.ok is False, (refused.detail, refused.data)
+    (objection_id,) = _objection_ids(refused)
+    raised = sub_plan.stored_record(store.load("c"), 1).objections[0]
+    assert raised["site"] == {"owner": "p", "key": "4", "depth": 0}
+
+    below = _decide(store, objection_id, "changed", new_text="no push to main", sid="c")
+    assert below.ok is False and "keeps its decisions in session 'p'" in below.detail
+    assert _break(store, tmp_path, "B1", sid="c", name="before.toml").ok is False
+
+    decided = _decide(store, objection_id, "changed", new_text="no push to main", sid="p")
+    assert decided.ok, decided.detail
+    (written,) = store.load("p").sub_plan_records["4"]["setter_decisions"]
+    assert written["objection"] == objection_id and written["value"] == "changed"
+    assert written["new_text"] == "no push to main" and written["version"] == 1
+    assert store.load("c").sub_plan_records.get("0:1", {}).get("setter_decisions") in (None, [])
+
+    seen = cli_common._stage_order_context(store.load("c"), store=store).binding_conditions
+    assert [c["text"] for c in seen] == ["no push to main"]
+    passed = _break(store, tmp_path, "B1", sid="c", name="after.toml", drop=())
+    assert passed.ok, (passed.detail, passed.data)
+    assert sub_plan.stored_record(store.load("c"), 1).objections[0]["status"] == "consumed"

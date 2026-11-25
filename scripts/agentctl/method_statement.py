@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from . import grounding_judge as GJ
 from . import plan as plan_mod
+from . import sub_plan
 
 JUDGE_NAME = "method_statement"
 
@@ -237,9 +238,10 @@ def defect_line(finding: Finding) -> str:
 # --- the statements of each place ------------------------------------------------------------------
 
 
-def order_statements(order) -> list[Statement]:
+def order_statements(order, condition_decisions=()) -> list[Statement]:
     """The text of a new-form order: its customer side and its executor side, and nothing kept beside
-    it (method ideas, means conditions, the planning budget). An old-form order has none."""
+    it (method ideas, means conditions, the planning budget). An old-form order has none. A binding
+    condition reads as the root level's `condition_decisions` leave it (`sub_plan.current_condition_text`)."""
     if not plan_mod.is_two_sided(order):
         return []
     side = order.customer_side
@@ -256,8 +258,9 @@ def order_statements(order) -> list[Statement]:
         out.append(Statement(f"constraint {c.id}", EXECUTOR_SIDE, c.text))
     if not binding_exempt():
         for b in order.binding_conditions:
+            text, _ = sub_plan.current_condition_text({"id": b.id, "text": b.text}, condition_decisions)
             out.append(Statement(f"binding condition {b.id}", CUSTOMER_SIDE,
-                                 f"{b.text}\n{b.objection_text}".strip()))
+                                 f"{text}\n{b.objection_text}".strip()))
     return out
 
 

@@ -41,6 +41,7 @@ from . import (
     cli_replan,
     cli_control,
     cli_mandate,
+    cli_condition,
 )
 # Re-exported: read as agentctl.cli.<name> by tests.
 from .config import Thresholds
@@ -311,6 +312,7 @@ COMMANDS = {
     "approve-resources": cmd_approve_resources,
     "approve-stage-resources": cmd_approve_stage_resources,
     "estimate-correct": cmd_estimate_correct,
+    "condition-decide": cli_condition.cmd_condition_decide,
     "partition": cmd_partition,
     "partition-units": cmd_partition_units,
     "next-stage": cmd_next_stage,
@@ -382,6 +384,7 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     cli_replan.register(sub, add)
     cli_control.register(sub, add)
     cli_mandate.register(sub, add)
+    cli_condition.register(sub, add)
     return p
 
 

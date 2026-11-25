@@ -698,7 +698,8 @@ def cmd_order_executor_revise(args, *, store: StateStore, runner: Runner | None 
             "order-agree), not a revision", moved=moved)
     problems = _order_draft_violations(doc, state)
     problems.extend(_executor_side_violations(doc.meta, state))
-    executor_text = [s for s in method_statement.order_statements(doc.meta.order)
+    executor_text = [s for s in method_statement.order_statements(
+                         doc.meta.order, state.root_conditions.get("decisions") or ())
                      if s.place == method_statement.EXECUTOR_SIDE]
     problems.extend(method_statement.defect_line(f)
                     for f in method_statement.site_defects(executor_text, runner=method_runner))
