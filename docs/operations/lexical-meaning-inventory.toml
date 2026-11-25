@@ -2486,6 +2486,55 @@ ground = "Reads the `Found N matches` header of the built-in grep's output text 
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/opencode_probe/adapter/binary_facts.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles TOOL_DIRECTORY_GLOB, which finds the glob spelling of a tool-directory scan in the pinned OpenCode binary's source text; matches program syntax of a binary, no meaning of free text."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/binary_facts.py::_names::re.findall"]
+class = "structural"
+ground = "Reads the double-quoted string literals of a JavaScript array declaration found in the binary's source text; token syntax, not meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/binary_facts.py::_scan_declaration::re.search"]
+class = "structural"
+ground = "Locates the scan-name and config-file array declarations in the pinned binary's source text by their code shape; program syntax of the binary, no meaning of free text."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/binary_facts.py::context::re.finditer"]
+class = "structural"
+ground = "Cuts a fixed window of the binary's source text around each occurrence of a pattern for the probe's evidence record; excerpting, no verdict depends on what the match means."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/binary_facts.py::has_tool_directory_glob::pattern.search"]
+class = "structural"
+ground = "TOOL_DIRECTORY_GLOB.search reports whether the binary's source text spells a tool-directory glob; code-shape test on a binary, not free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/binary_facts.py::plugin_directory_names::re.search"]
+class = "structural"
+ground = "Reads the plugin directory names the binary scans from the array declared next to the plugin-discover call; program syntax of the binary, no meaning of free text."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/facts_routes.py::_slug::re.sub"]
+class = "structural"
+ground = "Replaces every run of characters outside A-Za-z0-9 with a hyphen to build a file-name slug from a route member id; identifier syntax, no meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/facts_routes.py::tool_name::re.sub"]
+class = "structural"
+ground = "Replaces non-word characters of a route member id with underscores to build the probe tool's identifier; identifier syntax, no meaning."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/opencode_probe/record.py::latest_record::re.match"]
 class = "structural"
 ground = "Selects run directories whose name has the fixed UTC timestamp format YYYYMMDDTHHMMSSZ that the probe itself writes; a name format, not a meaning."

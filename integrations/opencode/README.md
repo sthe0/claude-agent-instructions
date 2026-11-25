@@ -104,6 +104,17 @@ that mechanism was seen to refuse.
   to it once setup ran; a launcher (the stage-9/10 preflight) treats a missing marker or `failed` as an
   unusable gate. A failed bridge leaves hooks that refuse every tool call; a `shell.create.before` that
   cannot register fails the marker and refuses `shell`. An unwritable `AGENT_GATE_LOG` is ignored.
+- **Unreadable input to a denying hook.** A denying hook that allows because it could not read the call
+  turns a refusal into a pass. [docs/operations/hook-unparsable-input-inventory.toml](../../docs/operations/hook-unparsable-input-inventory.toml)
+  names every such branch of every PreToolUse/PermissionRequest hook the installer wires. Two hooks,
+  `hook-guard-canon-readonly.py` and `hook-guard-permission-surface.py`, now deny a call whose required
+  argument (`command`, `file_path`, `notebook_path`, `old_string`/`new_string`, `content`, `edits`) is
+  absent, of the wrong type or a relative file path; the tests in `scripts/tests/test_hook_unparsable_input_contract.py` keep the verdicts
+  on recorded Claude payloads equal to those of the stage-6 start ref. Every other row is left as it is,
+  with its reason: a branch Claude can reach (an unparsable shell string, an `old_string` not found) keeps
+  its allow, since a refusal there would change a Claude verdict; a branch fed by a tool argument and
+  unreachable from Claude carries a `bridge_call` that the bridge refuses before any row runs.
+  Not established: whether Claude Code rejects a relative `file_path` before its hooks run.
 - **Parity with Claude's hook protocol, on purpose.** A hook that times out or exits with a code other than
   0 or 2 allows the call, and a bridge failure on the turn-end event ends the turn.
 

@@ -11,6 +11,7 @@ SUBJECT_FILES = [
     "scripts/canon_writers.toml",
     "scripts/lib/unguarded_sink_allowlist.py",
     "docs/operations/lexical-meaning-inventory.toml",
+    "docs/operations/hook-unparsable-input-inventory.toml",
     "scripts/hook-ask-answer-record.py",
     "scripts/hook-branch-backup.py",
     "scripts/hook-burn-rate-guard.py",
