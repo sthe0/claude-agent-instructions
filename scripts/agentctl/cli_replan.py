@@ -13,6 +13,7 @@ from . import (
     order_approvals,
     plugins,
     premise,
+    sub_plan,
     task_accumulator,
 )
 from .config import Thresholds
@@ -47,6 +48,7 @@ from .state import (
     SessionState,
     StageStatus,
     WeightClass,
+    restamp_subplan_digest,
 )
 from .store import StateStore
 from . import effort_segments
@@ -742,6 +744,7 @@ class _ReplanContext:
     planless: bool = False
     continuation: Any = None
     continuation_base: Any = None
+    classes: Any = None
 
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
@@ -1191,7 +1194,8 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     # submission refusal above (a plan that does not meet submission grade is
     # not worth authorizing) and strictly before the plan_approval PLUGIN
     # block below; this command has still written nothing to disk at this point.
-    auth_kind = _replan_kind(state, _load_prior_plan(state, _replan_baseline_path(state), strict=False), new)
+    prior_plan = _load_prior_plan(state, _replan_baseline_path(state), strict=False)
+    auth_kind = _replan_kind(state, prior_plan, new)
 
     # A finished stage is frozen against the edits that change what it was built from or
     # promises (operative and interface leaves): a replan of ANY kind touching one is
@@ -1202,6 +1206,18 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     if baseline is not None:
         tier = change_tier(baseline, new)
     change_class = replan_class(tier)
+    # Before approval there is no approved snapshot: the registered plan is the baseline, and only
+    # a change of the root product is routed (nothing else has been approved yet to need a decider).
+    routing = gates.replan_routing_blockers(
+        state, baseline if baseline is not None else prior_plan, new,
+        tier if baseline is not None else None, product_only=baseline is None)
+    routing += sub_plan.replan_record_blockers(state, new, store)
+    _log_gate(state, "replan_routing", routing, passed=not routing)
+    if routing:
+        return Directive(False, state.node, "replan",
+                         "replan refused: the change is not the executor's to apply as it stands",
+                         data={"blockers": routing})
+    ctx.classes = gates.classify_replan(baseline, new, tier)
     reopen_roots = set(getattr(args, "reopen", None) or [])
     unknown_reopen = sorted(reopen_roots - {s.index for s in state.stages})
     if unknown_reopen:
@@ -1396,6 +1412,22 @@ def _replan_baseline_and_coverage_gates(ctx: _ReplanContext) -> Directive | None
     return None
 
 
+def _store_replanned_record(ctx: _ReplanContext) -> None:
+    """Store the sub-plan record the accepted plan carries. When the plan's method moved and no
+    product or description change goes with it (`ReplanClasses.restamps`), the user's approval of
+    the sub-plan is carried over to the new method: the replan is the executor's own act inside
+    the boundary the user approved, and a changed resource request is not carried (the
+    stage stays refused until the user approves it)."""
+    state, new, store = ctx.state, ctx.new, ctx.store
+    record = new.meta.sub_plan
+    if record is None or record.stage <= 0:
+        return
+    moved = sub_plan.method_moved(state, new)
+    sub_plan.record_carried_by(state, new, store)
+    if moved and ctx.classes is not None and ctx.classes.restamps:
+        restamp_subplan_digest(state, record.stage, record, sub_plan.record_level(state))
+
+
 def _replan_record_acceptance(ctx: _ReplanContext) -> None:
     """Past every refusal: books the replan's side effects shared by all three apply
     branches and derives what they log."""
@@ -1415,6 +1447,7 @@ def _replan_record_acceptance(ctx: _ReplanContext) -> None:
     if reopened is not None:
         reopened.extend(sorted(reopening))
     state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
+    _store_replanned_record(ctx)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
     # settled and the next loop starts from zero. Placed here — past every refusal of this

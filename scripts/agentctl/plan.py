@@ -2903,6 +2903,16 @@ def understanding_digest(doc: PlanDoc) -> str:
     return hashlib.sha256(repr(tuple(sorted(parts.items()))).encode("utf-8")).hexdigest()
 
 
+def product_digest(doc: PlanDoc) -> str:
+    """One digest over what the root order's customer is promised: the plan's `goal` and
+    `done_criterion` beside the agreed understanding. A re-agreement record binds to it, so a
+    replan that moves the product is checked against the draft the user agreed, whichever of
+    the three it moved. Never an input of `understanding_digest` or `order_digest`."""
+    meta = doc.meta
+    body = repr((meta.goal, meta.done_criterion, understanding_digest(doc)))
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def order_scope(meta) -> tuple:
     """The SCOPE-bearing half of the order, as a contribution to a change-decision key:
     a one-element tuple holding the requirement ids and the coverage map's keys, or the

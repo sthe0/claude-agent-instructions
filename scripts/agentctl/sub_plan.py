@@ -20,6 +20,7 @@ and is named in `malformed`); what a record must carry is the submission seam's 
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
@@ -664,6 +665,67 @@ def record_carried_by(state, doc, store_=None) -> None:
     elif pushed is None and state.parent_link:
         record.building_place = BuildingPlace(session=state.session_id)
     store(state, record, level)
+
+
+# What a replan may change in the record its plan carries. The method fields, the resource request
+# and the estimate are the executor's to rewrite (the estimate under `confirm_estimate`); the
+# engine's own fields are written by their own verbs and a replan file's copy of them is not read.
+# Every other field is refused when it differs from the stored record, so a field added to
+# `SubPlanRecord` later is refused until it is listed here.
+REPLAN_METHOD_FIELDS = ("means", "method", "procedure", "conditions")
+REPLAN_REQUEST_FIELD = "resource_request"
+REPLAN_ESTIMATE_FIELD = "estimate"
+REPLAN_ENGINE_FIELDS = ("reviews", "objections", "building_place", "setter_decisions",
+                        "parent_resource_approval", "user_subplan_approval", "malformed")
+
+
+def record_level(state) -> int | None:
+    """The stack level a record the running plan carries is keyed by (`record_key`)."""
+    return len(state.plan_stack) - 1 if state.plan_stack else None
+
+
+def stored_record(state, stage_index: int) -> "SubPlanRecord | None":
+    raw = state.sub_plan_records.get(record_key(stage_index, record_level(state)))
+    return SubPlanRecord.from_dict(raw) if raw else None
+
+
+def replan_record_blockers(state, doc, store_=None) -> list[str]:
+    """Why the record a replan's plan carries may not replace the stored one ([] == it may): a
+    field outside the replan's list differs from the stored record, or its estimate fails
+    `confirm_estimate` (a figure the parent agreed changed without the parent's correction, a
+    correction the record wrote). Nothing is written."""
+    record = doc.meta.sub_plan
+    if record is None or record.stage <= 0:
+        return []
+    stored = stored_record(state, record.stage)
+    out: list[str] = []
+    if stored is not None:
+        new_d, old_d = record.to_dict(), stored.to_dict()
+        listed = {*REPLAN_METHOD_FIELDS, REPLAN_REQUEST_FIELD, REPLAN_ESTIMATE_FIELD,
+                  *REPLAN_ENGINE_FIELDS}
+        out += [f"the replan changes `{name}` of stage {record.stage}'s sub-plan record, a field a "
+                f"replan does not write (it may change {', '.join(REPLAN_METHOD_FIELDS)}, "
+                f"{REPLAN_REQUEST_FIELD} and {REPLAN_ESTIMATE_FIELD})"
+                for name in new_d if name not in listed and new_d[name] != old_d.get(name)]
+    if any(r.get("kind") == METHOD_REVIEW_KIND for r in record.reviews):
+        out.append(f"stage {record.stage}'s record carries a `{METHOD_REVIEW_KIND}` review: that "
+                   f"review is written by the engine, never by the record it judges")
+    try:
+        confirm_estimate(copy.deepcopy(record), state.session_id,
+                         _parent_copy(state, record.stage, record_level(state), store_))
+    except SubPlanError as exc:
+        out.append(str(exc))
+    return out
+
+
+def method_moved(state, doc) -> bool:
+    """Whether the record `doc` carries differs from the stored one in what the user approved
+    (`approval_digest`): the sub-plan's method, not its estimate or its engine fields."""
+    record = doc.meta.sub_plan
+    if record is None or record.stage <= 0:
+        return False
+    stored = stored_record(state, record.stage)
+    return stored is None or approval_digest(record) != approval_digest(stored)
 
 
 def close_frame_interval(state, stage_index: int, popped: int) -> None:

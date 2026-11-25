@@ -207,10 +207,17 @@ NO_AGREEMENT = "no agreed order understanding"
 DIVERGES = "diverges from the agreed"
 
 
-def _agree(cli: Cli, tmp_path: Path, draft: Path | None = None) -> str:
+REAGREEMENT_GROUNDS = ("--reagree-changes", "the difficulty line", "--reagree-why", "the reviewer found it wrong",
+                       "--reagree-earlier-plan", "none yet", "--reagree-difficulty", "the order misread the need")
+
+
+def _agree(cli: Cli, tmp_path: Path, draft: Path | None = None, *, again: bool = False) -> str:
+    """The user's agreement of a draft; `again`: a second agreement in the session, which states
+    the four grounds of the change."""
     marker = _present_draft(cli, tmp_path, draft or _draft(tmp_path))
     cli.answer(marker, choose_marked=True)
-    cli.ok("order-agree", "--session", SESSION, "--note", "as stated")
+    cli.ok("order-agree", "--session", SESSION, "--note", "as stated",
+           *(REAGREEMENT_GROUNDS if again else ()))
     return marker
 
 
@@ -288,7 +295,7 @@ def test_a_new_agreement_closes_an_open_challenge(cli, tmp_path):
 
     revised = _draft(tmp_path, name="revised.toml", replace={
         "difficulty": 'difficulty = "a release takes a day of hand-work and a review"'})
-    _agree(cli, tmp_path, revised)
+    _agree(cli, tmp_path, revised, again=True)
 
     approve = cli.refused("approve", "--session", SESSION, "--by", "user")
     assert challenge_id not in _said(approve)

@@ -220,6 +220,20 @@ def render_order_md(doc: PlanDoc) -> list[str]:
     return lines
 
 
+def reagreement_lines(record: dict | None) -> list[str]:
+    """The record of a second agreement beside the order it concerns: what changed, why, the plan
+    the earlier order had and the difficulty the change removes. `[]` for a first agreement (no
+    record). Held in the agreement, not in the order, so the order's bytes and digests never
+    carry it."""
+    if not record:
+        return []
+    return ["## Re-agreement", "",
+            f"- **What changes:** {record.get('changes', '')}",
+            f"- **Why:** {record.get('why', '')}",
+            f"- **Earlier plan:** {record.get('earlier_plan', '')}",
+            f"- **Difficulty it removes:** {record.get('difficulty', '')}", ""]
+
+
 def _order_header_lines(order) -> list[str]:
     """The `## Order` heading with who the order is for and where."""
     lines = ["## Order", ""]

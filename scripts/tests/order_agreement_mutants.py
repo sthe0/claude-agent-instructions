@@ -643,7 +643,27 @@ def _small_task_gets_phase_segments(mp):
     mp.setattr("agentctl.cli_common._phase_free", lambda state: False, raising=True)
 
 
+def _product_replan_unrouted(mp):
+    """A replan that changes the order's product no longer needs a re-agreement record."""
+    mp.setattr("agentctl.gates.replan_routing_blockers",
+               lambda state, old, new, change=None: [], raising=True)
+
+
+OLD_FORM_MARK_TARGETS = ("agentctl.gates.is_two_sided",)
+
+
+def _old_form_mark_ignored(mp):
+    """Every order reads as two-sided: an old-form order is routed by the new form's classes.
+
+    One plant over a LIST of targets: each place that reads the old-form mark is patched
+    here, so a later stage adds its target to the tuple and not a second mutant."""
+    for target in OLD_FORM_MARK_TARGETS:
+        mp.setattr(target, lambda order: True, raising=True)
+
+
 MUTANTS = {
+    "product_replan_unrouted": _product_replan_unrouted,
+    "old_form_mark_ignored": _old_form_mark_ignored,
     "disclosure_omits_phases": _disclosure_omits_phases,
     "small_task_gets_phase_segments": _small_task_gets_phase_segments,
     "overrun_reported_only": _overrun_reported_only,

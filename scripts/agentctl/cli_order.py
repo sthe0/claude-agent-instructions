@@ -15,9 +15,9 @@ from .directive import Directive
 from .dispatch import Runner, subprocess_runner
 from .plan import (
     PlanError, executor_side_digest, executor_side_parts, is_two_sided, load_order_draft,
-    understanding_digest, understanding_parts,
+    product_digest, understanding_digest, understanding_parts,
 )
-from .render import order_cost_block_lines
+from .render import order_cost_block_lines, reagreement_lines
 from .state import (
     CHALLENGE_DISMISSED,
     CHALLENGE_OPEN,
@@ -399,6 +399,9 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
             "before the order was split into two sides; rewrite it with [meta.order.customer_side] "
             "and the executor side, and submit it again"
         )
+    grounds = _reagreement_grounds(args, first=state.order_agreement is None)
+    if isinstance(grounds, str):
+        return refuse("cannot record the agreement: " + grounds)
     decisions = _parse_binding_decisions(args, order)
     if isinstance(decisions, str):
         return refuse("cannot record the agreement: " + decisions)
@@ -431,6 +434,8 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         at=time.time(), note=(getattr(args, "note", "") or "").strip(), anchor=anchor,
         anchor_at=since, rendering_sha256=receipt.rendering_sha256,
     )
+    if grounds is not None:
+        agreement.reagreement = {**grounds, "product_sha256": product_digest(doc)}
     if is_two_sided(order):
         beside = _beside_records(doc)
         agreement.customer_side_agreed = True
@@ -458,8 +463,36 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         True, state.node, "continue",
         f"order understanding {digest[:12]} agreed by the user ({anchor} anchor); "
         "next: author the plan and submit-plan",
-        data={"understanding_sha256": digest, "anchor": anchor},
+        data={"understanding_sha256": digest, "anchor": anchor,
+              **({"reagreement": agreement.reagreement,
+                  "order_reagreement_block": reagreement_lines(agreement.reagreement)}
+                 if agreement.reagreement else {})},
     )
+
+
+REAGREEMENT_GROUNDS = (
+    ("changes", "reagree_changes", "--reagree-changes", "what in the order changes"),
+    ("why", "reagree_why", "--reagree-why", "why it changes"),
+    ("earlier_plan", "reagree_earlier_plan", "--reagree-earlier-plan",
+     "the plan the earlier order had, or 'none yet' when it had none"),
+    ("difficulty", "reagree_difficulty", "--reagree-difficulty",
+     "the difficulty the change removes"),
+)
+
+
+def _reagreement_grounds(args, *, first: bool) -> "dict | str | None":
+    """The four grounds of a second agreement in a session that already agreed an order, or the
+    refusal text naming the ones missing. None for the session's first agreement, which has
+    nothing it changes."""
+    if first:
+        return None
+    given = {key: (getattr(args, attr, "") or "").strip() for key, attr, _, _ in REAGREEMENT_GROUNDS}
+    missing = [f"{flag} <{meaning}>" for key, _, flag, meaning in REAGREEMENT_GROUNDS if not given[key]]
+    if missing:
+        return ("this session already agreed an order, so agreeing it again is a change of the "
+                "root product the user decides, and it is recorded with its four grounds; missing: "
+                + "; ".join(missing))
+    return {**given, "at": time.time()}
 
 
 def _adopt_order_criterion_type(state: SessionState, doc) -> None:
@@ -691,6 +724,10 @@ def register(sub, add):
     sp.add_argument("--binding-decision", action="append", default=[], metavar="ID=keep|drop",
                     help="the user's decision on one binding condition of the draft; repeat per "
                          "condition")
+    for _key, attr, flag, meaning in REAGREEMENT_GROUNDS:
+        sp.add_argument(flag, dest=attr, default="",
+                        help=f"a second agreement in a session that already agreed an order needs "
+                             f"all four --reagree-* grounds; this one: {meaning}")
 
     sp = add("order-search"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="id the recorded search is kept under")

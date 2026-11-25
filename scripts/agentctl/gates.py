@@ -68,9 +68,11 @@ from .plan import (
     planning_cost_line,
     understanding_cost_line,
     acceptance_requirement_bindings,
+    change_tier,
     changed_parts,
     consumers,
     description_place,
+    executor_side_digest,
     effects_place,
     entries_grants_sha256,
     grants_place,
@@ -89,6 +91,7 @@ from .plan import (
     pair_currency_keys,
     plan_has_any_grants,
     plan_interface_digests,
+    product_digest,
     reliance_set,
     review_pairs,
     review_units,
@@ -4623,6 +4626,112 @@ _RENORM_PROTECTED = (
     ("criterion.negative_control", "the known-bad input the check must reject"),
     ("criterion.negative_control_waiver", "the stated reason the check has no negative control"),
 )
+
+#: The leaves of a stage that describe it inside the root order (class (b) of a replan): what the
+#: stage is for and how its result is accepted, and the size the description carries. One tuple,
+#: the only place a stage-description field is named for routing.
+STAGE_DESCRIPTION_LEAVES = (
+    "title", "subject.result", "criterion.done_criterion", "place", "binding_conditions",
+    "binding_conditions_stated", "declared_size", "size_flags", "expected_minutes",
+)
+#: The leaves of a stage that state the executor's method (class (c) when the executor is the
+#: parent's stage); a two-sided order's stage carries none of them.
+STAGE_METHOD_LEAVES = ("means.means", "means.method", "means.procedure", "conditions")
+
+
+class ReplanClasses(NamedTuple):
+    """What a replan's diff touches, by who decides it. `product`: the names of the root product
+    moved (class (a): the plan's goal and done criterion, every understanding part); `executor_side`:
+    the executor side of a two-sided order moved (class (a')); `description`: stage-description
+    leaves moved (class (b)); `method`: method leaves, or the sub-plan record's method, moved
+    (class (c))."""
+    product: tuple[str, ...] = ()
+    executor_side: bool = False
+    description: tuple[str, ...] = ()
+    method: tuple[str, ...] = ()
+
+    @property
+    def restamps(self) -> bool:
+        """A method change carries the user's sub-plan approval over only when no product or
+        description change goes with it: beside one, the approver is another, so nothing is
+        re-stamped."""
+        return not self.product and not self.description
+
+
+def _in_leaves(path: str, leaves: tuple[str, ...]) -> bool:
+    return any(path == leaf or path.startswith(leaf + ".") for leaf in leaves)
+
+
+def classify_replan(old, new, change=None) -> ReplanClasses:
+    """The classes of the change that turns plan `old` into `new` (`change`: the `change_tier`
+    result the caller already holds). Pure; `old` None (no baseline) gives no class, as the tier
+    gives none."""
+    if old is None or new is None:
+        return ReplanClasses()
+    product = [name for name, was, now in (("goal", old.meta.goal, new.meta.goal),
+                                           ("done_criterion", old.meta.done_criterion,
+                                            new.meta.done_criterion)) if was != now]
+    product += _agreement_divergence(understanding_parts(old), understanding_parts(new))
+    change = change if change is not None else change_tier(old, new)
+    # A stage describes itself inside the root order only when the order is two-sided (the plan's
+    # form follows the order's, read from the form mark); an old-form plan's stage is the plan's own.
+    described = is_two_sided(new.meta.order)
+    description = [f"stage {i} {path}" for i, sc in change.stages.items() if described
+                   for path, _ in sc.moved if _in_leaves(path, STAGE_DESCRIPTION_LEAVES)]
+    description += ["stage set"] if described and "stages" in change.meta else []
+    method = [f"stage {i} {path}" for i, sc in change.stages.items()
+              for path, _ in sc.moved if _in_leaves(path, STAGE_METHOD_LEAVES)]
+    return ReplanClasses(
+        product=tuple(product),
+        executor_side=executor_side_digest(old) != executor_side_digest(new),
+        description=tuple(description), method=tuple(method))
+
+
+def _reagreed_product(state: SessionState, new) -> bool:
+    """Whether the user re-agreed exactly the product `new` carries: some agreement of this
+    session holds a four-ground record bound to its `product_digest`."""
+    target = product_digest(new)
+    return any(a is not None and a.reagreement and a.reagreement.get("product_sha256") == target
+               for a in (*state.order_agreement_history, state.order_agreement))
+
+
+def _executor_side_recorded(state: SessionState, new) -> bool:
+    """Whether the executor side `new` carries is the one the user was shown at agreement or one
+    `order-executor-revise` recorded."""
+    digest = executor_side_digest(new)
+    agreement = state.order_agreement
+    return digest == (agreement.executor_side_sha256 if agreement is not None else None) or any(
+        r.get("executor_side_sha256") == digest for r in state.executor_side_revisions)
+
+
+def replan_routing_blockers(state: SessionState, old, new, change=None, *,
+                            product_only: bool = False) -> list[str]:
+    """Where the replan's change must be decided before it is applied ([] == it may be): a root
+    product change needs the user's re-agreement of exactly that product (a four-ground record
+    from `order-agree`), and an executor-side change needs `order-executor-revise`'s record. A
+    description change and a method change are no business of the order; they follow the approval
+    rule of the plan they change. `product_only`: before approval, where only the root product is
+    routed. Inert unless the order-agreement gate applies (an armed substantive root with an
+    agreed order) and `new` states an order."""
+    if (old is None or new is None or new.meta.order is None or state.order_agreement is None
+            or not order_agreement_active(state)):
+        return []
+    classes = classify_replan(old, new, change)
+    if classes.product:
+        if _reagreed_product(state, new):
+            return []
+        return [
+            f"the replan changes the root product ({', '.join(classes.product)}): that is the "
+            "user's to agree, not a plan edit — put the changed order in a draft whose goal and "
+            "done_criterion are the plan's, order-submit it, have it reviewed and presented, and "
+            "run order-agree again with the four grounds (--reagree-changes, --reagree-why, "
+            "--reagree-earlier-plan, --reagree-difficulty); then replan again"]
+    if classes.executor_side and not product_only and not _executor_side_recorded(state, new):
+        return [
+            "the replan changes the executor side of the agreed order: record the revision with "
+            "`order-executor-revise --plan <the revised draft> --why <text>` (it needs no new "
+            "agreement and leaves the agreed digest as it is); then replan again"]
+    return []
 
 
 def _dotted(obj, dotted: str):

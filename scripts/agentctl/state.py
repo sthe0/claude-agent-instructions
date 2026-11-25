@@ -1571,6 +1571,10 @@ class OrderAgreement:
     planning_budget: dict | None = None
     # The customer side's criterion type as agreed; "" for an old-form agreement.
     criterion_type: str = ""
+    # The four grounds a second agreement in a session states (`what`, `why`, `earlier_plan`,
+    # `difficulty`) and the `product_sha256` of the draft it agreed; None for a first agreement.
+    # Beside the order: never an input of `understanding_parts` or `order_digest`.
+    reagreement: dict | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "OrderAgreement":
@@ -1592,6 +1596,7 @@ class OrderAgreement:
             binding_conditions=[dict(x) for x in d.get("binding_conditions") or []],
             planning_budget=dict(d["planning_budget"]) if d.get("planning_budget") else None,
             criterion_type=d.get("criterion_type") or "",
+            reagreement=dict(d["reagreement"]) if d.get("reagreement") else None,
         )
 
 
@@ -3780,16 +3785,19 @@ SESSION_SCOPED_FIELDS = frozenset({
 })
 
 
-def restamp_subplan_digest(state: "SessionState", stage_index: int, record) -> bool:
+def restamp_subplan_digest(state: "SessionState", stage_index: int, record,
+                           level: int | None = None) -> bool:
     """Carry the user's approval of a sub-plan over an edit another approval covers (stage 8's
     in-boundary route is its one caller): set the approved sub-plan digest to the live `record`'s.
     Only a field approve-subplan already set is moved, and only its sub-plan digest: when the live
     request's allow rules or added directories differ from the ones the user approved, the whole
     field stays as it was and the stage stays refused until approve-subplan --by user runs on the
-    changed sub-plan. True when the field moved."""
+    changed sub-plan. True when the field moved. `level` is the stack level of the plan whose
+    stage the record describes (a frame's record); None reads the plan the session is running."""
     from . import sub_plan
 
-    entry = state.stage_approvals.get(sub_plan.approval_key(state, stage_index)) or {}
+    key = sub_plan.approval_key(state, stage_index) if level is None else f"{level}:{stage_index}"
+    entry = state.stage_approvals.get(key) or {}
     if not entry.get("user_subplan_approval"):
         return False
     if sub_plan.resource_request_digest(record.resource_request) != entry.get("user_subplan_request"):

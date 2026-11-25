@@ -766,7 +766,7 @@ def _no_worktree_routing_by_default(request, monkeypatch):
 
 _OWNS_ORDER_AGREEMENT_EXEMPTION = frozenset(
     {"test_order_agreement", "test_order_agreement_e2e", "test_plan_presentation",
-     "test_work_of_understanding_planning"})
+     "test_work_of_understanding_planning", "test_product_change_reagreement"})
 
 
 @pytest.fixture(autouse=True)
