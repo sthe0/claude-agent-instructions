@@ -24,12 +24,37 @@ that mechanism was seen to refuse.
 
 ### What the shim refuses, and what it reports
 
+- **Refusal and deny read differently.** A hook's deny reads `deny: <script> <reason>`; a refusal the bridge or
+  the shim makes itself reads `refused: <class> <detail>`, the class one of `unclassified`, `argument`,
+  `refused-tool`, `path-form`, `directory`, `project-config`, `config-dir`, `rows-snapshot`, `gate-setup`
+  (`REFUSAL_CLASSES` in `scripts/lib/opencode_events.py`). Only a `deny:` reason is evidence that a denying row
+  stopped a call; the adapter probe cases that rest on a denying row count nothing else.
 - **Tool ids.** A tool id is judged as the Claude tool whose rows see it: a built-in through
-  `BUILTIN_TOOLS` in `scripts/lib/opencode_events.py`, a plugin
-  tool named in `AGENT_GATE_PLUGIN_TOOLS`, a tool of an MCP server named in `AGENT_GATE_MCP_SERVERS`
-  (comma separated; the launcher passes the servers of the session's config). Any other id is refused
+  `BUILTIN_TOOLS` in `scripts/lib/opencode_events.py`, a plugin tool whose id is in `plugin_tools.ids` (the
+  parity table, shipped empty, or the table-shaped `AGENT_GATE_EXTRA_ROWS` file), a tool of an MCP server the
+  session's own config declares (`mcp` keys of the file `OPENCODE_CONFIG` names and of
+  `OPENCODE_CONFIG_DIR/opencode.json`; the tool is `<server>_<tool>`). An id that fits both an MCP server
+  and a plugin id is ambiguous and refused. Any other id is refused
   whatever rows exist, because the parity table has no matcherless PreToolUse row, and so is `patch`
   (below). Case A5 of the adapter probe phase re-checks the ids the pinned binary offers.
+- **Rows snapshot.** The rows (Core table, layer roots, the extra-rows file) and the declared plugin tools are
+  read once, at a session's first event, into `state/rows-snapshots/<session>.json`; the bridge's answer
+  carries a `digest` of it and the shim sends it back as `rowsDigest` with every later event. A missing or
+  different snapshot is refused (`refused: rows-snapshot`), as is a session with no id, so editing a rows file
+  mid-session changes nothing for that session and a new process gets its own snapshot.
+- **Project config.** OpenCode loads code from a project's own config (its `plugin` lists, `.opencode/plugin`)
+  unless `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set, and a session started without it, or with
+  `OPENCODE_CONFIG_PROJECT_DISABLE`, is refused at `session.prompt` and `tool.execute.before`
+  (`refused: project-config`). Probe A6 derives the routes from the pinned binary (the directory names its config
+  discovery scans, the names its plugin loader lists, the config file names) and records each as `off`,
+  `absent`, `unobserved` or `on`; one `on` stops the work (the gates cannot be secured), and
+  `project_config_off` is true only when every member is `off` or `absent`.
+- **Config directory.** A `write` or `edit` into the session's own config directory
+  (`OPENCODE_CONFIG_DIR`) or the integration directory, and a shell command whose write targets
+  (`scripts/lib/bash_write_targets.py`) fall there, is refused (`refused: config-dir`), since a plugin or rows
+  file placed there would be loaded by a later session. Probe A6 `config_dir_write_refused` checks it with a
+  live write, edit and shell redirect. Open limit: an interpreter-inline write (`python3 -c`, `node -e`)
+  names no target the bridge reads, and passes.
 - **Arguments.** `ARGUMENT_CLASSES` classifies every argument of every enabled built-in tool as mapped to a
   named hook-input field, as a path (resolved, see below), or as irrelevant to every denying row, with a
   one-line reason; an argument that changes where or what a tool reads, writes or runs is never irrelevant.

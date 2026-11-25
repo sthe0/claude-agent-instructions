@@ -11,6 +11,9 @@
 # PostToolUse = tool.execute.after, UserPromptSubmit = session.prompt, SessionStart = session.created,
 # SessionEnd = session.deleted, Stop = experimental.idle).
 
+[plugin_tools]
+ids = []
+
 [[probe_paths]]
 id = "root:shell"
 refused_by = ["PreToolUse", "permission.evaluate"]

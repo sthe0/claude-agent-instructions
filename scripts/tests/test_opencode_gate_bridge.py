@@ -1462,6 +1462,288 @@ def test_adapter_record_with_a4_absent_pins_in_a_scratch_copy(tmp_path):
     assert (core.PROBE_DIR / core.PIN_NAME).read_bytes() == repo_pin
 
 
+# --- refusals, rows snapshot, project config, config directory ----------------------------------------
+
+def _verdict(proc):
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _bridge_env_without(tmp_path, args, stdin, drop=(), **more):
+    env = _env(tmp_path, **more)
+    for name in drop:
+        env.pop(name, None)
+    return subprocess.run([sys.executable, str(BRIDGE), *args], input=stdin, capture_output=True, text=True,
+                          env=env, cwd=tmp_path, timeout=300)
+
+
+def _shell(tmp_path, **more):
+    return _call(tmp_path, "shell", {"command": "true"}, **more)
+
+
+def test_unclassified_tool_or_argument_refused(tmp_path):
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    path = str(tmp_path / "f.txt")
+    for tool, args in (("write", {"path": path, "content": "x", "bogus": 1}),
+                       ("shell", {"command": "true", "workdirs": "/"}),
+                       ("read", {"path": path, "offset": 1, "surprise": True})):
+        verdict = _verdict(_event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args), [row]))
+        assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: argument "), verdict
+    verdict = _verdict(_event(tmp_path, "tool.execute.before", _call(tmp_path, "nosuchtool", {}), [row]))
+    assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: unclassified ")
+    assert not Path(recorded).exists(), "no row ran for a refused call"
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("write", {"path": "{p}"}), ("write", {"content": "x"}), ("write", {"path": "{p}", "content": 5}),
+    ("edit", {"path": "{p}", "oldString": "a"}), ("edit", {"path": "{p}", "oldString": "a", "newString": None}),
+    ("shell", {}), ("shell", {"command": ["true"]}), ("read", {"path": 7}),
+])
+def test_required_argument_absent_or_wrong_type_refused(tmp_path, tool, args):
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    args = {k: (str(tmp_path / "f") if v == "{p}" else v) for k, v in args.items()}
+    verdict = _verdict(_event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args), [row]))
+    assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: "), verdict
+    assert not Path(recorded).exists()
+
+
+def test_refusal_reason_names_source(tmp_path):
+    """A refusal the bridge makes reads ``refused: <class> ...``; a hook's deny reads ``deny: <script> ...``."""
+    denier = _script(tmp_path, "deny_row.py", DENIER)
+    deny_row = {"event": "PreToolUse", "matcher": "Bash", "script": str(denier), "timeout_s": 20}
+    hooked = _verdict(_event(tmp_path, "tool.execute.before", _shell(tmp_path), [deny_row]))
+    assert hooked["decision"] == "deny" and hooked["reason"].startswith("deny: deny_row.py ")
+    assert hooked["script"] == "deny_row.py"
+    refused = _verdict(_event(tmp_path, "tool.execute.before", _call(tmp_path, "patch", {}), [deny_row]))
+    assert refused["reason"].startswith("refused: refused-tool ") and refused["script"] == "opencode-gate-bridge"
+    for cls in oe.REFUSAL_CLASSES:
+        assert oe.refusal_reason(cls, "x") == f"refused: {cls} x"
+    assert oe.hook_deny_reason("s.py", "r") == "deny: s.py r"
+
+
+def test_unknown_directory_event_refused(tmp_path):
+    """A before-event that names no directory is refused whatever the tool; an unclassified tool is reported as
+    such first, and an after-event with no directory is not a call to refuse."""
+    data = {"tool": "read", "sessionID": "ses_nd", "id": "c1", "input": {"path": "x"}}
+    verdict = _verdict(_bridge(tmp_path, ["event", "tool.execute.before"], json.dumps(data)))
+    assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: directory ")
+    verdict = _verdict(_bridge(tmp_path, ["event", "tool.execute.before"],
+                               json.dumps({**data, "tool": "nosuchtool"})))
+    assert verdict["reason"].startswith("refused: unclassified ")
+    verdict = _verdict(_bridge(tmp_path, ["event", "tool.execute.after"],
+                               json.dumps({**data, "output": {"output": "ok"}})))
+    assert verdict["decision"] == "allow"
+
+
+def test_project_config_off_or_refused(tmp_path):
+    data = _shell(tmp_path)
+    ok = _verdict(_bridge_env_without(tmp_path, ["event", "tool.execute.before"], json.dumps(data)))
+    assert ok["decision"] == "allow", ok
+    for drop, more in (((oe.PROJECT_CONFIG_OFF_ENV,), {}),
+                       ((), {oe.PROJECT_CONFIG_PRECEDENCE_ENV: "1"})):
+        for event, payload in (("tool.execute.before", data),
+                               ("session.prompt", {"sessionID": "ses_t", "prompt": {"text": "go"}})):
+            verdict = _verdict(_bridge_env_without(tmp_path, ["event", event], json.dumps(payload), drop=drop,
+                                                   **more))
+            assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: project-config "), (
+                event, drop, more, verdict)
+        after = _verdict(_bridge_env_without(tmp_path, ["event", "tool.execute.after"],
+                                             json.dumps({**data, "output": {"output": "ok"}}), drop=drop, **more))
+        assert after["decision"] == "allow", "an event that cannot refuse a call is not refused"
+
+
+def test_config_dir_write_refused(tmp_path):
+    """A write, an edit and a shell redirect into the session's config directory or the integration directory
+    are refused before any row runs and leave the target as it was; the same calls elsewhere pass."""
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    config, integration = tmp_path / "cfg", tmp_path / "oc"
+    config.mkdir()
+    seed = config / "seed.txt"
+    seed.write_text("orig", encoding="utf-8")
+    env = {oe.OPENCODE_CONFIG_DIR_ENV: str(config)}
+    calls = [("write", {"path": str(config / "w.txt"), "content": "x"}, config / "w.txt"),
+             ("edit", {"path": str(seed), "oldString": "orig", "newString": "changed"}, None),
+             ("shell", {"command": f"echo x > {config}/s.txt"}, config / "s.txt"),
+             ("write", {"path": str(integration / "plugin" / "p.ts"), "content": "x"}, integration / "plugin" / "p.ts"),
+             ("shell", {"command": f"tee {integration}/state/t.txt < /dev/null"}, integration / "state" / "t.txt")]
+    for tool, args, target in calls:
+        verdict = _verdict(_event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args), [row], **env))
+        assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: config-dir "), (tool, verdict)
+        assert target is None or not target.exists()
+    assert seed.read_text(encoding="utf-8") == "orig" and not Path(recorded).exists()
+    outside = tmp_path / "elsewhere.txt"
+    for tool, args in (("write", {"path": str(outside), "content": "x"}),
+                       ("shell", {"command": f"echo x > {outside}"})):
+        verdict = _verdict(_event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args), [row], **env))
+        assert verdict["decision"] == "allow", (tool, verdict)
+
+
+def _rows_session(tmp_path, rows, session="ses_rs", **data):
+    """One before-event of ``session`` under the rows file ``rows``; ``data`` may carry ``rowsDigest``."""
+    return _verdict(_event(tmp_path, "tool.execute.before", {**_shell(tmp_path), "sessionID": session, **data}, rows))
+
+
+def test_rows_frozen_at_session_start(tmp_path):
+    """A row added after the session began does not take effect in it, one removed does not drop out."""
+    denier = _script(tmp_path, "deny_row.py", DENIER)
+    deny_row = {"event": "PreToolUse", "matcher": "Bash", "script": str(denier), "timeout_s": 20}
+    allowed = _rows_session(tmp_path, [], session="ses_a")
+    assert allowed["decision"] == "allow" and allowed["digest"]
+    later = _rows_session(tmp_path, [deny_row], session="ses_a", rowsDigest=allowed["digest"])
+    assert later["decision"] == "allow" and later["digest"] == allowed["digest"], "an added row is not seen"
+    denied = _rows_session(tmp_path, [deny_row], session="ses_b")
+    assert denied["decision"] == "deny"
+    later = _rows_session(tmp_path, [], session="ses_b", rowsDigest=denied["digest"])
+    assert later["decision"] == "deny" and later["reason"].startswith("deny: deny_row.py "), "a removed row stays"
+
+
+def test_rows_snapshot_changed_mid_session_refused(tmp_path):
+    first = _rows_session(tmp_path, [])
+    snapshot = oe.snapshots_dir(tmp_path / "oc") / "ses_rs.json"
+    assert snapshot.is_file()
+    wrong = _rows_session(tmp_path, [], rowsDigest="0" * 64)
+    assert wrong["decision"] == "deny" and wrong["reason"].startswith("refused: rows-snapshot ")
+    snapshot.write_text(json.dumps({"rows": [], "plugin_tools": ["x"]}), encoding="utf-8")
+    edited = _rows_session(tmp_path, [], rowsDigest=first["digest"])
+    assert edited["decision"] == "deny" and edited["reason"].startswith("refused: rows-snapshot ")
+    snapshot.unlink()
+    missing = _rows_session(tmp_path, [], rowsDigest=first["digest"])
+    assert missing["decision"] == "deny" and missing["reason"].startswith("refused: rows-snapshot ")
+    nameless = _verdict(_event(tmp_path, "tool.execute.before", {**_shell(tmp_path), "sessionID": ""}, []))
+    assert nameless["decision"] == "deny" and nameless["reason"].startswith("refused: rows-snapshot ")
+
+
+def test_rows_snapshot_rebuilt_for_new_process(tmp_path):
+    """An event with no digest (a new process of the shim) builds the snapshot again from the sources."""
+    denier = _script(tmp_path, "deny_row.py", DENIER)
+    deny_row = {"event": "PreToolUse", "matcher": "Bash", "script": str(denier), "timeout_s": 20}
+    first = _rows_session(tmp_path, [])
+    assert first["decision"] == "allow"
+    second = _rows_session(tmp_path, [deny_row])
+    assert second["decision"] == "deny" and second["digest"] != first["digest"]
+    third = _rows_session(tmp_path, [deny_row], rowsDigest=second["digest"])
+    assert third["decision"] == "deny" and third["digest"] == second["digest"]
+
+
+# --- A6 route states: the pure rules and the derived runs ----------------------------------------------
+
+class _FakeRun:
+    def __init__(self, loaded, tool_name):
+        self.exit_code = 0
+        self._loaded = sorted(loaded)
+        self._tool_name = tool_name
+
+    def read(self, name):
+        if name == "routes.log":
+            return "\n".join(json.dumps({"route": r, "at": "module"}) for r in self._loaded)
+        return ""
+
+    def tool_list(self):
+        return [self._tool_name(r) for r in self._loaded]
+
+    def tool_description(self, tool):
+        return ""
+
+
+class _FakeHarness:
+    """Stands in for the probe harness: the control run loads ``control`` members, the run with the variable set
+    loads ``with_variable`` members."""
+
+    def __init__(self, control, with_variable):
+        self.control, self.with_variable = control, with_variable
+
+    def run(self, scenario, *, label, config=None, files=None, env=None, cwd=None, timeout=None, **more):
+        from opencode_probe.adapter import facts_routes
+
+        loaded = self.with_variable if "OPENCODE_DISABLE_PROJECT_CONFIG" in (env or {}) else self.control
+        return _FakeRun(loaded, facts_routes.tool_name)
+
+
+NAMES = {"scan_names": [".claude", ".opencode"], "plugin_directory_names": ["plugin", "plugins"],
+         "config_file_names": ["opencode.json"], "tool_directory_glob": False, "scan_list_expected": True}
+
+
+def _members():
+    from opencode_probe.adapter import facts_routes
+
+    return facts_routes.derive_members(NAMES)
+
+
+def _routes(control_ids, variable_ids, names=NAMES):
+    from opencode_probe.adapter import facts_routes
+
+    return facts_routes.project_routes(_FakeHarness(set(control_ids), set(variable_ids)), oe.PROJECT_CONFIG_OFF,
+                                       names=names)
+
+
+def _opencode_dir_members():
+    return {m["id"] for m in _members() if m["id"].startswith(".opencode/") or m["id"].startswith("opencode.json")}
+
+
+def test_a6_project_config_needs_loaded_control():
+    """A control that loaded nothing proves nothing: no member is ``off``, ``project_config_off`` stays false."""
+    result = _routes(set(), set())
+    assert result["project_config_off"] is False and not result["any_on"]
+    assert set(r["state"] for r in result["project_routes"].values()) == {"unobserved"}
+    assert result["tool_file_route"]["state"] == "unobserved"
+    healthy = _routes(_opencode_dir_members(), set())
+    states = {k: r["state"] for k, r in healthy["project_routes"].items()}
+    assert states[".opencode/plugin/flat-js"] == "off" and states[".claude/plugin/flat-js"] == "absent", states
+    assert healthy["project_config_off"] is True and healthy["tool_file_route"]["state"] == "absent"
+
+
+def test_a6_variable_that_stops_nothing_is_k7():
+    """A binary that keeps ``.claude/plugin/`` loading with the variable set: the member is ``on`` (K7)."""
+    loaded = _opencode_dir_members() | {".claude/plugin/flat-js"}
+    result = _routes(loaded, {".claude/plugin/flat-js"})
+    assert result["project_routes"][".claude/plugin/flat-js"]["state"] == "on"
+    assert result["any_on"] is True and result["project_config_off"] is False
+
+
+def test_a6_absent_route_needs_sensitivity_and_scan_list():
+    """``absent`` needs the same file form to have loaded in the control through another member, and the scan list
+    to be the expected one; a tool-file route is ``absent`` only when a plugin tool was seen offered in the control."""
+    from opencode_probe.adapter import facts_routes
+
+    nothing_of_form = _routes({".opencode/plugin/flat-js"}, set())
+    assert nothing_of_form["project_routes"][".claude/plugin/flat-ts"]["state"] == "unobserved"
+    assert nothing_of_form["project_routes"][".claude/plugin/flat-js"]["state"] == "absent"
+    odd_scan = _routes(_opencode_dir_members(), set(), names={**NAMES, "scan_list_expected": False})
+    assert odd_scan["project_routes"][".claude/plugin/flat-js"]["state"] == "unobserved"
+    assert odd_scan["project_config_off"] is False and odd_scan["tool_file_route"]["state"] == "unobserved"
+    glob = _routes(_opencode_dir_members(), set(), names={**NAMES, "tool_directory_glob": True})
+    assert glob["tool_file_route"]["state"] == "unobserved" and glob["project_config_off"] is False
+    tools = facts_routes.tool_file_members()
+    control_loaded = {tools[0]["id"]}
+    assert _routes(_opencode_dir_members() | control_loaded, set())["tool_file_route"]["state"] == "off"
+    assert _routes(_opencode_dir_members() | control_loaded, control_loaded)["tool_file_route"]["state"] == "on"
+    states = {m["id"]: "off" for m in _members()}
+    assert facts_routes.project_config_off(states, "unobserved") is False
+    assert facts_routes.project_config_off({**states, ".claude/plugin/flat-js": "unobserved"}, "absent") is False
+    assert facts_routes.project_config_off({}, "absent") is False
+
+
+def test_adapter_record_a6_holds():
+    """The pinned adapter record's A6 entry carries the derived route table, every member ``off`` or ``absent``,
+    and a live config-directory write, edit and shell redirect refused; skipped while no record is pinned."""
+    from opencode_probe import core, record
+
+    pin = core.read_pin().get("last_pass", {}).get("adapter")
+    found = record.pinned_record(core.state_dir(), pin) if pin else None
+    if found is None:
+        pytest.skip("no adapter record is pinned in this checkout's state directory")
+    entry = (found[1].get("cases") or {}).get("A6") or {}
+    evidence = entry.get("evidence") or {}
+    assert entry.get("status") == record.PASS, entry.get("status")
+    routes = evidence["project_routes"]
+    assert routes and all(r["state"] in ("off", "absent") and not r["with_variable"] for r in routes.values())
+    assert evidence["project_config_off"] is True and evidence["tool_file_route"]["state"] in ("off", "absent")
+    assert evidence["scan_names"] and evidence["config_file_names"]
+    assert evidence["config_dir_write_refused"] is True and evidence["marked_executed"] is False
+    assert {c for c, v in evidence["config_dir"]["calls"].items() if v["refused"] and not v["executed"]} == {
+        "write", "edit", "shell"}
+
+
 # --- guards on what this stage may not change --------------------------------------------------------
 
 def _changed_since_start():
