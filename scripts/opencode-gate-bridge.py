@@ -14,8 +14,9 @@ allow; exit 2 with ``missing-script: <path>`` when a row's script does not resol
 The rows are the Core parity table's, plus each non-home layer root's, plus the table-shaped file named
 by ``AGENT_GATE_EXTRA_ROWS``. A parity table without a PreToolUse row for the OpenCode host is an error
 (exit 2), not an allow-all. A tool id that is no built-in, no plugin tool (``AGENT_GATE_PLUGIN_TOOLS``) and
-no tool of an MCP server named in ``AGENT_GATE_MCP_SERVERS`` is refused whatever rows exist; a ``patch``
-call is judged per file as the Claude ``Write`` / ``Edit`` call it stands for. Plugin shim, rows and
+no tool of an MCP server named in ``AGENT_GATE_MCP_SERVERS`` is refused whatever rows exist, as is a
+``patch`` call, a call with an argument nobody classified, a path in a form OpenCode's resolver was not
+recorded to handle, and any tool call whose session directory is unknown. Plugin shim, rows and
 combination: ``lib/opencode_events.py``.
 """
 from __future__ import annotations
@@ -46,16 +47,25 @@ def _read_json(source) -> dict:
 
 
 def _decide_call(event: str, data: dict, rows: list[oe.Row], transcript: Path | None) -> oe.Decision:
+    tool = data.get("tool") or ""
     directory = data.get("cwd") or ""
-    cwd = directory or os.getcwd()
-    payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"), cwd=cwd,
+    if not directory and event in ("tool.execute.before", "tool.execute.after"):
+        # every hook runs in it and reads paths against it: never this process's own directory
+        if event == "tool.execute.before":
+            return oe.Decision(True, f"{tool} refused: the directory the session runs in is unknown",
+                               "opencode-gate-bridge")
+        return oe.Decision()
+    payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"),
                                plugin=oe.plugin_tools(), servers=oe.mcp_servers(), directory=directory)
     if transcript is not None:
-        oe.append_transcript(transcript, oe.transcript_records(event, {**data, "cwd": cwd}, payload["session_id"]))
+        oe.append_transcript(transcript, oe.transcript_records(event, {**data, "cwd": directory},
+                                                                payload["session_id"]))
     if event == "tool.execute.before":
-        tool = data.get("tool") or ""
         if oe.denied_by_name(tool):
             return oe.Decision(True, f"{tool} is denied by the OpenCode gate adapter", "opencode-gate-bridge")
+        if tool in oe.REFUSED_TOOLS:
+            return oe.Decision(True, f"{tool} is refused by the OpenCode gate adapter: {oe.REFUSED_TOOLS[tool]}",
+                               "opencode-gate-bridge")
         if payload["tool_name"] is None:
             return oe.Decision(True, f"tool {tool!r} is neither a built-in tool, a plugin tool nor a tool of "
                                      f"a configured MCP server; refused", "opencode-gate-bridge")
@@ -66,13 +76,10 @@ def _decide(event: str, data: dict, roots: list[Path], transcript: Path | None) 
     rows = oe.load_rows(roots, os.environ.get(oe.EXTRA_ROWS_ENV))
     if event == "tool.execute.before":
         oe.require_pretool_rows(rows)
-    before = event == "tool.execute.before"
     try:
-        calls = oe.patch_calls(data, data.get("cwd") or "", resolve_content=before) \
-            if event.startswith("tool.execute.") else [data]
-        decision = oe.combine([_decide_call(event, call, rows, transcript) for call in calls])
-    except (oe.UnreadablePatch, oe.UnresolvablePath) as error:
-        if before:
+        decision = _decide_call(event, data, rows, transcript)
+    except oe.UnshowableCall as error:
+        if event == "tool.execute.before":
             return oe.Decision(True, f"{data.get('tool')} refused, the gates cannot be shown what it does: {error}",
                                "opencode-gate-bridge")
         return oe.Decision()

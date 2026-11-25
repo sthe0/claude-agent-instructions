@@ -5,8 +5,10 @@ session that calls each path once loads the probe plugin (passive, no rule) and 
 denying stand-in row (matcherless, exits 2) added through ``AGENT_GATE_EXTRA_ROWS``; Core's own
 denying rows deny only on engine state, which a stub-driven session has none of. The Code Mode inner
 call is run on its own with a row whose matcher fits only the inner tool, so the wrapper is not
-what stops it; a ``patch`` call (the file-editing tool of the gpt family) is run on its own under the denying row; the nested ``child-run`` process is likewise run alone with a row that refuses only
-its own ``touch`` command, so the outer call that launches it passes. A path is refused when its effect did not happen and the shim's log holds a refusal
+what stops it; the nested ``child-run`` process is likewise run alone with a row that refuses only its own
+``touch`` command, so the outer call that launches it passes. A ``patch`` call (the file-editing tool of
+the gpt family, which cannot be switched off alone) is forced on its own with no denying row: the adapter
+refuses it by itself. A path is refused when its effect did not happen and the shim's log holds a refusal
 for that call (the inner call: for a tool of the inner namespace). pass when every listed path is
 refused; fail when some path's effect happened (``marked_executed``); unobserved when the pinned
 record or a listed path is missing, or a path was neither executed nor logged as refused.
@@ -22,8 +24,6 @@ INNER_MATCHER = f"mcp__{paths.INNER_NAMESPACE}__.*"
 PATCH_PATH_ID = "root:patch"
 PATCH_MODEL = "gpt-5"
 PATCH_TARGET = "m-patch"
-RELATIVE_PATCH_PATH_ID = "root:patch-relative"
-RELATIVE_PATCH_TARGET = "m-patch-rel"
 
 
 def pinned_path_ids(state):
@@ -69,26 +69,23 @@ def _path_entry(run, plan, spec, entries):
             "reason_in_error": sa.DENY_REASON in error, "status": out["status"]}
 
 
-def _patch_path(h, ctx, relative=False):
-    """The gpt family is offered ``patch`` in place of edit and write, a path the mechanisms record does not
-    list (its stub model is not the one the P1 scenario drives): a patch that adds a file runs under the
-    denying row, and the file must not appear. With ``relative`` the patch names its file relative to the
-    session directory, which the bridge must make absolute before any hook sees it."""
-    target = RELATIVE_PATCH_TARGET if relative else PATCH_TARGET
-    named = target if relative else "{root}/" + target
-    patch = "*** Begin Patch\n*** Add File: " + named + "\n+x\n*** End Patch"
+def _patch_path(h, ctx):
+    """The gpt family is offered ``patch`` in place of edit and write, and ``patch`` cannot be switched off
+    alone (A5, ``switch_off``): the adapter refuses every call of it on its own, with no denying row. The
+    patch is a forced call of the tool; its file must not appear and the shim's log must hold the refusal."""
+    patch = "*** Begin Patch\n*** Add File: {root}/" + PATCH_TARGET + "\n+x\n*** End Patch"
     scenario = {"models": {PATCH_MODEL: [{"tool_calls": [{"name": "patch", "arguments": {"patchText": patch}}]},
                                          {"text": "done"}]}}
     config = sa.gate_config({"providers": {"stub": {"models": {PATCH_MODEL: {"name": PATCH_MODEL}}}}})
-    files = {**sa.gate_files(inert=ctx.inert), "extra-rows.toml": _rows()}
-    run = h.run(scenario, label="gated-patch-relative" if relative else "gated-patch", config=config, files=files,
-                env=sa.gate_env(), model=f"stub/{PATCH_MODEL}", timeout=120)
+    files = {**sa.gate_files(inert=ctx.inert), "extra-rows.toml": ""}
+    run = h.run(scenario, label="gated-patch", config=config, files=files, env=sa.gate_env(),
+                model=f"stub/{PATCH_MODEL}", timeout=120)
     logged = sa.refusal_logged(sa.gate_log(run), tool_prefix="patch")
-    executed = run.exists(target)
+    executed = run.exists(PATCH_TARGET)
     verdict = "unrefused" if executed else "refused" if logged else "unconfirmed"
-    return run, {"id": RELATIVE_PATCH_PATH_ID if relative else PATCH_PATH_ID, "tool": "patch", "verdict": verdict,
-                 "refusal_logged": logged,
-                 "reason_in_error": sa.DENY_REASON in run.stdout + run.stderr, "status": run.exit_code}
+    return run, {"id": PATCH_PATH_ID, "tool": "patch", "verdict": verdict, "refusal_logged": logged,
+                 "reason_in_error": "refused by the OpenCode gate adapter" in run.stdout + run.stderr,
+                 "offered": "patch" in run.tool_list(), "status": run.exit_code}
 
 
 def run(ctx):
@@ -111,10 +108,9 @@ def run(ctx):
         run = _gated(h, plan, label, ctx, rows_text)
         runs.append(run)
         entries.append(_path_entry(run, plan, plan.specs[0], sa.gate_log(run)))
-    for relative in (False, True):
-        patch_run, patch_entry = _patch_path(h, ctx, relative)
-        runs.append(patch_run)
-        entries.append(patch_entry)
+    patch_run, patch_entry = _patch_path(h, ctx)
+    runs.append(patch_run)
+    entries.append(patch_entry)
     unrefused = [e["id"] for e in entries if e["verdict"] == "unrefused"]
     unconfirmed = [e["id"] for e in entries if e["verdict"] == "unconfirmed"]
     evidence = {"path_ids": ids, "exit_codes": {r.label: r.exit_code for r in runs},

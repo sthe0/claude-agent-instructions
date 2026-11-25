@@ -10,17 +10,19 @@ Two facts the gate shim depends on, observed rather than assumed:
   row names ran, and the head of the process's output.
 * ``gate-setup-failure``: the gate shim with a bridge path that does not exist; the record carries the setup
   marker it wrote, whether the shell call ran, and whether the shim logged a refusal.
-* ``patch_tool`` and ``search_and_output`` (``facts_a6``): no gate loaded; what OpenCode's ``patch`` does with
-  each patch text of a list (the bytes each file holds afterwards), what a plugin's ``tool.execute.after``
-  sees of ``grep`` results (through symlinks, with and without a hit) and of a shell output far past the
-  output limit, whether that output was saved to a file, and what ``ctx.session.get`` answers for a call's session.
+* ``path_forms`` (``facts_paths``): no gate loaded; for each written form of a path (``~``, ``~/x``, ``~user``,
+  ``//x``, ``..``, empty, environment variables, ``file://``) the file a ``write`` lands on, the text a ``read``
+  returns, what a ``grep`` / ``glob`` search root and a shell ``workdir`` come to.
+* ``search_and_output`` (``facts_a6``): no gate loaded; what a plugin's ``tool.execute.after`` sees of ``grep``
+  results (through symlinks, with and without a hit) and of a shell output far past the output limit, whether
+  that output was saved to a file, and what ``ctx.session.get`` answers for a call's session.
 
 pass when every run produced its log; unobserved otherwise. The record is the evidence, not a verdict on the gates.
 """
 import json
 
 from opencode_probe import record, runner
-from opencode_probe.adapter import facts_a6, shared_a as sa
+from opencode_probe.adapter import facts_a6, facts_paths, shared_a as sa
 
 CASE_ID = "A6"
 K7 = False
@@ -79,10 +81,10 @@ def run(ctx):
     gate_setup = {"marker": marker[:300], "exit_code": unreachable.exit_code,
                   "marked_executed": unreachable.exists(MARKER),
                   "refused_logged": any(e.get("at") == "refusal" for e in sa.gate_log(unreachable))}
-    patch = facts_a6.patch_facts(h)
+    forms = facts_paths.path_forms(h)
     search = facts_a6.search_facts(h)
-    evidence = {"ctx": facts, "setup_throw": throws, "gate_setup_failure": gate_setup, "patch_tool": patch,
+    evidence = {"ctx": facts, "setup_throw": throws, "gate_setup_failure": gate_setup, "path_forms": forms,
                 "search_and_output": search}
     observed = (bool(entries) and all(e["exit_code"] is not None for e in throws.values()) and bool(marker)
-                and any(v is not None for v in patch["files"].values()) and bool(search["outputs"]))
+                and forms["before_count"] == forms["call_count"] and bool(search["outputs"]))
     return runner.result(record.PASS if observed else record.UNOBSERVED, evidence)

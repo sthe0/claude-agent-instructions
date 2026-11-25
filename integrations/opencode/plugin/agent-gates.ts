@@ -14,16 +14,17 @@
 // skipped would be read as the earlier launch's "ok".
 //
 // A relative path of a tool call is resolved by OpenCode against the directory of its session. The shim
-// asks ctx.session.get for that directory per session and hands it to the bridge, which makes every path
-// absolute before a hook sees it; when no directory is known a relative path is refused. Under
-// ``opencode serve`` one process holds sessions of several directories, which is why the directory is
-// asked per session and the setup directory is only the fallback.
+// asks ctx.session.get for that directory per session and hands it to the bridge, which resolves every path
+// the way OpenCode does (probe A6, path_forms) before a hook sees it. When the directory of a session cannot
+// be had, every tool call of it is refused: the setup directory is not guessed in its place, since under
+// ``opencode serve`` one process holds sessions of several directories.
 //
 // Environment: AGENT_GATE_BRIDGE (bridge script path), AGENT_GATE_PYTHON (interpreter, default python3),
 // AGENT_GATE_LOG (a file that gets one JSON line per refusal and decision, never a tool result),
 // AGENT_GATE_SETUP_MARKER (a file that gets {"status": "ok" | "failed", "failures": [...]} once setup ran).
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -108,13 +109,25 @@ function realPath(path) {
   }
 }
 
-// The absolute path a grep searches: its path (the session directory when none is given) made absolute
-// against the session directory; null when it is relative and that directory is unknown.
-function searchRoot(cwd, input) {
-  const given = input.input?.path || ".";
-  if (isAbsolute(given)) return resolve(given);
-  return cwd ? resolve(cwd, given) : null;
+// The absolute path OpenCode 2.3.2 takes a path argument to name, for exactly the forms probe A6 recorded
+// (the bridge's resolve_path is the same rule): empty or not given is the session directory; "~" and "~/..."
+// are the home directory; a leading "/" is absolute; any other form (~user, $HOME, file://..., .., ./) is
+// relative to the session directory. null for anything else (a value that is no string, a NUL byte) and when
+// a directory it needs is unknown: a form that was not recorded is refused, not guessed.
+function resolveForm(given, cwd) {
+  if (given === undefined || given === null) given = "";
+  if (typeof given !== "string" || given.includes("\0")) return null;
+  if (given === "~" || given.startsWith("~/")) {
+    const home = homedir();
+    const rest = given.slice(2);
+    return home && isAbsolute(home) && !rest.startsWith("/") ? resolve(home, rest) : null;
+  }
+  if (given.startsWith("/")) return resolve(given);
+  return cwd && isAbsolute(cwd) ? resolve(cwd, given) : null;
 }
+
+// The absolute path a grep searches.
+const searchRoot = (cwd, input) => resolveForm(input.input?.path, cwd);
 
 const within = (path, root) => path === root || path.startsWith(root + sep);
 
@@ -202,26 +215,26 @@ function sanitizeGrepResult(input, refused, risky) {
 function install(ctx, failures) {
   const located = ctx.location && typeof ctx.location.directory === "string" && isAbsolute(ctx.location.directory) ? ctx.location.directory : "";
   if (!located) failures.push("ctx.location.directory is absent at setup");
-  // The directory of a session, which is where OpenCode resolves a relative path (probe A6): what
-  // ctx.session.get answers for it (a hook input names none), else the directory OpenCode was started in.
-  // Never this process's own working directory, which a relative path was not resolved against; "" when
-  // it is unknown, and then a relative path is refused, not guessed.
+  // The directory of a session, which is where OpenCode resolves a relative path and runs a command (probe
+  // A6): what ctx.session.get answers for it (a hook input names none). Only a successful answer is kept.
+  // When the answer cannot be had the directory is "" and the call is refused: neither this process's
+  // working directory nor the directory OpenCode was started in is the session's, under ``opencode serve``.
+  // An input that names no session (none of the tool hooks) gets the setup directory.
   const sessions = new Map();
   const directory = async (input) => {
     const id = input && input.sessionID;
-    if (id && sessions.has(id)) return sessions.get(id);
-    if (id && typeof ctx.session.get === "function") {
-      try {
-        const found = (await ctx.session.get({ sessionID: id }))?.location?.directory;
-        if (typeof found === "string" && isAbsolute(found)) {
-          sessions.set(id, found);
-          return found;
-        }
-      } catch (error) {
-        log({ at: "session-directory-error", sessionID: id, error: String(error).slice(0, 200) });
-      }
+    if (!id) return located;
+    if (sessions.has(id)) return sessions.get(id);
+    try {
+      if (typeof ctx.session.get !== "function") throw new Error("ctx.session.get is not available");
+      const found = (await ctx.session.get({ sessionID: id }))?.location?.directory;
+      if (typeof found !== "string" || !isAbsolute(found)) throw new Error("ctx.session.get gave no absolute directory");
+      sessions.set(id, found);
+      return found;
+    } catch (error) {
+      log({ at: "session-directory-error", sessionID: id, error: String(error).slice(0, 200) });
+      return "";
     }
-    return located;
   };
   let credentials = [];
   let idleMax = 0;
@@ -257,11 +270,16 @@ function install(ctx, failures) {
       return;
     }
     const cwd = await directory(input);
+    if (!cwd) {
+      log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "session directory unknown" });
+      refuse(`${tool} refused: the directory its session runs in is unknown, so no path or command can be placed`);
+      return;
+    }
     if (tool === "grep") {
       const path = searchRoot(cwd, input);
       if (path === null) {
-        log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "session directory unknown" });
-        refuse("grep refused: its search path is relative and the session directory is unknown");
+        log({ at: "refusal", mechanism: "PreToolUse", id: input.id, tool, reason: "search path not resolvable" });
+        refuse("grep refused: its search path is in a form OpenCode's resolver was not recorded to handle");
         return;
       }
       if (gate().refused(path)) {

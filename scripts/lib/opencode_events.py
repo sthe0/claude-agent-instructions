@@ -46,9 +46,6 @@ BUILTIN_TOOLS = {
     "read": "Read", "edit": "Edit", "write": "Write", "shell": "Bash", "glob": "Glob", "grep": "Grep",
     "webfetch": "WebFetch", "websearch": "WebSearch", "question": "AskUserQuestion", "subagent": "Agent",
     "skill": "Skill", "execute": "Bash",
-    # The model-family variant of edit/write (offered instead of them to the gpt family, probe A5); the
-    # bridge hands the rows one Edit or Write call per file the patch names, see ``patch_calls``.
-    "patch": "Edit",
 }
 DENIED_BY_NAME = frozenset({"opencode_worktree_create", "opencode_worktree_remove", "opencode_session_move"})
 
@@ -64,7 +61,54 @@ PATH_TOOL_NAMES = {
 # Paths a model family reaches under another tool id (probe A5 lists the ids each family is offered).
 FAMILY_TOOL_PATHS = {"root:patch": "patch"}
 PLUGIN_TOOLS_OF_PATHS = ("probe_tool",)
-DISABLED_PATHS: dict[str, str] = {}
+# A built-in whose effect the bridge cannot work out from the call's input the way OpenCode will carry it out
+# (OpenCode applies a patch over its own in-memory view of the files, which the bridge would have to imitate
+# to the byte). Such a tool is not mapped and every call of it is refused. It cannot be switched off alone: the
+# permission action ``patch`` removes nothing, and ``edit`` removes ``edit``, ``write`` and ``patch`` together
+# for every model family (probe A5, ``patch_switch_off``), which would take file editing from the families
+# whose edit and write calls the rows do see.
+REFUSED_TOOLS: dict[str, str] = {
+    "patch": "the file editor OpenCode offers the gpt family applies a multi-file patch over its own in-memory "
+             "view of the files, so no gate can be shown the change it will make",
+}
+REFUSED_PATHS: dict[str, str] = {
+    path_id: REFUSED_TOOLS[tool] for path_id, tool in FAMILY_TOOL_PATHS.items() if tool in REFUSED_TOOLS}
+
+# Every argument of every built-in the adapter maps, as the pinned OpenCode version's tool schemas name it
+# (probe A5 records them): ``path`` is resolved like a path (``resolve_path``) into the named Claude input
+# field, ``mapped`` is copied into it, ``irrelevant`` is dropped, for the stated reason. An argument that
+# decides where a tool reads, writes or runs, or what it writes or runs, is never irrelevant. A call carrying
+# an argument not listed here is refused.
+ARGUMENT_CLASSES: dict[str, dict[str, tuple[str, str]]] = {
+    "read": {"path": ("path", "file_path"), "offset": ("mapped", "offset"), "limit": ("mapped", "limit")},
+    "write": {"path": ("path", "file_path"), "content": ("mapped", "content")},
+    "edit": {"path": ("path", "file_path"), "oldString": ("mapped", "old_string"),
+             "newString": ("mapped", "new_string"), "replaceAll": ("mapped", "replace_all")},
+    "glob": {"pattern": ("mapped", "pattern"), "path": ("path", "path"),
+             "hidden": ("irrelevant", "lists dot-files under the search root that path already names"),
+             "limit": ("irrelevant", "caps how many matches are listed")},
+    "grep": {"pattern": ("mapped", "pattern"), "path": ("path", "path"),
+             "include": ("irrelevant", "narrows the files searched inside the root that path already names"),
+             "literal": ("irrelevant", "how the pattern is read, not which files are"),
+             "caseSensitive": ("irrelevant", "how the pattern is matched, not which files are read"),
+             "limit": ("irrelevant", "caps how many matches are listed")},
+    "shell": {"command": ("mapped", "command"), "workdir": ("path", "cwd"),
+              "background": ("mapped", "run_in_background"),
+              "timeout": ("irrelevant", "bounds how long the command may run, not what it runs")},
+    "execute": {"code": ("mapped", "command")},
+    "webfetch": {"url": ("mapped", "url"),
+                 "format": ("irrelevant", "the form the fetched page is returned in"),
+                 "timeout": ("irrelevant", "bounds how long the fetch may run")},
+    "websearch": {"query": ("mapped", "query")},
+    "question": {"questions": ("mapped", "questions")},
+    "subagent": {"agent": ("mapped", "subagent_type"), "description": ("mapped", "description"),
+                 "prompt": ("mapped", "prompt"),
+                 "model": ("irrelevant", "picks the model of a child session whose own calls the gates see"),
+                 "sessionID": ("irrelevant", "resumes a child session whose own calls the gates see")},
+    "skill": {"id": ("mapped", "skill")},
+}
+OPTIONAL_ARGUMENTS = frozenset({"offset", "limit", "replaceAll", "background", "hidden", "include", "literal",
+                                "caseSensitive", "timeout", "format", "model", "sessionID", "workdir"})
 
 EVENT_OF = {
     "tool.execute.before": "PreToolUse", "tool.execute.after": "PostToolUse",
@@ -81,8 +125,12 @@ def integration_dir() -> Path:
     return Path(override) if override else config_root.agent_home() / "opencode"
 
 
+def transcripts_dir(directory: Path) -> Path:
+    return Path(directory) / "state" / "transcripts"
+
+
 def shadow_transcript_path(directory: Path, session: str) -> Path:
-    return Path(directory) / "state" / "transcripts" / f"{config_root.sanitize_session_id(session)}.jsonl"
+    return transcripts_dir(directory) / f"{config_root.sanitize_session_id(session)}.jsonl"
 
 
 def append_transcript(path: Path, records: list[dict]) -> None:
@@ -128,268 +176,107 @@ def claude_tool(name: str, plugin: frozenset[str] = frozenset(),
     return None
 
 
-class UnreadablePatch(ValueError):
-    """A ``patch`` input whose file operations, or the text they leave a file with, the gates cannot work out."""
+class UnshowableCall(ValueError):
+    """A tool call the gates cannot be shown as it will run: a path or directory that cannot be resolved, or
+    an argument nobody classified."""
 
 
-class UnresolvablePath(ValueError):
-    """A relative path of a tool call whose session directory is unknown: the absolute path the hooks are
-    written against cannot be made."""
+class UnresolvablePath(UnshowableCall):
+    """A path the way OpenCode resolves it cannot be reproduced: a form outside the recorded set, or a
+    directory it depends on that is unknown."""
 
 
-def absolute_path(path, directory: str):
-    """``path`` as the absolute, normalised path Claude Code gives its hooks, joined to the session ``directory``
-    (OpenCode resolves a relative path against it, probe A6). A value that is not a non-empty string is
-    returned as it is; a relative path with no known directory raises ``UnresolvablePath``."""
-    if not isinstance(path, str) or not path:
-        return path
-    if os.path.isabs(path):
-        return os.path.normpath(path)
-    if not directory or not os.path.isabs(directory):
-        raise UnresolvablePath(f"the path {path!r} is relative and the session directory is unknown")
-    return os.path.normpath(os.path.join(directory, path))
+class UnclassifiedArgument(UnshowableCall):
+    """A built-in's call carries an argument ``ARGUMENT_CLASSES`` does not list."""
 
 
-# OpenCode 2.3.2's patch format, as the probe's patch_tool facts (A6 record) show it: an operation line is
-# recognised after its whitespace is trimmed, the path after the colon is trimmed too, an added file is
-# its ``+`` lines each ending in a newline, an updated file takes each hunk's old lines (found at the first
-# place from the previous hunk's end where they match exactly, then ignoring trailing whitespace, then
-# ignoring surrounding whitespace) replaced by the hunk's new lines context included, and the result ends
-# in a newline. A hunk whose old lines are not found fails the patch, as it does here.
-_PATCH_FRAME = ("*** Begin Patch", "*** End Patch")
-_PATCH_ADD, _PATCH_UPDATE, _PATCH_DELETE, _PATCH_MOVE = (
-    "*** Add File:", "*** Update File:", "*** Delete File:", "*** Move to:")
-_PATCH_EOF = "*** End of File"
-
-
-@dataclass
-class Hunk:
-    context: str | None = None
-    old: list[str] = field(default_factory=list)
-    new: list[str] = field(default_factory=list)
-    at_end: bool = False
-
-
-@dataclass
-class PatchOp:
-    kind: str  # "add" | "update" | "delete"
-    path: str
-    move_to: str | None = None
-    lines: list[str] = field(default_factory=list)
-    hunks: list[Hunk] = field(default_factory=list)
-
-
-def parse_patch(patch_text) -> list[PatchOp]:
-    """The file operations of an OpenCode ``patch`` text, in order. Raises ``UnreadablePatch`` when the text
-    names no file, an operation names no path, or a line is none the format knows: a gate that cannot read
-    what a patch touches must refuse it, not pass it."""
-    if not isinstance(patch_text, str):
-        raise UnreadablePatch("the patch text is not a string")
-    ops: list[PatchOp] = []
-    ended = False
-    for line in patch_text.split("\n"):
-        text = line.strip()
-        if ended:
-            if text:
-                raise UnreadablePatch(f"text after the end of the patch: {line[:40]!r}")
-            continue
-        header = next((h for h in (_PATCH_ADD, _PATCH_UPDATE, _PATCH_DELETE, _PATCH_MOVE) if text.startswith(h)), None)
-        if header:
-            path = text[len(header):].strip()
-            if not path:
-                raise UnreadablePatch(f"{header} names no path")
-            if header == _PATCH_MOVE:
-                if not ops or ops[-1].kind != "update" or ops[-1].move_to is not None:
-                    raise UnreadablePatch(f"{header} does not follow an update")
-                ops[-1].move_to = path
-            else:
-                ops.append(PatchOp({_PATCH_ADD: "add", _PATCH_UPDATE: "update", _PATCH_DELETE: "delete"}[header], path))
-            continue
-        if text in _PATCH_FRAME:
-            ended = text == _PATCH_FRAME[1]
-            continue
-        if text.startswith("***") and text != _PATCH_EOF:
-            raise UnreadablePatch(f"unknown patch line {line[:40]!r}")
-        if not ops:
-            if text:
-                raise UnreadablePatch(f"text before the first file operation: {line[:40]!r}")
-            continue
-        op = ops[-1]
-        if op.kind == "add":
-            if line.startswith("+"):
-                op.lines.append(line[1:])
-            elif text:
-                raise UnreadablePatch(f"an added file's line does not start with '+': {line[:40]!r}")
-        elif op.kind == "update":
-            _hunk_line(op, line, text)
-        elif text:
-            raise UnreadablePatch(f"a deleted file carries a line: {line[:40]!r}")
-    if not ops:
-        raise UnreadablePatch("the patch names no file")
-    return ops
-
-
-def _hunk_line(op: PatchOp, line: str, text: str) -> None:
-    if text == _PATCH_EOF:
-        if not op.hunks:
-            raise UnreadablePatch("an end-of-file marker before any hunk")
-        op.hunks[-1].at_end = True
-        return
-    if line.startswith("@@"):
-        op.hunks.append(Hunk(context=line[2:].strip() or None))
-        return
-    if not op.hunks:
-        op.hunks.append(Hunk())
-    hunk = op.hunks[-1]
-    if hunk.at_end:
-        raise UnreadablePatch("a line after a hunk's end-of-file marker")
-    if line.startswith("+"):
-        hunk.new.append(line[1:])
-    elif line.startswith("-"):
-        hunk.old.append(line[1:])
-    elif line.startswith(" ") or not line:
-        hunk.old.append(line[1:])
-        hunk.new.append(line[1:])
+def resolve_path(path, directory: str, home: str | None = None):
+    """The absolute, normalised path OpenCode 2.3.2 takes a path argument to name, for exactly the forms probe
+    A6 recorded (``path_forms``): the empty string is the session ``directory``; ``~`` and ``~/...`` are the
+    home directory (``home``, else ``$HOME``; ``~//...`` was not recorded and is refused); a leading ``/`` (also
+    ``//``) is absolute; every other form,
+    ``~user``, ``$HOME``, ``${HOME}``, ``file://...``, ``..``, ``./``, is relative to the session directory.
+    ``None`` (an argument not given) stays ``None``. Any other value, a NUL byte, or a directory or home that
+    is needed and not an absolute path raises ``UnresolvablePath``: a form that was not recorded is refused."""
+    if path is None:
+        return None
+    if not isinstance(path, str) or "\0" in path:
+        raise UnresolvablePath(f"the path {path!r} is not a form OpenCode's resolver was recorded to handle")
+    if path == "~" or path.startswith("~/"):
+        base = home if home is not None else os.environ.get("HOME", "")
+        if not base or not os.path.isabs(base) or path.startswith("~//"):
+            raise UnresolvablePath(f"the path {path!r} starts at the home directory and it is unknown, or is a "
+                                   f"form that was not recorded")
+        joined = os.path.join(base, path[2:])
+    elif path.startswith("/"):
+        joined = path
     else:
-        raise UnreadablePatch(f"a hunk line does not start with ' ', '+' or '-': {line[:40]!r}")
+        if not directory or not os.path.isabs(directory):
+            raise UnresolvablePath(f"the path {path!r} is relative and the session directory is unknown")
+        joined = os.path.join(directory, path)
+    normal = os.path.normpath(joined)
+    return normal[1:] if normal.startswith("//") else normal
 
 
-def _seek(lines: list[str], pattern: list[str], start: int, at_end: bool) -> int | None:
-    if at_end and len(lines) >= len(pattern):
-        start = len(lines) - len(pattern)
-    if not pattern:
-        return start
-    for same in (lambda a, b: a == b, lambda a, b: a.rstrip() == b.rstrip(), lambda a, b: a.strip() == b.strip()):
-        for index in range(start, len(lines) - len(pattern) + 1):
-            if all(same(lines[index + i], p) for i, p in enumerate(pattern)):
-                return index
-    return None
-
-
-def _seek_hunk(lines: list[str], old: list[str], cursor: int, at_end: bool) -> int | None:
-    found = _seek(lines, old, cursor, at_end)
-    return _seek(lines, old, cursor, False) if found is None and at_end else found
-
-
-def apply_hunks(text: str, hunks: list[Hunk]) -> str:
-    """The text OpenCode's patch tool leaves a file with after ``hunks``, or ``UnreadablePatch`` when a hunk
-    does not apply."""
-    lines = text.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    replacements: list[tuple[int, int, list[str]]] = []
-    cursor = 0
-    for hunk in hunks:
-        if hunk.context is not None:
-            found = _seek(lines, [hunk.context], cursor, False)
-            if found is None:
-                raise UnreadablePatch(f"hunk context {hunk.context!r} not found")
-            cursor = found + 1
-        if not hunk.old:
-            replacements.append((len(lines), 0, hunk.new))
-            continue
-        old, new = hunk.old, hunk.new
-        found = _seek_hunk(lines, old, cursor, hunk.at_end)
-        if found is None and old[-1] == "":
-            old, new = old[:-1], new[:-1] if new and new[-1] == "" else new
-            found = _seek_hunk(lines, old, cursor, hunk.at_end)
-        if found is None:
-            raise UnreadablePatch(f"hunk lines {old[:2]!r} not found")
-        replacements.append((found, len(old), new))
-        cursor = found + len(old)
-    for start, length, new in sorted(replacements, key=lambda r: r[0], reverse=True):
-        lines[start:start + length] = new
-    if not lines or lines[-1] != "":
-        lines.append("")
-    return "\n".join(lines)
-
-
-def _read_text(path: str) -> str:
+def run_directory(tool: str, args: dict, directory: str, *, strict: bool = True, home: str | None = None) -> str:
+    """The directory a call runs in, which Claude's payload names ``cwd``: the session ``directory``, but for a
+    shell call with a ``workdir`` the one that names (OpenCode resolves it like any path, probe A6). With
+    ``strict`` false a ``workdir`` that cannot be resolved leaves the session directory (events no gate
+    decides on)."""
+    workdir = (args if isinstance(args, dict) else {}).get("workdir") if tool == "shell" else None
+    if workdir is None:
+        return directory
     try:
-        return Path(path).read_bytes().decode("utf-8")
-    except (OSError, ValueError) as error:
-        raise UnreadablePatch(f"{path} cannot be read: {error}") from error
+        return resolve_path(workdir, directory, home)
+    except UnresolvablePath:
+        if strict:
+            raise
+        return directory
 
 
-def patch_calls(data: dict, directory: str = "", *, resolve_content: bool = True) -> list[dict]:
-    """The event ``data`` of one ``patch`` call as the Claude calls that make the same change, so the rows
-    see the tool, ``file_path`` and content they are written against: a ``write`` of the text for an added
-    file; for an updated file an ``edit`` whose ``old_string`` is the file as it is and ``new_string`` the
-    file as the patch leaves it; for a deleted file an ``edit`` that empties it; for a rename a ``write`` of
-    the new text to the target and an ``edit`` that empties the source. Paths are absolute, joined to the
-    session ``directory``. With ``resolve_content`` false (the call already ran, the files are changed) only
-    the paths are carried. Raises ``UnreadablePatch`` or ``UnresolvablePath`` when a call cannot be made.
-    Other events are returned as they are. The first call keeps the call id, later ones carry ``<id>#<n>``."""
-    if data.get("tool") != "patch":
-        return [data]
-    args = data.get("input") if isinstance(data.get("input"), dict) else {}
-    calls = []
-    for op in parse_patch(args.get("patchText")):
-        path = absolute_path(op.path, directory)
-        target = absolute_path(op.move_to, directory) if op.move_to else path
-        if op.kind == "add":
-            calls.append(("write", target, "\n".join(op.lines) + "\n" if op.lines else ""))
-            continue
-        before = _read_text(path) if resolve_content else ""
-        after = apply_hunks(before, op.hunks) if resolve_content and op.kind == "update" else ""
-        if target != path:
-            calls.append(("write", target, after))
-            calls.append(("edit", path, (before, "")))
-        else:
-            calls.append(("edit", path, (before, after)))
-    out = []
-    for index, (tool, path, body) in enumerate(calls):
-        args = {"path": path}
-        if tool == "write":
-            args["content"] = body
-        elif resolve_content:
-            args.update(oldString=body[0], newString=body[1])
-        call = {**data, "tool": tool, "input": args}
-        if index:
-            call["id"] = f"{data.get('id')}#{index}"
-        out.append(call)
-    return out
-
-
-def claude_input(tool: str, args: dict, directory: str = "", *, strict: bool = True) -> dict:
-    """The Claude tool input of an OpenCode tool input. A path is made absolute against the session
-    ``directory`` (``UnresolvablePath`` when relative and the directory is unknown; with ``strict`` false the
-    path is kept as written, for events no gate decides on)."""
+def claude_input(tool: str, args: dict, directory: str = "", *, strict: bool = True, home: str | None = None) -> dict:
+    """The Claude tool input of an OpenCode tool input, by ``ARGUMENT_CLASSES``. A path is resolved by
+    ``resolve_path`` (``UnresolvablePath`` when it cannot be; with ``strict`` false it is kept as written, and an
+    unlisted argument is dropped, for events no gate decides on). A tool the table does not list (plugin and MCP
+    tools) passes its input as it is."""
     args = args if isinstance(args, dict) else {}
-
-    def path_of(value):
-        try:
-            return absolute_path(value, directory)
-        except UnresolvablePath:
+    classes = ARGUMENT_CLASSES.get(tool)
+    if classes is None:
+        return dict(args)
+    mapped = {target: None for name, (kind, target) in classes.items()
+              if kind != "irrelevant" and target != "cwd" and name not in OPTIONAL_ARGUMENTS}
+    for name, value in args.items():
+        if name not in classes:
             if strict:
-                raise
-            return value
+                raise UnclassifiedArgument(f"{tool} was called with the argument {name!r}, which nobody classified")
+            continue
+        kind, target = classes[name]
+        if kind == "irrelevant" or target == "cwd":
+            continue
+        if kind == "path":
+            try:
+                value = resolve_path(value, directory, home)
+            except UnresolvablePath:
+                if strict:
+                    raise
+        mapped[target] = value
+    return mapped
 
-    if tool in ("read", "write", "edit"):
-        mapped = {"file_path": path_of(args.get("path"))}
-        if tool == "write":
-            mapped["content"] = args.get("content")
-        if tool == "edit":
-            mapped.update(old_string=args.get("oldString"), new_string=args.get("newString"))
-        return mapped
-    if tool in ("glob", "grep"):
-        return {"pattern": args.get("pattern"), "path": path_of(args.get("path"))}
-    if tool == "shell":
-        return {"command": args.get("command")}
-    if tool == "execute":
-        return {"command": args.get("code")}
-    if tool == "webfetch":
-        return {"url": args.get("url")}
-    if tool == "websearch":
-        return {"query": args.get("query")}
-    if tool == "question":
-        return {"questions": args.get("questions")}
-    if tool == "subagent":
-        return {"subagent_type": args.get("agent"), "description": args.get("description"),
-                "prompt": args.get("prompt")}
-    if tool == "skill":
-        return {"skill": args.get("id")}
-    return dict(args)
+
+def unclassified_arguments(schema: dict[str, list[str]]) -> list[str]:
+    """``tool.argument`` for every argument of a recorded tool schema (``{tool: [argument names]}``) that
+    ``ARGUMENT_CLASSES`` does not list, ``tool`` alone for a tool that is neither listed, refused nor a probe's;
+    and ``tool.argument (stale)`` for a listed argument the schema no longer has."""
+    problems = []
+    for tool, names in sorted(schema.items()):
+        classes = ARGUMENT_CLASSES.get(tool)
+        if classes is None:
+            if tool not in REFUSED_TOOLS and claude_tool(tool) is None:
+                problems.append(tool)
+            continue
+        problems += [f"{tool}.{n}" for n in names if n not in classes]
+        problems += [f"{tool}.{n} (stale)" for n in classes if n not in names]
+    return problems
 
 
 def answers_of(args: dict, output) -> dict:
@@ -598,20 +485,23 @@ def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def build_payload(event: str, data: dict, *, transcript_path: Path, cwd: str, plugin: frozenset[str],
+def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: frozenset[str],
                   environ=None, servers: frozenset[str] = frozenset(), directory: str = "") -> dict:
     """The Claude-shaped payload of an OpenCode event ``data`` (the hook input, as the probe recorded it).
-    The tool name is None when no Claude name is known for the tool. Paths of the tool input are made
-    absolute against the session ``directory`` (``UnresolvablePath`` of a before-event when one is relative and
-    it is unknown; an after-event, which no gate can still prevent, keeps the path as written)."""
+    The tool name is None when no Claude name is known for the tool. ``cwd`` is the session ``directory``, or
+    for a shell call with a ``workdir`` the directory the command will run in; paths of the tool input are
+    resolved by ``resolve_path`` (``UnshowableCall`` of a before-event when one cannot be; an after-event,
+    which no gate can still prevent, keeps the path as written)."""
     opencode_session = data.get("sessionID") or ""
     session = payload_session_id(opencode_session, environ)
-    payload = {"session_id": session, "transcript_path": str(transcript_path), "cwd": cwd,
+    payload = {"session_id": session, "transcript_path": str(transcript_path), "cwd": directory,
                "hook_event_name": EVENT_OF[event]}
     if event in ("tool.execute.before", "tool.execute.after"):
         tool, args = data.get("tool") or "", data.get("input") or {}
+        strict = event == "tool.execute.before"
+        payload["cwd"] = run_directory(tool, args, directory, strict=strict)
         payload["tool_name"] = claude_tool(tool, plugin, servers)
-        payload["tool_input"] = claude_input(tool, args, directory, strict=event == "tool.execute.before")
+        payload["tool_input"] = claude_input(tool, args, directory, strict=strict)
         payload["tool_use_id"] = data.get("id")
         if event == "tool.execute.after":
             payload["tool_response"] = claude_response(tool, args, data.get("result") or {})
@@ -651,10 +541,12 @@ def transcript_records(event: str, data: dict, session: str) -> list[dict]:
 
 
 def credential_paths(integration: Path, agent_home: Path, credential_file: str | None) -> tuple[Path, ...]:
-    """The files that hold credentials, resolved absolute: OpenCode's auth store in the integration
-    directory, the per-machine settings file under the agent home, and the credential file the
-    settings name. Reads no setting itself."""
-    found = [Path(integration) / "data" / "opencode" / "auth.json", Path(agent_home) / SETTINGS_FILE]
+    """The paths that hold credentials or what the gates saw, resolved absolute: OpenCode's auth store in the
+    integration directory, the shadow transcripts directory (every tool call and result the gates were
+    shown, which a model that read it would see unfiltered), the per-machine settings file under the agent
+    home, and the credential file the settings name. Reads no setting itself."""
+    found = [Path(integration) / "data" / "opencode" / "auth.json", transcripts_dir(integration),
+             Path(agent_home) / SETTINGS_FILE]
     if credential_file:
         found.append(Path(credential_file).expanduser())
     return tuple(dict.fromkeys(p.resolve() for p in found))

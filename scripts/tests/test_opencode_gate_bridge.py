@@ -56,7 +56,7 @@ const ctx = {
     get: scenario.noSessionGet ? undefined : async (arg) => {
       sessionGets.push(arg);
       if (scenario.sessionGetThrows) throw new Error("session.get refused");
-      const directory = (scenario.sessions || {})[arg.sessionID];
+      const directory = scenario.sessions ? scenario.sessions[arg.sessionID] : scenario.defaultDirectory;
       return directory === undefined ? {} : { location: { directory } };
     },
   },
@@ -106,7 +106,7 @@ def _rows(tmp_path, rows):
 
 def _fixture(tmp_path, name):
     text = (FIXTURES / name).read_text(encoding="utf-8").replace(STATE_TOKEN, str(tmp_path / "state"))
-    return json.loads(text)
+    return {"cwd": str(tmp_path), **json.loads(text)}
 
 
 def _bridge(tmp_path, args, stdin=None, **more):
@@ -128,6 +128,7 @@ def _record_rows(tmp_path, event, matcher=None):
 
 def _event(tmp_path, name, data, rows, **more):
     rows_file = _rows(tmp_path, rows)
+    data = {"cwd": str(tmp_path), **data}
     return _bridge(tmp_path, ["event", name], json.dumps(data), AGENT_GATE_EXTRA_ROWS=str(rows_file),
                    RECORD_FILE=str(tmp_path / "recorded.jsonl"), **more)
 
@@ -146,7 +147,8 @@ def _shim(tmp_path, steps, location=DEFAULT, failing=(), cwd=None, sessions=None
         location = str(tmp_path.resolve())
     scenario = _script(tmp_path, "scenario.json", json.dumps({
         "cwd": str(cwd or tmp_path), "steps": steps, "location": location, "failing": list(failing),
-        "sessions": sessions or {}, "noSessionGet": no_session_get, "sessionGetThrows": session_get_throws}))
+        "sessions": sessions, "defaultDirectory": str(tmp_path.resolve()), "noSessionGet": no_session_get,
+        "sessionGetThrows": session_get_throws}))
     env = _env(tmp_path, **{"AGENT_GATE_BRIDGE": str(BRIDGE), "AGENT_GATE_PYTHON": sys.executable,
                             "AGENT_GATE_LOG": str(tmp_path / "gates.log"),
                             "AGENT_GATE_SETUP_MARKER": str(tmp_path / "setup.marker"), **more})
@@ -252,7 +254,7 @@ def test_replay_synthetic_unresolvable_bash_fixture_is_marked(tmp_path):
     sources = json.loads((FIXTURES / "sources.json").read_text(encoding="utf-8"))
     assert sources["synthetic"] == ["bash_unresolvable.json"]
     row, recorded = _record_rows(tmp_path, "PreToolUse", "Bash")
-    payload = _script(tmp_path, "payload.json", json.dumps(fixture))
+    payload = _script(tmp_path, "payload.json", json.dumps({"cwd": str(tmp_path), **fixture}))
     proc = _bridge(tmp_path, ["replay", "--event", "tool.execute.before", "--payload", str(payload)],
                    AGENT_GATE_EXTRA_ROWS=str(_rows(tmp_path, [row])), RECORD_FILE=str(recorded))
     assert proc.returncode in (0, 1)
@@ -344,7 +346,7 @@ def test_star_matcher_matches_every_tool_like_claude(tmp_path):
     assert row.matches("Write") and row.matches("mcp__a__b") and row.matches(None)
     assert not oe.Row("PreToolUse", "Write", "s.py", "", 5, "layer").matches("Bash")
     recorder, recorded = _record_rows(tmp_path, "PreToolUse", "*")
-    data = {"tool": "read", "sessionID": "ses_s", "id": "call_s", "input": {"filePath": str(tmp_path / "x")}}
+    data = {"tool": "read", "sessionID": "ses_s", "id": "call_s", "input": {"path": str(tmp_path / "x")}}
     proc = _event(tmp_path, "tool.execute.before", data, [recorder])
     assert proc.returncode == 0 and json.loads(proc.stdout)["decision"] == "allow", proc.stderr
     assert _recorded(recorded)[0]["tool_name"] == "Read"
@@ -380,7 +382,7 @@ def test_hook_timeout_or_foreign_exit_code_allows_the_call(tmp_path):
     sleeper = _script(tmp_path, "sleeper.py", "import time\ntime.sleep(60)\n")
     rows = [{"event": "PreToolUse", "matcher": "Write", "script": str(exit_one), "timeout_s": 20},
             {"event": "PreToolUse", "matcher": "Write", "script": str(sleeper), "timeout_s": 1}]
-    data = {"tool": "write", "sessionID": "ses_p", "id": "call_p", "input": {"filePath": str(tmp_path / "x")}}
+    data = {"tool": "write", "sessionID": "ses_p", "id": "call_p", "input": {"path": str(tmp_path / "x"), "content": "c"}}
     proc = _event(tmp_path, "tool.execute.before", data, rows)
     assert proc.returncode == 0 and json.loads(proc.stdout)["decision"] == "allow", proc.stdout + proc.stderr
     denier = _script(tmp_path, "denier.py", DENIER)
@@ -388,166 +390,293 @@ def test_hook_timeout_or_foreign_exit_code_allows_the_call(tmp_path):
     assert json.loads(proc.stdout)["decision"] == "deny"
 
 
-PATCH_TEXT = ("*** Begin Patch\n*** Add File: new/a.txt\n+one\n+two\n*** Update File: src/b.py\n"
-              "*** Move to: src/c.py\n@@ def f():\n-x\n+y\n*** Delete File: old.txt\n*** End Patch")
+def _call(tmp_path, tool, args, call="call_x", **more):
+    return {"tool": tool, "sessionID": "ses_t", "id": call, "cwd": str(tmp_path), "input": args, **more}
 
 
-def _patch_tree(tmp_path):
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "b.py").write_text("def f():\n  x\n", encoding="utf-8")
-    (tmp_path / "old.txt").write_text("gone\n", encoding="utf-8")
-    return str(tmp_path)
+def test_patch_calls_are_refused_by_the_bridge_whatever_the_rows_say(tmp_path):
+    """``patch`` is the gpt family's file editor and cannot be switched off alone (probe A5): the bridge does not
+    imitate how OpenCode applies it, it refuses every call, and no row is even run."""
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    data = _call(tmp_path, "patch", {"patchText": "*** Begin Patch\n*** Add File: x\n+x\n*** End Patch"})
+    verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row]).stdout)
+    assert verdict["decision"] == "deny" and verdict["script"] == "opencode-gate-bridge"
+    assert "refused by the OpenCode gate adapter" in verdict["reason"] and oe.REFUSED_TOOLS["patch"] in verdict["reason"]
+    assert not Path(recorded).exists()
+    assert oe.claude_tool("patch") is None and "patch" not in oe.ARGUMENT_CLASSES
 
 
-def _patch_data(directory, text=PATCH_TEXT):
-    return {"tool": "patch", "sessionID": "ses_p", "id": "call_p", "cwd": directory, "input": {"patchText": text}}
-
-
-def test_patch_calls_show_the_rows_what_a_claude_edit_or_write_would(tmp_path):
-    directory = _patch_tree(tmp_path)
-    calls = oe.patch_calls(_patch_data(directory), directory)
-    assert [(c["tool"], c["input"], c["id"]) for c in calls] == [
-        ("write", {"path": f"{directory}/new/a.txt", "content": "one\ntwo\n"}, "call_p"),
-        ("write", {"path": f"{directory}/src/c.py", "content": "def f():\ny\n"}, "call_p#1"),
-        ("edit", {"path": f"{directory}/src/b.py", "oldString": "def f():\n  x\n", "newString": ""}, "call_p#2"),
-        ("edit", {"path": f"{directory}/old.txt", "oldString": "gone\n", "newString": ""}, "call_p#3")]
-    update = _patch_data(directory, "*** Update File: src/b.py\n@@\n def f():\n-  x\n+  y")
-    (call,) = oe.patch_calls(update, directory)
-    assert call["input"] == {"path": f"{directory}/src/b.py", "oldString": "def f():\n  x\n",
-                             "newString": "def f():\n  y\n"}
-    (after,) = oe.patch_calls(update, directory, resolve_content=False)
-    assert after["input"] == {"path": f"{directory}/src/b.py"}
-
-
-# What OpenCode 2.3.2 leaves each seed holding after the patch (adapter probe A6, record ``patch_tool.files``).
-OPENCODE_PATCHES = [
-    ("a\nb\nc\n", "@@\n a\n-b\n+B\n c", "a\nB\nc\n"),
-    ("x  \ny\n", "@@\n x\n-y\n+Y", "x\nY\n"),
-    ("  x\ny\n", "@@\n x\n-y\n+Y", "x\nY\n"),
-    ("a\nb", "@@\n a\n-b\n+B", "a\nB\n"),
-    ("1\n2\n3\n4\n5\n", "@@\n 1\n-2\n+two\n@@\n 4\n-5\n+five", "1\ntwo\n3\n4\nfive\n"),
-    ("k\nk\nk\n", "@@\n k\n-k\n+K", "k\nK\nk\n"),
-    ("def f():\n  x\ndef g():\n  x\n", "@@ def g():\n-  x\n+  y", "def f():\n  x\ndef g():\n  y\n"),
-    ("a\nb\na\nb\n", "@@\n a\n-b\n+B\n*** End of File", "a\nb\na\nB\n"),
-    ("p\nq\n", "@@\n-p\n+P", "P\nq\n"),
-    ("a\r\nb\r\n", "@@\n a\n-b\n+B", "a\nB\n"),
-    ("a\n\nb\nc\n", "@@\n a\n\n-b\n+B", "a\n\nB\nc\n"),
+# What OpenCode 2.3.2 did with each written form of a path argument, as adapter probe A6 recorded it
+# (record ``path_forms``): ``(written form, session directory, home, what resolve_path must give)``.
+D, H = "/work/sub", "/home/u"
+RESOLVER_FORMS = [
+    ("pf-seed", D, H, "/work/sub/pf-seed"), ("./pf-seed", D, H, "/work/sub/pf-seed"),
+    ("sub2/./x", D, H, "/work/sub/sub2/x"), ("sub2/../x", D, H, "/work/sub/x"), ("..", D, H, "/work"),
+    ("../pf-seed", D, H, "/work/pf-seed"), ("", D, H, "/work/sub"),
+    ("~", D, H, "/home/u"), ("~/", D, H, "/home/u"), ("~/pf-seed", D, H, "/home/u/pf-seed"),
+    ("~/../x", D, H, "/home/x"),
+    ("~nobody", D, H, "/work/sub/~nobody"), ("~nobody/x", D, H, "/work/sub/~nobody/x"),
+    ("$HOME/x", D, H, "/work/sub/$HOME/x"), ("${HOME}/x", D, H, "/work/sub/${HOME}/x"),
+    ("file:///a/b", D, H, "/work/sub/file:/a/b"), ("sub2\\x", D, H, "/work/sub/sub2\\x"),
+    ("/etc/hostname", D, H, "/etc/hostname"), ("//etc/hostname", D, H, "/etc/hostname"), ("//tmp", D, H, "/tmp"),
+    ("/a//b", D, H, "/a/b"),
 ]
 
 
-@pytest.mark.parametrize("seed, hunks, expected", OPENCODE_PATCHES)
-def test_patch_reader_leaves_a_file_as_opencode_does(tmp_path, seed, hunks, expected):
-    (tmp_path / "f").write_bytes(seed.encode())
-    data = _patch_data(str(tmp_path), f"*** Begin Patch\n*** Update File: f\n{hunks}\n*** End Patch")
-    (call,) = oe.patch_calls(data, str(tmp_path))
-    assert call["input"]["newString"] == expected
+@pytest.mark.parametrize("given, directory, home, expected", RESOLVER_FORMS)
+def test_resolve_path_gives_what_opencode_did_with_each_recorded_form(given, directory, home, expected):
+    assert oe.resolve_path(given, directory, home) == expected
 
 
-@pytest.mark.parametrize("header", ["  *** Add File: x", "\t*** Add File: x", "*** Add File: x ", "   *** Add File:\tx"])
-def test_patch_operation_lines_are_recognised_after_trimming_as_opencode_does(tmp_path, header):
-    """OpenCode trims an operation line and its path before it reads them (probe A6): an indented or tab-led
-    header is an operation there, so it must be one here, or it would reach a file no gate saw."""
-    data = _patch_data(str(tmp_path), f"*** Begin Patch\n{header}\n+x\n*** End Patch")
-    (call,) = oe.patch_calls(data, str(tmp_path))
-    assert call["input"] == {"path": f"{tmp_path}/x", "content": "x\n"}
+@pytest.mark.parametrize("given, directory, home", [
+    ("~//x", D, H), ("~", D, ""), ("~/x", D, "relative"), ("x", "", H), ("", "", H), ("x", "rel/dir", H),
+    ("a\0b", D, H), (7, D, H), (["a"], D, H)])
+def test_resolve_path_refuses_a_form_it_was_not_recorded_to_handle(given, directory, home):
+    with pytest.raises(oe.UnresolvablePath):
+        oe.resolve_path(given, directory, home)
 
 
-@pytest.mark.parametrize("text", [
-    None, "", "no file operation here", "*** Begin Patch\n*** Frobnicate: a\n", "*** Begin Patch\n*** End Patch",
-    "*** Add File:   \n+x", "*** Update File: f\n@@\n zzz\n-b\n+B", "*** Update File: absent\n@@\n-b\n+B",
-    "*** Delete File: absent", "*** Update File: f\n@@\n-b\n+B\n*** End Patch\n*** Delete File: f",
-    "*** Move to: g\n*** Update File: f", "*** Add File: f\nplain\n", "*** Update File: f\nbad\n"])
-def test_a_patch_the_bridge_cannot_work_out_is_refused(tmp_path, text):
-    directory = _patch_tree(tmp_path)
-    (tmp_path / "f").write_text("a\nb\n", encoding="utf-8")
-    row, recorded = _record_rows(tmp_path, "PreToolUse", "Edit|Write")
-    verdict = json.loads(_event(tmp_path, "tool.execute.before", _patch_data(directory, text), [row]).stdout)
-    assert verdict["decision"] == "deny" and "refused" in verdict["reason"]
-    assert not Path(recorded).exists()
+def test_resolve_path_leaves_a_missing_argument_missing_and_reads_home_from_the_environment(monkeypatch):
+    assert oe.resolve_path(None, D) is None
+    monkeypatch.setenv("HOME", "/home/env")
+    assert oe.resolve_path("~/x", D) == "/home/env/x"
 
 
-def test_patch_reaches_edit_and_write_rows_once_per_file(tmp_path):
-    """The gpt family is offered ``patch`` instead of edit/write (probe A5): without this mapping the rows
-    written for ``Edit|Write`` never see a file it changes, and each sees an absolute path as Claude gives it."""
-    directory = _patch_tree(tmp_path)
-    edit_row, edits = _record_rows(tmp_path, "PreToolUse", "Edit")
-    proc = _event(tmp_path, "tool.execute.before", _patch_data(directory), [edit_row])
-    assert json.loads(proc.stdout)["decision"] == "allow", proc.stdout + proc.stderr
-    assert [p["tool_input"]["file_path"] for p in _recorded(edits)] == [f"{directory}/src/b.py", f"{directory}/old.txt"]
-    assert [p["tool_use_id"] for p in _recorded(edits)] == ["call_p#2", "call_p#3"]
-    sub = tmp_path / "w"
-    sub.mkdir()
-    write_row, writes = _record_rows(sub, "PreToolUse", "Write")
-    proc = _event(sub, "tool.execute.before", _patch_data(directory), [write_row])
-    assert json.loads(proc.stdout)["decision"] == "allow", proc.stdout + proc.stderr
-    assert [(p["tool_input"]["file_path"], p["tool_input"]["content"]) for p in _recorded(writes)] == [
-        (f"{directory}/new/a.txt", "one\ntwo\n"), (f"{directory}/src/c.py", "def f():\ny\n")]
+def _canon_home(tmp_path):
+    home = tmp_path / "home"
+    canon = home / "claude-agent-instructions"
+    canon.mkdir(parents=True)
+    (canon / "tracked.txt").write_text("x\n", encoding="utf-8")
+    identity = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+    for args in (["init", "-q"], ["add", "tracked.txt"], [*identity, "commit", "-q", "-m", "seed"]):
+        subprocess.run(["git", "-C", str(canon), *args], check=True, timeout=60, capture_output=True)
+    return home, canon
 
 
-def test_patch_denied_when_a_row_denies_one_of_its_files(tmp_path):
-    directory = _patch_tree(tmp_path)
-    denier = _script(tmp_path, "deny_row.py", DENIER)
-    row = {"event": "PreToolUse", "matcher": "Edit", "script": str(denier), "timeout_s": 20}
-    verdict = json.loads(_event(tmp_path, "tool.execute.before", _patch_data(directory), [row]).stdout)
-    assert verdict["decision"] == "deny" and verdict["script"] == "deny_row.py"
+def test_a_tilde_write_into_a_canon_checkout_is_refused_by_the_real_row(tmp_path):
+    """``~/`` is the home directory for OpenCode, so the rows must see the absolute path they would see
+    from Claude: the real canon read-only row then refuses it, from any session directory."""
+    home, canon = _canon_home(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env = {"HOME": str(home), "CLAUDE_INSTRUCTIONS_REPO": str(canon)}
+    for tool, args in [("write", {"path": "~/claude-agent-instructions/new.txt", "content": "c"}),
+                       ("edit", {"path": "~/claude-agent-instructions/tracked.txt", "oldString": "x", "newString": "y"})]:
+        data = _call(elsewhere, tool, args)
+        verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [], **env).stdout)
+        assert verdict["decision"] == "deny" and verdict["script"] == "hook-guard-canon-readonly.py", (tool, verdict)
+    assert not (canon / "new.txt").exists()
+    plain = _call(elsewhere, "write", {"path": "~/free.txt", "content": "c"})
+    assert json.loads(_event(tmp_path, "tool.execute.before", plain, [], **env).stdout)["decision"] == "allow"
 
 
 NARROW = '{\n  "permissions": {\n    "allow": []\n  }\n}\n'
-WIDEN_HUNK = '@@\n   "permissions": {\n-    "allow": []\n+    "allow": ["Bash(*)"]'
+WIDEN = {"oldString": '"allow": []', "newString": '"allow": ["Bash(*)"]'}
 
 
-def _settings_tree(tmp_path):
-    (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / "settings.json").write_text(NARROW, encoding="utf-8")
-    (tmp_path / "draft.json").write_text(NARROW, encoding="utf-8")
-    (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
-    return str(tmp_path)
-
-
-def _surface_verdict(tmp_path, directory, body):
-    text = f"*** Begin Patch\n{body}\n*** End Patch"
-    proc = _event(tmp_path, "tool.execute.before", _patch_data(directory, text), [],
+def test_a_tilde_edit_of_the_live_settings_file_is_refused_by_the_real_row(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    settings = home / ".claude" / "settings.json"
+    settings.write_text(NARROW, encoding="utf-8")
+    data = _call(tmp_path, "edit", {"path": "~/.claude/settings.json", **WIDEN})
+    proc = _event(tmp_path, "tool.execute.before", data, [], HOME=str(home),
                   CLAUDE_PERMISSION_GUARD_LOG=str(tmp_path / "guard.jsonl"))
-    return json.loads(proc.stdout), proc
-
-
-@pytest.mark.parametrize("body", [
-    f"*** Update File: .claude/settings.json\n{WIDEN_HUNK}",
-    f"*** Update File: draft.json\n*** Move to: .claude/settings.local.json\n{WIDEN_HUNK}"])
-def test_patch_that_widens_a_live_settings_file_is_refused_by_the_permission_surface_row(tmp_path, body):
-    """The real ``hook-guard-permission-surface.py`` row reads the file text an Edit or Write would leave: the
-    patch's Update and Move reach it with that text, not with a path alone."""
-    directory = _settings_tree(tmp_path)
-    verdict, proc = _surface_verdict(tmp_path, directory, body)
+    verdict = json.loads(proc.stdout)
     assert verdict["decision"] == "deny" and verdict["script"] == "hook-guard-permission-surface.py", proc.stdout
-    assert (tmp_path / ".claude" / "settings.json").read_text() == NARROW
+    assert settings.read_text(encoding="utf-8") == NARROW
+    harmless = _call(tmp_path, "edit", {"path": "~/notes.txt", "oldString": "a", "newString": "b"})
+    assert json.loads(_event(tmp_path, "tool.execute.before", harmless, [], HOME=str(home)).stdout)["decision"] == "allow"
 
 
-def test_harmless_patch_update_passes_the_permission_surface_row(tmp_path):
-    directory = _settings_tree(tmp_path)
-    verdict, proc = _surface_verdict(tmp_path, directory, "*** Update File: notes.txt\n@@\n alpha\n-beta\n+gamma")
-    assert verdict["decision"] == "allow", proc.stdout + proc.stderr
+@pytest.mark.parametrize("tool, args", [
+    ("write", {"path": "~//x", "content": "c"}), ("read", {"path": "a\0b"}), ("edit", {"path": 7, "oldString": "o", "newString": "n"}),
+    ("grep", {"pattern": "p", "path": "~//x"}), ("glob", {"pattern": "*", "path": "~//x"})])
+def test_an_unrecorded_path_form_is_refused_before_any_row_runs(tmp_path, tool, args):
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    verdict = json.loads(_event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args), [row]).stdout)
+    assert verdict["decision"] == "deny" and "cannot be shown what it does" in verdict["reason"], verdict
+    assert not Path(recorded).exists()
 
 
-def test_relative_paths_reach_the_rows_absolute_and_are_refused_without_a_directory(tmp_path):
+def test_relative_paths_reach_the_rows_absolute(tmp_path):
     row, recorded = _record_rows(tmp_path, "PreToolUse", "Read|Write|Edit|Glob|Grep")
     directory = str(tmp_path)
     steps = [("read", {"path": "a/../r.txt"}), ("write", {"path": "w.txt", "content": "c"}),
              ("edit", {"path": "e.txt", "oldString": "o", "newString": "n"}), ("grep", {"pattern": "p", "path": "g"}),
              ("glob", {"pattern": "*.py"}), ("read", {"path": "/abs/x"})]
     for index, (tool, args) in enumerate(steps):
-        data = {"tool": tool, "sessionID": "ses_r", "id": f"c{index}", "cwd": directory, "input": args}
-        proc = _event(tmp_path, "tool.execute.before", data, [row])
+        proc = _event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args, f"c{index}"), [row])
         assert proc.stdout, (tool, proc.returncode, proc.stderr[-400:])
         assert json.loads(proc.stdout)["decision"] == "allow", (tool, proc.stdout)
     inputs = [p["tool_input"] for p in _recorded(recorded)]
     assert [i.get("file_path") or i.get("path") for i in inputs] == [
         f"{directory}/r.txt", f"{directory}/w.txt", f"{directory}/e.txt", f"{directory}/g", None, "/abs/x"]
-    for tool, args in [("read", {"path": "r.txt"}), ("patch", {"patchText": "*** Add File: n\n+x"})]:
-        data = {"tool": tool, "sessionID": "ses_r", "id": "cx", "input": args}
-        verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row]).stdout)
-        assert verdict["decision"] == "deny" and "session directory is unknown" in verdict["reason"]
-    assert len(_recorded(recorded)) == len(steps)
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("read", {"path": "r.txt"}), ("write", {"path": "w", "content": "c"}), ("glob", {"pattern": "*"}),
+    ("grep", {"pattern": "p"}), ("shell", {"command": "true"}), ("execute", {"code": "x"}),
+    ("webfetch", {"url": "http://example.invalid"}), ("probesrv_touch", {"a": 1}), ("patch", {"patchText": "x"})])
+def test_a_tool_call_whose_session_directory_is_unknown_is_refused_for_every_tool(tmp_path, tool, args):
+    """Nothing of this process's own directory stands in for the one the session runs in: a path- or
+    cwd-dependent call without it is refused, a shell call included, and no row runs."""
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    for directory in ({"cwd": ""}, {"cwd": None}):
+        data = {**_call(tmp_path, tool, args), **directory}
+        verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row], AGENT_GATE_MCP_SERVERS="probesrv").stdout)
+        assert verdict["decision"] == "deny" and "directory" in verdict["reason"], (tool, verdict)
+    missing = {k: v for k, v in _call(tmp_path, tool, args).items() if k != "cwd"}
+    proc = _bridge(tmp_path, ["event", "tool.execute.before"], json.dumps(missing))
+    assert json.loads(proc.stdout)["decision"] == "deny"
+    assert not Path(recorded).exists()
+
+
+def test_no_working_directory_fallback_is_left_in_the_decision_path():
+    text = BRIDGE.read_text(encoding="utf-8")
+    decide = text[text.index("def _decide_call"):text.index("def _decide(")]
+    assert "getcwd" not in decide
+
+
+def test_shell_workdir_is_the_directory_the_hooks_see_the_command_run_in(tmp_path):
+    """OpenCode runs a shell call in its ``workdir`` (probe A6), resolved like any path: a hook sees it as the
+    payload ``cwd``, as it would see the directory of a Claude Bash call."""
+    row, recorded = _record_rows(tmp_path, "PreToolUse", "Bash")
+    home = tmp_path / "home"
+    for name in ("home", "sub", "$HOME"):
+        (tmp_path / name).mkdir()
+    expected = [str(tmp_path), f"{tmp_path}/sub", f"{tmp_path}", str(home), str(home), "/tmp", f"{tmp_path}/$HOME"]
+    forms = [None, "sub", "", "~", "~/", "//tmp", "$HOME"]
+    for index, form in enumerate(forms):
+        args = {"command": "true"} if form is None else {"command": "true", "workdir": form}
+        proc = _event(tmp_path, "tool.execute.before", _call(tmp_path, "shell", args, f"s{index}"), [row], HOME=str(home))
+        assert proc.returncode == 0 and json.loads(proc.stdout)["decision"] == "allow", (form, proc.stderr[-300:])
+    got = [p["cwd"] for p in _recorded(recorded)]
+    assert got == expected[:2] + [str(tmp_path)] + expected[3:]
+    assert all("workdir" not in p["tool_input"] for p in _recorded(recorded))
+    bad = _call(tmp_path, "shell", {"command": "true", "workdir": "~//x"})
+    assert json.loads(_event(tmp_path, "tool.execute.before", bad, [row], HOME=str(home)).stdout)["decision"] == "deny"
+
+
+def test_no_bridge_path_opens_the_file_a_tool_names(tmp_path, monkeypatch):
+    """With ``patch`` refused, no gate path reads a file's content: the bridge shows the rows what the call
+    says and never what its target holds. A refused write's content is the model's own, never the file's."""
+    import builtins
+
+    secret = tmp_path / "target.txt"
+    secret.write_text("FILE-CONTENT-SENTINEL", encoding="utf-8")
+    opened = []
+    real_open = builtins.open
+    real_os_open = os.open
+
+    def watching_open(file, *args, **kwargs):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def watching_os_open(path, *args, **kwargs):
+        opened.append(str(path))
+        return real_os_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", watching_open)
+    monkeypatch.setattr(os, "open", watching_os_open)
+    monkeypatch.setenv("AGENT_OPENCODE_HOME", str(tmp_path / "oc"))
+    bridge = _bridge_module()
+    rows = oe.load_rows([tmp_path / "layer"], None)
+    transcript = oe.shadow_transcript_path(tmp_path / "oc", "ses_t")
+    calls = [("read", {"path": str(secret)}), ("write", {"path": str(secret), "content": "c"}),
+             ("edit", {"path": str(secret), "oldString": "o", "newString": "n"}),
+             ("patch", {"patchText": f"*** Update File: {secret}\n@@\n-x\n+y"}),
+             ("grep", {"pattern": "p", "path": str(secret)}), ("glob", {"pattern": "*", "path": str(tmp_path)})]
+    for index, (tool, args) in enumerate(calls):
+        for event in ("tool.execute.before", "tool.execute.after"):
+            bridge._decide_call(event, _call(tmp_path, tool, args, f"c{index}",
+                                             result={"content": [{"type": "text", "text": "out"}]}), rows, transcript)
+    assert str(secret) not in opened and str(secret.resolve()) not in opened
+    text = transcript.read_text(encoding="utf-8")
+    assert "FILE-CONTENT-SENTINEL" not in text and "tool_use" in text
+
+
+def test_a_refused_call_puts_only_what_the_model_wrote_into_the_transcript(tmp_path):
+    transcript = oe.shadow_transcript_path(tmp_path / "oc", "ses_t")
+    data = _call(tmp_path, "patch", {"patchText": "*** Update File: f\n@@\n-x\n+y"})
+    proc = _event(tmp_path, "tool.execute.before", data, [])
+    assert json.loads(proc.stdout)["decision"] == "deny"
+    (record,) = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    assert record["message"]["content"][0]["input"] == {"patchText": "*** Update File: f\n@@\n-x\n+y"}
+    assert set(record["message"]["content"][0]) == {"type", "id", "name", "input"}
+
+
+def test_the_shadow_transcripts_directory_is_a_credential_path(tmp_path):
+    paths = oe.credential_paths(tmp_path / "oc", tmp_path / "agent", None)
+    assert oe.transcripts_dir(tmp_path / "oc").resolve() in paths
+    listed = json.loads(_bridge(tmp_path, ["credential-paths"]).stdout)
+    assert str(oe.transcripts_dir(tmp_path / "oc").resolve()) in listed
+
+
+# The inventory of every argument of every built-in the adapter maps, against the schemas probe A5 recorded.
+RECORDED_SCHEMAS = {
+    "read": ["limit", "offset", "path"], "write": ["content", "path"],
+    "edit": ["newString", "oldString", "path", "replaceAll"],
+    "glob": ["hidden", "limit", "path", "pattern"],
+    "grep": ["caseSensitive", "include", "limit", "literal", "path", "pattern"],
+    "shell": ["background", "command", "timeout", "workdir"], "webfetch": ["format", "timeout", "url"],
+    "websearch": ["query"], "question": ["questions"], "skill": ["id"],
+    "subagent": ["agent", "description", "model", "prompt", "sessionID"], "execute": ["code"],
+}
+
+
+def test_every_argument_of_every_mapped_builtin_is_classified_with_a_reason():
+    assert oe.unclassified_arguments(RECORDED_SCHEMAS) == []
+    assert set(RECORDED_SCHEMAS) == set(oe.ARGUMENT_CLASSES)
+    for tool, classes in oe.ARGUMENT_CLASSES.items():
+        for name, (kind, detail) in classes.items():
+            assert kind in ("path", "mapped", "irrelevant") and detail.strip(), (tool, name)
+            if kind == "irrelevant":
+                assert len(detail.split()) >= 3, f"{tool}.{name}: an irrelevant argument is justified in a sentence"
+    assert {tool for tool in oe.ARGUMENT_CLASSES} <= set(oe.BUILTIN_TOOLS)
+
+
+def test_the_inventory_check_fails_for_a_tool_or_argument_it_does_not_classify():
+    assert oe.unclassified_arguments({**RECORDED_SCHEMAS, "read": ["path", "newarg"]}) == [
+        "read.newarg", "read.offset (stale)", "read.limit (stale)"]
+    assert oe.unclassified_arguments({**RECORDED_SCHEMAS, "newtool": ["a"]}) == ["newtool"]
+    assert oe.unclassified_arguments({"patch": ["patchText"], "probe_tool": ["a"]}) == ["probe_tool"]
+
+
+def test_no_irrelevant_argument_decides_where_or_what_a_tool_reads_writes_or_runs():
+    named = {"path", "workdir", "url", "command", "code", "content", "oldString", "newString", "pattern", "query",
+             "prompt", "agent", "questions", "id"}
+    for tool, classes in oe.ARGUMENT_CLASSES.items():
+        assert not [n for n, (kind, _) in classes.items() if kind == "irrelevant" and n in named], tool
+
+
+def test_an_argument_nobody_classified_refuses_the_call(tmp_path):
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    data = _call(tmp_path, "write", {"path": "x", "content": "c", "newlocation": "/etc/y"})
+    verdict = json.loads(_event(tmp_path, "tool.execute.before", data, [row]).stdout)
+    assert verdict["decision"] == "deny" and "newlocation" in verdict["reason"]
+    assert not Path(recorded).exists()
+
+
+def test_claude_input_maps_each_class(tmp_path):
+    assert oe.claude_input("read", {"path": "a", "offset": 1, "limit": 2}, "/d") == {
+        "file_path": "/d/a", "offset": 1, "limit": 2}
+    assert oe.claude_input("edit", {"path": "~/a", "oldString": "o", "newString": "n", "replaceAll": True},
+                           "/d", home="/h") == {"file_path": "/h/a", "old_string": "o", "new_string": "n",
+                                                "replace_all": True}
+    assert oe.claude_input("glob", {"pattern": "*", "hidden": True, "limit": 3}, "/d") == {"pattern": "*", "path": None}
+    assert oe.claude_input("shell", {"command": "c", "workdir": "x", "timeout": 5}, "/d") == {"command": "c"}
+    assert oe.claude_input("shell", {"command": "c", "background": True}, "/d") == {
+        "command": "c", "run_in_background": True}
+    assert oe.claude_input("probesrv_touch", {"a": 1}, "/d") == {"a": 1}
+    assert oe.run_directory("shell", {"command": "c", "workdir": "x"}, "/d") == "/d/x"
+    assert oe.run_directory("read", {"path": "x", "workdir": "y"}, "/d") == "/d"
+    assert oe.run_directory("shell", {"workdir": "~//x"}, "/d", strict=False) == "/d"
+    with pytest.raises(oe.UnresolvablePath):
+        oe.run_directory("shell", {"workdir": "~//x"}, "/d")
+    with pytest.raises(oe.UnclassifiedArgument):
+        oe.claude_input("read", {"path": "a", "extra": 1}, "/d")
+    assert oe.claude_input("read", {"path": "a", "extra": 1}, "/d", strict=False) == {"file_path": "/d/a"}
 
 
 def test_configured_mcp_server_tool_reaches_its_rows(tmp_path):
@@ -581,14 +710,14 @@ def _table_path_ids():
     return {p for row in _table()["row"] for p in row.get("paths", [])}
 
 
-def test_every_path_mapped_or_disabled():
+def test_every_path_mapped_or_refused():
     ids = _table_path_ids()
     assert ids == set(oe.PATH_TOOL_NAMES), "the table's path ids and the mapping differ"
     plugin = frozenset(oe.PLUGIN_TOOLS_OF_PATHS)
     servers = frozenset({"probesrv", "probecm"})
     for path_id, tool in {**oe.PATH_TOOL_NAMES, **oe.FAMILY_TOOL_PATHS}.items():
-        if path_id in oe.DISABLED_PATHS:
-            assert oe.DISABLED_PATHS[path_id].strip()
+        if path_id in oe.REFUSED_PATHS:
+            assert oe.REFUSED_PATHS[path_id].strip() and tool in oe.REFUSED_TOOLS
             continue
         assert oe.claude_tool(tool, plugin, servers) is not None, f"{path_id}: tool {tool} has no Claude name"
     assert oe.claude_tool("probesrv_touch", servers=servers) == "mcp__probesrv__touch"
@@ -596,11 +725,11 @@ def test_every_path_mapped_or_disabled():
     assert oe.claude_tool("probecm_touch", servers=servers) == "mcp__probecm__touch"
 
 
-def test_every_denying_row_matcher_hit_or_switched_off():
+def test_every_denying_row_matcher_hit_by_a_mapped_tool():
     plugin = frozenset(oe.PLUGIN_TOOLS_OF_PATHS)
     servers = frozenset({"probesrv", "probecm"})
     mapped = {oe.claude_tool(tool, plugin, servers) for pid, tool in oe.PATH_TOOL_NAMES.items()
-              if pid not in oe.DISABLED_PATHS}
+              if pid not in oe.REFUSED_PATHS}
     for row in _table()["row"]:
         if not hook_parity.is_denying(row["event"]) or row.get("opencode") == hook_parity.NO_MECHANISM:
             continue
@@ -740,13 +869,15 @@ def _credentials(tmp_path, as_directory=True):
 def test_credential_paths_command_reads_per_machine_setting(tmp_path):
     home = (tmp_path / "home").resolve()
     plain = _bridge(tmp_path, ["credential-paths"])
-    base = [str((tmp_path / "oc").resolve() / "data" / "opencode" / "auth.json"), str(home / "opencode.local.toml")]
+    integration = (tmp_path / "oc").resolve()
+    base = [str(integration / "data" / "opencode" / "auth.json"), str(integration / "state" / "transcripts"),
+            str(home / "opencode.local.toml")]
     assert json.loads(plain.stdout) == base
     secrets = _credentials(tmp_path, as_directory=False)
     configured = _bridge(tmp_path, ["credential-paths"])
     assert json.loads(configured.stdout) == [*base, str(secrets / "cred.json")]
-    assert oe.credential_paths(Path("/i"), Path("/h"), None) == (Path("/i/data/opencode/auth.json"),
-                                                                 Path("/h/opencode.local.toml"))
+    assert oe.credential_paths(Path("/i"), Path("/h"), None) == (
+        Path("/i/data/opencode/auth.json"), Path("/i/state/transcripts"), Path("/h/opencode.local.toml"))
     assert oe.credential_paths(Path("/i"), Path("/h"), "/c/key")[-1] == Path("/c/key")
 
 
@@ -926,15 +1057,41 @@ def test_grep_path_resolves_against_each_sessions_own_directory(tmp_path):
     assert [g["sessionID"] for g in result["sessionGets"]] == ["ses_in", "ses_out"]
 
 
-def test_relative_grep_path_is_refused_when_no_session_directory_is_known(tmp_path):
+UNKNOWN_DIRECTORY = "refused: the directory its session runs in is unknown, so no path or command can be placed"
+
+
+@pytest.mark.parametrize("options", [{"no_session_get": True}, {"session_get_throws": True},
+                                     {"sessions": {"another-session": "/x"}}])
+def test_every_tool_call_is_refused_when_the_session_directory_cannot_be_had(tmp_path, options):
+    """Neither the setup directory nor this process's is the session's under ``opencode serve``: when the lookup
+    fails, a path- or cwd-dependent call of the session is refused (absolute paths and shell calls too), the
+    reason is logged, and no row runs."""
     _credentials(tmp_path)
-    step = _grep_before("secrets")
-    for options in ({"no_session_get": True}, {"session_get_throws": True}):
-        result = _shim(tmp_path, [step], location="", **options)
-        assert result["results"][0]["threw"] == "grep refused: its search path is relative and the session directory is unknown"
-        assert result["setupThrew"] is None
-    absolute = _shim(tmp_path, [_grep_before(tmp_path.resolve() / "fine")], location="")
-    assert absolute["results"][0]["threw"] is None
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    calls = [("grep", {"pattern": "x", "path": "secrets"}), ("grep", {"pattern": "x", "path": str(tmp_path / "fine")}),
+             ("read", {"path": str(tmp_path / "fine")}), ("shell", {"command": "true"})]
+    steps = [{"hook": "tool.execute.before", "input": {"tool": tool, "sessionID": "ses_g", "id": f"c{i}", "input": args}}
+             for i, (tool, args) in enumerate(calls)]
+    result = _shim(tmp_path, steps, AGENT_GATE_EXTRA_ROWS=str(_rows(tmp_path, [row])), RECORD_FILE=str(recorded),
+                   **options)
+    assert [r["threw"] for r in result["results"]] == [f"{tool} {UNKNOWN_DIRECTORY}" for tool, _ in calls]
+    assert result["setupThrew"] is None and not Path(recorded).exists()
+    log = _gate_log(tmp_path)
+    refusals = [e for e in log if e["at"] == "refusal"]
+    assert len(refusals) == len(calls) and {e["reason"] for e in refusals} == {"session directory unknown"}
+    if "sessions" not in options:
+        assert {e["at"] for e in log} >= {"session-directory-error"}
+    assert not any(e["at"] == "session-directory-error" and "ses_g" not in e["sessionID"] for e in log)
+
+
+def test_a_failed_directory_lookup_is_not_cached_and_a_successful_one_is(tmp_path):
+    steps = [{"hook": "tool.execute.before", "input": {"tool": "read", "sessionID": "ses_a", "id": f"c{i}",
+                                                       "input": {"path": str(tmp_path / "x")}}} for i in range(3)]
+    result = _shim(tmp_path, steps, sessions={"ses_b": str(tmp_path.resolve())})
+    assert all(r["threw"] for r in result["results"]) and len(result["sessionGets"]) == 3
+    steps = [{**step, "input": {**step["input"], "sessionID": "ses_b"}} for step in steps]
+    result = _shim(tmp_path, steps, sessions={"ses_b": str(tmp_path.resolve())})
+    assert [r["threw"] for r in result["results"]] == [None, None, None] and len(result["sessionGets"]) == 1
 
 
 def test_setup_without_a_location_directory_fails_the_marker(tmp_path):
@@ -947,9 +1104,35 @@ def test_setup_without_a_location_directory_fails_the_marker(tmp_path):
 
 def test_session_directory_is_not_the_process_cwd_when_nothing_is_known(tmp_path):
     secrets = _credentials(tmp_path)
-    result = _shim(tmp_path, [_grep_before("secrets")], location="", cwd=tmp_path)
+    result = _shim(tmp_path, [_grep_before("secrets")], location="", cwd=tmp_path, no_session_get=True)
     assert result["results"][0]["threw"] != f"credential path: {secrets}"
-    assert "session directory is unknown" in result["results"][0]["threw"]
+    assert UNKNOWN_DIRECTORY in result["results"][0]["threw"]
+
+
+def test_a_tilde_rooted_grep_on_a_credential_directory_is_refused_and_marked_risky(tmp_path):
+    """The shim's search root follows the bridge's resolver: ``~`` is the home directory, so a grep rooted at
+    it, or at a credential directory below it, is refused, and a grep above a credential path is risky."""
+    home = tmp_path / "homedir"
+    (home / ".secrets").mkdir(parents=True)
+    (tmp_path / "home").mkdir(exist_ok=True)
+    (tmp_path / "home" / "opencode.local.toml").write_text(
+        f'{oe.SETTINGS_CREDENTIAL_KEY} = {json.dumps(str((home / ".secrets").resolve()))}\n', encoding="utf-8")
+    env = {"HOME": str(home)}
+    refused = _shim(tmp_path, [_grep_before("~/.secrets", "c1"), _grep_before("~/.secrets/x/y", "c2")], **env)
+    assert [r["threw"] for r in refused["results"]] == [f"credential path: {home.resolve()}/.secrets",
+                                                        f"credential path: {home.resolve()}/.secrets/x/y"]
+    text = f"Found 1 matches\n{home.resolve()}/.secrets/cred:\n  Line 1: SECRET-TOKEN-1"
+    step = {"hook": "tool.execute.after", "input": {"tool": "grep", "sessionID": "ses_g", "id": "c3",
+                                                    "input": {"pattern": "x", "path": "~"},
+                                                    "result": {"output": text, "content": [{"type": "text", "text": text}]}}}
+    risky = _shim(tmp_path, [step], **env)
+    assert "SECRET-TOKEN" not in json.dumps(risky["results"][0]["input"]["result"])
+    plain = _shim(tmp_path, [_grep_before("~", "c4"), _grep_before("~//x", "c5"), _grep_before("$HOME/.secrets", "c6")],
+                  **env)
+    assert [r["threw"] is None for r in plain["results"]] == [True, False, True]
+    assert plain["results"][1]["threw"].startswith("grep refused: its search path is in a form")
+    assert [e["reason"] for e in _gate_log(tmp_path) if e["at"] == "refusal"] == [
+        "credential path", "credential path", "search path not resolvable"]
 
 
 def _after_with(tmp_path, result_value, root, call="call_s"):
@@ -998,7 +1181,7 @@ def test_exact_zero_hit_text_passes_under_a_risky_root_but_other_unrecognised_te
 def test_bridge_verdict_without_a_decision_refuses_a_pre_tool_event(tmp_path):
     silent = _script(tmp_path, "silent-bridge.py", "import sys\nif sys.argv[1:2] == ['event']:\n    print('{}')\nelse:\n    print('[]' if sys.argv[1] == 'credential-paths' else '5')\n")
     steps = [{"hook": "tool.execute.before", "input": {"tool": "read", "id": "c1", "sessionID": "s",
-                                                       "input": {"filePath": str(tmp_path / "x")}}}]
+                                                       "input": {"path": str(tmp_path / "x")}}}]
     result = _shim(tmp_path, steps, AGENT_GATE_BRIDGE=str(silent))
     assert result["results"][0]["threw"] == "the gate bridge answered no decision"
 
@@ -1020,7 +1203,7 @@ def test_unreachable_bridge_refuses_tool_calls_and_fails_the_setup_marker(tmp_pa
     missing = {"bridge": {"AGENT_GATE_BRIDGE": str(tmp_path / "missing-bridge.py")},
                "python": {"AGENT_GATE_PYTHON": str(tmp_path / "missing-python")}}[which]
     steps = [{"hook": "tool.execute.before", "input": {"tool": "read", "id": "c1", "sessionID": "s",
-                                                       "input": {"filePath": str(tmp_path / "x")}}}]
+                                                       "input": {"path": str(tmp_path / "x")}}}]
     result = _shim(tmp_path, steps, **missing)
     assert result["setupThrew"] is None and "tool.execute.before" in result["hooks"]
     assert "did not set up" in result["results"][0]["threw"]
