@@ -1204,6 +1204,9 @@ def test_interrupt_before_state_save_writes_no_row(tmp_path):
 def test_deferred_sync_retried_within_latency_bound(world, monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(sync, "_sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    # The retry deadline reads _monotonic; it must run on the same fake clock as _sleep,
+    # or the budget never expires in the test and a shortened budget goes unseen.
+    monkeypatch.setattr(sync, "_monotonic", lambda: clock[0])
     real_replay = store.replay
 
     def locked_for_300_s(*args, **kwargs):
