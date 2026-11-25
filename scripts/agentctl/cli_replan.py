@@ -98,6 +98,7 @@ from .cli_common import (
     _submission_advice,
     _submission_problems,
     _stage_order_context,
+    _state_lock,
     _setter_site,
     _parent_state_of,
     _conditions_securing_required,
@@ -1199,10 +1200,21 @@ def _condition_objection_gate(ctx: _ReplanContext) -> Directive | None:
     own = frozenset(known) if site.is_root else sub_plan.parent_set_ids(conditions, site.above)
     inherited = [i for i in ids if i not in own]
     if inherited:
+        owner = site.owner.session_id
+        ids_arg = " ".join(f"--breaks-condition {i}" for i in inherited)
         return _objection_refusal(
-            state, f"condition(s) {inherited} were set above the level that set this stage and "
-            f"reach it unchanged, so the level directly above cannot decide them: leave them out "
-            f"of --breaks-condition and keep them, or replan the level above, which carries them")
+            state, f"condition(s) {inherited} were set above session {owner}, the level directly "
+            f"above this stage, and reach it unchanged: neither this session nor {owner} decides "
+            f"them (a session never decides a condition set above its own level). Ways on: (1) keep "
+            f"them: leave them out of --breaks-condition and have the plan's record say how it keeps "
+            f"them; (2) return `REPLAN:` to {owner} naming {inherited}: {owner} runs `replan "
+            f"{ids_arg}` on its own plan (through agentctl-own.py when it is itself a child), which "
+            f"raises the objection to the level that set them; that level decides it with "
+            f"`condition-decide --objection <id> --value changed|withdrawn` (the user's marked "
+            f"answer, `--by <name>`, at the root); once {owner}'s replan has passed it dispatches "
+            f"this stage again with the conditions as they now stand",
+            way_on={"keep": "leave --breaks-condition out", "ask": owner, "verb": "replan",
+                    "ids": inherited})
     storage = _objection_storage(state, order.expected_stage)
     decisions = site.decisions()
     where = {"owner": site.owner.session_id, "key": site.key, "depth": site.depth}
@@ -1536,7 +1548,37 @@ def _store_replanned_record(ctx: _ReplanContext) -> None:
     sub_plan.carry_engine_fields(state, new)
     sub_plan.record_carried_by(state, new, store)
     if moved and ctx.classes is not None and ctx.classes.restamps:
-        restamp_subplan_digest(state, record.stage, record, sub_plan.record_level(state))
+        if state.parent_link and not state.plan_stack:
+            _restamp_on_parent(state, store, record)
+        else:
+            restamp_subplan_digest(state, record.stage, record, sub_plan.record_level(state))
+
+
+def _restamp_on_parent(state: SessionState, store: StateStore, record) -> bool:
+    """A linked child's own plan builds the stage its parent dispatched, and the user's approval of
+    that sub-plan sits in the parent's `stage_approvals`: the child's in-boundary replan moves that
+    digest to the new method here, under the parent's state lock, by the same rule as the root's
+    (`restamp_subplan_digest`: only an approval already set, and only when the request digest still
+    equals the one the user approved). Any other replan leaves the entry, and the parent's approver
+    is asked again. False when nothing moved: no approval to carry, a changed request, an unreadable
+    parent or a parent lock that stayed busy (the approval is then asked again, never invented)."""
+    link = state.parent_link or {}
+    parent_id, index = link.get("parent_session"), link.get("stage_index")
+    if not parent_id or index != record.stage:
+        return False
+    try:
+        with _state_lock(store, parent_id) as locked:
+            parent = store.load(parent_id) if locked else None
+            if parent is None:
+                return False
+            moved = restamp_subplan_digest(parent, index, record)
+            if moved:
+                parent.log("subplan_approval_restamped", stage=index, child=state.session_id,
+                           at=time.time())
+                store.save(parent)
+            return moved
+    except Exception:
+        return False
 
 
 def _replan_record_acceptance(ctx: _ReplanContext) -> None:

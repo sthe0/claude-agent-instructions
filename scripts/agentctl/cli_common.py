@@ -1151,8 +1151,11 @@ def _work_item(kind: str, armings: list[dict], budget: dict | None, actual: dict
 def _phase_free(state: SessionState) -> bool:
     """Whether the session is of a class that has no order to understand and no plan to write: a
     chat or small-change one. Its planning line keeps the shape it had before the phases were
-    work items."""
-    return state.weight_class in (WeightClass.SMALL_CHANGE.value, WeightClass.CHAT.value)
+    work items. The effort ledger belongs to the session, not to the plan running in it, so the
+    class that decides is the outermost plan's: a small sub-plan pushed inside a session that
+    understood an order does not hide that understanding line, whose spend its total keeps."""
+    outermost = state.plan_stack[0].weight_class if state.plan_stack else state.weight_class
+    return outermost in (WeightClass.SMALL_CHANGE.value, WeightClass.CHAT.value)
 
 
 def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = None,

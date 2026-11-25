@@ -24,7 +24,7 @@ import pytest
 from agentctl import (
     cli, cli_common, cli_difficulty, cli_final, cli_order, cli_replan, cli_session, cost, delivery_channel, effort,
     effort_segments, gates, runtime_host, sub_plan, understanding_pricing)
-from agentctl import cli_plan
+from agentctl import cli_plan, premise
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
 from agentctl.state import EFFORT_FIRE_FINISHED_WORK, Declaration, Difficulty, Node, SessionState
@@ -684,6 +684,27 @@ def test_understanding_estimate_beside_order(ostore, armed_env, tmp_path, monkey
     item = _line(ostore)["work_item"]
     assert item["estimate"]["budget"] == {USD: 3.0, MINUTES: 30.0}
     assert item["actual"][USD] == pytest.approx(0.5) and item["actual"][MINUTES] >= 2
+
+
+def test_the_understanding_estimate_is_not_agreed_apart(ostore, armed_env, tmp_path, monkeypatch):
+    """The user agrees the order; the understanding figure beside it is the typing agent's and stays
+    so: no budget record carries it, the arming keeps its source, no question stands behind it."""
+    _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
+    assert _submit(ostore, path).ok
+    before = _understanding(ostore)
+    _agreed_order(ostore, tmp_path, path)
+    state = ostore.load(SESSION)
+    after = _understanding(ostore)
+    assert after["budget"] == {USD: 3.0, MINUTES: 30.0}
+    assert (after["budget_source"], after["author"]) == (before["budget_source"], before["author"]) == (
+        "type-record", "the typing agent")
+    agreed_budget = state.order_agreement.planning_budget
+    assert agreed_budget is None or "understanding" not in json.dumps(agreed_budget)
+    assert {USD: 3.0, MINUTES: 30.0} != (agreed_budget or {}).get("budget")
+    asked = premise.questions_from_dicts((state.plugins.get("premise") or {}).get("questions", []))
+    assert not [q for q in asked if "understanding" in f"{q.id} {q.target} {q.question} {q.kind}".lower()]
+    record = json.dumps(dataclasses.asdict(state.order_agreement), default=str).lower()
+    assert "understanding_estimate" not in record and "understanding_budget" not in record
 
 
 def test_work_items_carry_customer_product_check(ostore, armed_env, tmp_path, monkeypatch):
@@ -1647,8 +1668,20 @@ def test_a_small_task_has_no_phase_segments_and_its_planning_line_keeps_its_shap
     assert lines[0]["actual"][USD] == pytest.approx(0.2)
 
 
-def test_a_small_sub_plan_of_an_agreed_order_shows_no_understanding_line_and_keeps_its_spend(
+def _total_matches_its_lines(shown: dict) -> None:
+    lines = shown["lines"]
+    assert shown["total"]["actual"][USD] == pytest.approx(sum(line["actual"][USD] for line in lines))
+    assert shown["total"]["actual"][MINUTES] == pytest.approx(sum(line["actual"][MINUTES] for line in lines))
+    assert shown["total"]["budget"][USD] == pytest.approx(
+        sum(line["budget"][USD] for line in lines if line["budget"] is not None))
+
+
+def test_a_small_sub_plan_of_an_agreed_order_shows_the_understanding_it_spent_and_its_total_matches(
         ostore, home, armed_env, tmp_path, monkeypatch):
+    """The ledger belongs to the session: a small sub-plan pushed inside it is judged by the outermost
+    plan's class, so its report keeps the understanding line (and the planning line its author and
+    work item), and in the sub-plan's report and the parent's after the pop the closing total equals
+    the sum of the lines shown."""
     from conftest import STAGE_OBSERVATIONS
     _, path = _classified(ostore, tmp_path, monkeypatch, _with_estimate(minutes=30, usd=3.0))
     assert _submit(ostore, path).ok
@@ -1659,19 +1692,25 @@ def test_a_small_sub_plan_of_an_agreed_order_shows_no_understanding_line_and_kee
         session=SESSION, plan=str(tmp_path / "child.toml"), task=None, originating_stage=1), store=ostore)
     assert pushed.ok, pushed.detail
     assert _classify(ostore, changed_lines=5, files=1, wall_clock_min=3, architectural=False).ok
-    assert effort_segments.UNDERSTANDING not in [
-        line["segment"] for line in cli_common._effort_disclosure(ostore.load(SESSION))["lines"]]
+    inside = cli_common._effort_disclosure(ostore.load(SESSION))
+    assert effort_segments.UNDERSTANDING in [line["segment"] for line in inside["lines"]]
     assert cli.cmd_next_stage(SimpleNamespace(session=SESSION), store=ostore).ok
     passed = cli.cmd_record_result(SimpleNamespace(
         session=SESSION, status="passed", actual="ok", control="reviewed: ok", observation=STAGE_OBSERVATIONS[0],
         cost_log=None), store=ostore, runner=_checks_pass)
     assert passed.ok, passed.detail[:200]
     shown = _verify_final(ostore).data["effort"]
-    assert effort_segments.UNDERSTANDING not in [line["segment"] for line in shown["lines"]]
-    assert not any("author" in line or "work_item" in line for line in shown["lines"])
+    by_segment = {line["segment"]: line for line in shown["lines"]}
+    assert by_segment[effort_segments.UNDERSTANDING]["actual"][USD] == pytest.approx(0.7)
+    assert by_segment[effort_segments.PLANNING]["author"] and "work_item" in by_segment[effort_segments.PLANNING]
     assert shown["total"]["actual"][USD] >= 0.7
-    assert shown["total"]["budget"][USD] == pytest.approx(
-        sum(line["budget"][USD] for line in shown["lines"] if line["budget"] is not None))
+    _total_matches_its_lines(shown)
+    _total_matches_its_lines(_resolved(ostore, monkeypatch).data["effort"])
+    popped = cli.cmd_pop_subplan(SimpleNamespace(session=SESSION), store=ostore)
+    assert popped.ok, popped.detail
+    parent = cli_common._effort_disclosure(ostore.load(SESSION))
+    assert effort_segments.UNDERSTANDING in [line["segment"] for line in parent["lines"]]
+    _total_matches_its_lines(parent)
 
 
 def _presented_and_overrun(store, tmp_path, monkeypatch):

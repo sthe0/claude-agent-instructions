@@ -181,10 +181,11 @@ def test_pre_approval_replan_routes_only_root_product(ostore, home, armed_env, t
     assert refused.ok is False and "order-agree" in _blockers(refused)
 
 
-def test_second_draft_needs_grounds_at_order_submit(ostore, home, armed_env, tmp_path):
+def test_second_agreement_needs_grounds(ostore, home, armed_env, tmp_path):
     """A session that already agreed an order does not put a new-form draft to the user again
     without the four grounds: order-submit refuses and stores nothing. The way on the refusal
-    names (the same draft with the four flags) is then walked to a recorded agreement."""
+    names (the same draft with the four flags) is then walked through review, presentation, the
+    user's answer and `order-agree` to a recorded second agreement that carries the four grounds."""
     _plan_ready(ostore, home, tmp_path)
     first = ostore.load(SESSION).order_agreement
     draft = ostore.load(SESSION).order_draft_path
@@ -198,6 +199,14 @@ def test_second_draft_needs_grounds_at_order_submit(ostore, home, armed_env, tmp
     again = cli.cmd_order_submit(ns(session=SESSION, plan=str(path), **GROUNDS), store=ostore)
     assert again.ok, again.detail
     assert ostore.load(SESSION).order_draft_reagreement["changes"] == GROUNDS["reagree_changes"]
+    assert _review(ostore).ok and _present(ostore, tmp_path).ok
+    _confirm_delivery(ostore)
+    _user_answers(_marker_of(path), at=time.time() + 5)
+    agreed = cli.cmd_order_agree(ns(session=SESSION, note=""), store=ostore)
+    assert agreed.ok, agreed.detail
+    recorded = ostore.load(SESSION).order_agreement.reagreement
+    assert recorded["changes"] == GROUNDS["reagree_changes"] and recorded["why"] == GROUNDS["reagree_why"]
+    assert ostore.load(SESSION).order_agreement != first
 
 
 @pytest.mark.parametrize("missing", sorted(GROUNDS))
@@ -1026,6 +1035,83 @@ def test_method_replan_of_planning_subplan(contour):
     assert read.method == "split it twice" and read.estimate.minutes == before.estimate.minutes
 
 
+def _approved_contour(contour, tmp_path) -> str:
+    """The child's sub-plan is submitted and reviewed, and the user approves it at the parent:
+    the digest they approved."""
+    assert contour.submit()["ok"] is True
+    from test_subplan_presentation_dispatch import _present_and_approve
+
+    assert _present_and_approve(contour.store, tmp_path, sid=PARENT).ok
+    return contour.entry()["user_subplan_approval"]
+
+
+def _child_replans(contour, text: str) -> dict:
+    contour.plan = contour.write(text)
+    with contour.as_child():
+        return contour.child.run("replan", session=CHILD, plan=contour.plan)
+
+
+def test_child_method_replan_moves_the_parents_approval_and_the_stage_starts(contour, tmp_path):
+    """The user's approval of the child's sub-plan lives in the parent's state. An in-boundary
+    method replan by the child moves the approved digest to the new method (`restamps`), the
+    request digest being the one the user approved, and the parent then starts the stage; with
+    no channel the parent would refuse it as changed since approved."""
+    from test_subplan_presentation_dispatch import Spawns, _agent_approves_stage_resources, _dispatch
+
+    approved = _approved_contour(contour, tmp_path)
+    store = contour.store
+
+    d = _child_replans(contour, contour.text(method="split it twice"))
+
+    assert d["ok"] is True, d
+    record = sub_plan.read(store.load(PARENT), 1, store)
+    assert record.method == "split it twice"
+    assert contour.entry()["user_subplan_approval"] == sub_plan.approval_digest(record) != approved
+    assert any(e["event"] == "subplan_approval_restamped" for e in store.load(PARENT).history)
+    assert _agent_approves_stage_resources(store, sid=PARENT).ok
+    unreviewed = Spawns()
+    held = _dispatch(store, PARENT, unreviewed)
+    assert held.ok is False and "method review" in held.detail + str(held.data) and not unreviewed.argvs
+    assert contour.review_method(contour.plan)
+    spawns = Spawns()
+    assert _dispatch(store, PARENT, spawns).ok is not False and spawns.argvs
+
+
+def test_child_replan_that_changes_the_request_leaves_the_parents_approval(contour, tmp_path):
+    """A replan that also widens the resource request moves nothing: the parent's approval keeps
+    its old digest, the stage start is refused as changed since the user approved it, and the
+    user's approval of the changed sub-plan (`approve-subplan`) lifts it."""
+    from test_subplan_presentation_dispatch import (
+        Spawns, _dispatch, _not_started, _present_and_approve)
+
+    approved = _approved_contour(contour, tmp_path)
+    store = contour.store
+    wider = contour.text(method="split it twice").replace('allow = ["Edit"]', 'allow = ["Edit", "Read"]')
+
+    d = _child_replans(contour, wider)
+
+    assert d["ok"] is True, d
+    assert contour.entry()["user_subplan_approval"] == approved
+    assert not any(e["event"] == "subplan_approval_restamped" for e in store.load(PARENT).history)
+    refused = Spawns()
+    _not_started(_dispatch(store, PARENT, refused), refused, "changed since the user approved it")
+    assert _present_and_approve(store, tmp_path, sid=PARENT).ok
+    assert contour.entry()["user_subplan_approval"] != approved
+
+
+def test_child_replan_file_cannot_state_the_parents_approval(contour, tmp_path):
+    """A replan file that carries a `user_subplan_approval` digest of its own choosing (the
+    digest of the new method) is refused naming the field, the parent's approval is untouched."""
+    approved = _approved_contour(contour, tmp_path)
+    forged = contour.text(method="split it twice", user_subplan_approval="f" * 64)
+
+    d = _child_replans(contour, forged)
+
+    assert d["ok"] is False and "user_subplan_approval" in str(d), d
+    assert "the approval is the engine's" in str(d)
+    assert contour.entry()["user_subplan_approval"] == approved
+
+
 def test_mixed_description_method_edit_is_not_a_product_change(ostore, home, armed_env, tmp_path):
     """A stage description beside a method change is class (b) and (c) together: neither is the
     user's product, so neither goes to order-agree, and nothing is re-stamped (`restamps` is False).
@@ -1046,6 +1132,76 @@ def test_mixed_description_method_edit_is_not_a_product_change(ostore, home, arm
     _past_routing(d)
     refused = _replan(ostore, _proposal(tmp_path, title, executor, *GOAL2, name="mixed-product.toml"))
     assert refused.ok is False and "order-agree" in _blockers(refused)
+
+
+def test_mixed_description_method_edit_reapproved_by_own_approver(ostore, home, armed_env, tmp_path):
+    """The user approved the root plan; a replan that edits a stage's description and its method
+    together is the plan's own approver's, not the order's: it is accepted without any re-agreement,
+    carries no approval (the approval is armed again and not passed), so the stage is refused at its
+    start, and the approver's `approve` lifts that. Why the root form: a plan-stack frame's order is
+    old-form (its stages are the plan's own, `classify_replan` reads no description there), so a
+    description edit cannot be made in a frame fixture; the frame half of the same rule (the method
+    re-stamp is withheld beside a product edit) is `test_mixed_method_and_goal_edit_in_a_frame_is_not_carried`."""
+    plan = _approved(ostore, home, tmp_path)
+    assert ostore.load(SESSION).node == "APPROVED"
+    title = ('title = "the stage under test"', 'title = "the stage, renamed"')
+    executor = ('executor = "in_thread"', 'executor = "spawn:developer"')
+    mixed = _proposal(tmp_path, title, executor, name="mixed.toml")
+    classes = classify_replan(load_plan(plan), load_plan(mixed))
+    assert classes.description and classes.method and not classes.product and classes.restamps is False
+    covered = cli.cmd_order_dispose(
+        ns(session=SESSION, id="O1", as_="covered", stage=1, reason="", plan=mixed), store=ostore)
+    assert covered.ok, covered.detail
+
+    d = _replan(ostore, mixed)
+
+    assert d.ok and d.action == "await_user_approval", (d.action, d.detail, d.data.get("blockers"))
+    state = ostore.load(SESSION)
+    assert state.plan_path == mixed and state.node == "PLAN_READY"
+    assert state.approval.armed and not state.approval.passed
+    refused = cli.cmd_next_stage(ns(session=SESSION), store=ostore)
+    assert refused.ok is False and "PLAN_READY" in refused.detail, refused.detail
+    approved = cli.cmd_approve(ns(session=SESSION, by="user"), store=ostore)
+    assert approved.ok, (approved.detail, approved.data.get("blockers"))
+    state = ostore.load(SESSION)
+    assert state.node == "APPROVED" and state.approval.passed and state.approval.by == "user"
+    stronger = _replan(ostore, _proposal(tmp_path, title, executor, *GOAL2, name="mixed-product.toml"))
+    assert stronger.ok is False and "order-agree" in _blockers(stronger)
+
+
+def test_a_replans_fire_with_the_approval_owed_again_takes_the_agents_difficulty_route(
+        ostore, home, armed_env, tmp_path):
+    """D10. The planning phase is judged on the replans scale only once the plan was approved (an
+    unapproved planning segment carries spend and wall-clock fires alone), so the planning-phase
+    replans fire is the one met while a replan has put the approval back to its approver: the
+    session is at PLAN_READY with the approval armed. It names no segment, is the agent's
+    (`fire-acknowledge --by agent`), and takes the route a stage's replans fire takes: the
+    difficulty cycle, the agent's acknowledgment, then `replan` (a plan exists)."""
+    from agentctl.config import Thresholds
+    plan = _approved(ostore, home, tmp_path)
+    title = ('title = "the stage under test"', 'title = "the stage, renamed"')
+    executor = ('executor = "in_thread"', 'executor = "spawn:developer"')
+    mixed = _proposal(tmp_path, title, executor, name="mixed.toml")
+    covered = cli.cmd_order_dispose(
+        ns(session=SESSION, id="O1", as_="covered", stage=1, reason="", plan=mixed), store=ostore)
+    assert covered.ok, covered.detail
+    assert _replan(ostore, mixed).ok
+    state = ostore.load(SESSION)
+    assert state.node == "PLAN_READY" and state.approval.armed and not state.approval.passed
+    state.history.extend({"event": "replan"} for _ in range(Thresholds().effort_replan_absolute()))
+    ostore.save(state)
+
+    refused = cli.cmd_approve(ns(session=SESSION, by="agent"), store=ostore)
+
+    state = ostore.load(SESSION)
+    [fire] = [f for f in state.effort_fires if f.get("scale") == "replans"]
+    assert fire.get("segment") is None and state.node == "DIAGNOSING"
+    assert refused.ok is False and refused.action == "planning_difficulty"
+    route = refused.data["agent_route"]
+    assert route == cli_common._effort_fire_route(state, fire) == cli_common._agent_replans_fire_route(state)
+    assert route["route"] == "agent_planning_difficulty_cycle" and route["acknowledged_by"] == "agent"
+    assert route["steps"][-2:] == ["fire-acknowledge --decision revise --by agent", "replan"]
+    assert plan != state.plan_path
 
 
 def test_mixed_method_and_goal_edit_in_a_frame_is_not_carried(home_store, tmp_path):
@@ -1147,6 +1303,57 @@ def test_d1_users_revise_after_a_fire_is_one_decision_and_a_raise_past_it_is_hel
     assert len(real.corrections()) == 1
     assert sub_plan.held_figure(real.state("s"), 1)["usd"] == 400.0
     assert sub_plan.user_figure(real.state("s"), 1)["usd"] == 40.0
+
+
+def test_d1_fire_ack_revise_then_replan_one_user_decision(real):
+    """The whole walk the name says, through the real verbs in the root session: an overspent stage
+    fires, the user's `fire-acknowledge --decision revise` (after their marked answer) writes the one
+    user correction, and the replan that follows asks the user nothing more and writes no second
+    correction: the stage's figure lives in the parent-side copy (below the size line no sub-plan
+    record carries it), so the plan file has no figure to disagree with it. The raise past the
+    acknowledged figure that is held (the agent's, writing nothing) is the test above; here the
+    replan's plan file is the harness's old-form plan, which does not carry the stage's new form."""
+    _overspent_agreed_stage_in_its_cycle(real)
+    asked = real.ack(by="user", decision="revise", minutes=25, usd=40)
+    assert asked["ok"] is False
+    _user_choice(_correction_marker(asked), session="s")
+    assert real.ack(by="user", decision="revise", minutes=25, usd=40)["ok"]
+    assert len(real.corrections()) == 1
+
+    replanned = real.run("replan", session="s", plan=real.write())
+
+    assert replanned["ok"], replanned
+    state = real.state("s")
+    [only] = real.corrections()
+    assert (only["by"], only["authority"], only["to"]["usd"]) == ("user", "user", 40.0)
+    assert sub_plan.user_figure(state, 1)["usd"] == 40.0
+    assert gates.open_fire_record(state) is None
+    assert sub_plan.held_figure(state, 1) is None
+
+
+def test_users_revise_on_a_below_threshold_stage_is_written_through_the_parent_side_copy(real):
+    """D11. The stage's figure lives in the parent-side copy entry (`sub_plan.agree_copy`), and the
+    user's `fire-acknowledge --decision revise` writes its correction there (author of the figure
+    kept, agreer the session, authority the user's); the figure shown in the closing/presentation
+    text is that copy's: who agreed it and with what authority, and the correction with its agreer."""
+    from agentctl import render
+    from test_stage_estimates import _estimate
+
+    _overspent_agreed_stage_in_its_cycle(real)
+    before = sub_plan.estimate_copy(real.state("s"), 1)
+    assert before["agreed"] and before["agreer"] == "s" and before["authority"] == sub_plan.AUTHORITY_USER
+    asked = real.ack(by="user", decision="revise", minutes=25, usd=40)
+    _user_choice(_correction_marker(asked), session="s")
+    assert real.ack(by="user", decision="revise", minutes=25, usd=40)["ok"]
+
+    copy = sub_plan.estimate_copy(real.state("s"), 1)
+
+    [correction] = copy["corrections"]
+    assert (correction["agreer"], correction["authority"], correction["by"]) == ("s", "user", "user")
+    assert copy["agreer"] == "s" and copy["usd"] == 40.0
+    text = render._estimate_text(_estimate(minutes=25, usd=1.0, basis="sized by the test"), copy)
+    assert "agreed by s (user authority)" in text and "written by executor" in text
+    assert "corrected to 25.0 min / $40.0 by s" in text
 
 
 def test_estimate_correct_does_not_reach_a_frames_parent_stage(home_store, tmp_path):
@@ -1486,3 +1693,47 @@ def test_below_root_decision_lands_where_check_13_reads_it(home_store, tmp_path)
     passed = _break(store, tmp_path, "B1", sid="c", name="after.toml", drop=())
     assert passed.ok, (passed.detail, passed.data)
     assert sub_plan.stored_record(store.load("c"), 1).objections[0]["status"] == "consumed"
+
+
+def test_inherited_condition_refusal_names_who_acts_next_and_each_way_is_walked(home_store, tmp_path):
+    """The child contour `c` builds a stage of the frame session `w`, and B1 reaches it unchanged
+    from the root (w carries it from above): `c` may not break it. The refusal mints no objection
+    and names the two ways on; both are walked through the verbs. (1) Keeping the condition: the
+    same plan without --breaks-condition passes. (2) The level above, `w`, raises the objection
+    against its own carried condition, the user's marked answer decides it at the root, and `w`'s
+    replan passes. What is not walked is the last hop: `w` dispatching `c` again with the handoff
+    norm re-read, which is a spawn."""
+    from test_submit_plan_surfaces import _session as _classified, _write_plan
+    from test_stage_order_subplan import _NORM
+
+    store = home_store
+    _frame_plan(store, tmp_path)
+    c_dir = tmp_path / "c"
+    c_dir.mkdir()
+    _classified(store, "c")
+    child = store.load("c")
+    child.parent_link = {"parent_session": FRAME, "stage_index": 1, "norm": _NORM}
+    child.order_searches = [{"id": "S1"}]
+    store.save(child)
+    plan_file = _write_plan(c_dir, tier="small")
+    plan_file.write_text(plan_file.read_text(encoding="utf-8") + _RECORD_HEAD + _HOW_KEPT,
+                         encoding="utf-8")
+    submitted = cli.cmd_submit_plan(ns(session="c", plan=str(plan_file)), store=store)
+    assert submitted.ok, submitted.data
+
+    refused = _break(store, c_dir, "B1", sid="c")
+    text = _text_of(refused)
+    assert refused.ok is False and "objections" not in refused.data, text
+    assert f"set above session {FRAME}" in text and f"return `REPLAN:` to {FRAME}" in text
+    assert "replan --breaks-condition B1" in text and "condition-decide --objection <id>" in text
+    assert "leave them out of --breaks-condition" in text
+    assert sub_plan.stored_record(store.load("c"), 1).objections == []
+
+    kept = _break(store, c_dir, sid="c", name="kept.toml", drop=())
+    assert kept.ok, (kept.detail, kept.data)
+
+    (objection_id,) = _objection_ids(_break(store, tmp_path, "B1"))
+    assert _stored(store).objections[0]["site"]["key"] is None
+    assert _users_decision(store, objection_id, "withdrawn").ok
+    passed = _break(store, tmp_path, "B1", name="passes.toml")
+    assert passed.ok, (passed.detail, passed.data)
