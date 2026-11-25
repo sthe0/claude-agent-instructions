@@ -278,6 +278,18 @@ def load_review_doc(path: str) -> tuple:
         return doc, hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def site_condition_decisions(args: argparse.Namespace) -> list:
+    """The decisions on binding conditions the spawn's session reads, so the plan content a
+    reviewer sees shows each condition as it now stands (`render.build_site_prompt`). Nothing for
+    a spawn with no engine session (the plan file as written)."""
+    from agentctl.cli_common import condition_decisions_in_store
+
+    return condition_decisions_in_store(
+        getattr(args, "condition_session", None) or getattr(args, "session", None)
+        or os.environ.get(OWN_SESSION_ENV),
+        getattr(args, "state_root", None))
+
+
 def plan_site(
     args: argparse.Namespace, *, view_root: "Path | str | None" = None,
     history: "dict | None" = None, materialize: bool = True,
@@ -298,7 +310,7 @@ def plan_site(
     try:
         return build_site_prompt(
             kind, args.plan, view_root=view_root, history=history,
-            materialize=materialize, **selector,
+            materialize=materialize, condition_decisions=site_condition_decisions(args), **selector,
         )
     except PlanError:
         if kind in ("topo-pair", "topo-unit"):
@@ -1022,6 +1034,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="the digest of the order understanding the user agreed: a --review-topo bundle of "
         "unit:base or of a base-<s> pair carries the user-agreed label when this equals the "
         "plan's own understanding digest, and none otherwise. Only valid with --review-topo.",
+    )
+    p.add_argument(
+        "--condition-session",
+        default=None,
+        metavar="<session>",
+        help="the engine session whose decisions on binding conditions the plan content prints "
+        "the conditions with (a --review-topo reviewer judges a condition as it now stands). "
+        "Without it the spawn's --session, else its own contour's session, is read.",
     )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p

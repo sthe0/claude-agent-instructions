@@ -662,8 +662,8 @@ def record_carried_by(state, doc, store_=None) -> None:
         "reviews") or []
     engine = [r for r in _unless_stale_method_review(previous_reviews, record)
               if r.get("kind") == METHOD_REVIEW_KIND]
-    record.reviews = engine + (record.reviews
-                               or [r for r in previous_reviews if r.get("kind") != METHOD_REVIEW_KIND])
+    kept = [r for r in previous_reviews if r.get("kind") != METHOD_REVIEW_KIND]
+    record.reviews = engine + kept + [r for r in record.reviews if r not in kept]
     if level is not None and record.estimate is not None:
         write_confirmed_copy(state, record.stage, record.estimate, level)
     pushed = frame_push_position(state, record.stage) if state.plan_stack else None
@@ -709,8 +709,8 @@ def carry_engine_fields(state, doc) -> None:
     `state.stage_approvals` (written by `approve-subplan` and the resource approvals), not in the
     record; no gate reads the record's copy. The carry keeps a stored copy from being erased by a
     file that lacks the fields; a value a file carries that differs from the stored one is refused
-    (`replan_record_blockers`). Reviews are not carried here: `store` keeps the stored ones when
-    the record has none."""
+    (`replan_record_blockers`). Reviews are carried by `record_carried_by`: every stored row stays,
+    whatever subset of them a file repeats."""
     record = doc.meta.sub_plan
     if record is None or record.stage <= 0:
         return

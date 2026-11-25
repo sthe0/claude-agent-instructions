@@ -101,6 +101,7 @@ from .cli_common import (
     _state_lock,
     SetterSite,
     _setter_site,
+    _setter_site_at,
     _origin_site,
     _objection_decisions,
     _parent_state_of,
@@ -1172,6 +1173,22 @@ def _objection_refusal(state: SessionState, message: str, **data) -> Directive:
                      data={"blockers": [message], **data})
 
 
+def _own_plan_conditions(state: SessionState) -> dict[str, list[int]]:
+    """The binding conditions the session's own plan states on its stages, as condition id -> the
+    stages stating it. This session is the level that set them (the record its own plan carries is
+    where its decisions on them are kept), so it may object to one when it replans and decides that
+    objection itself. A session with no level of its own (the root, whose decisions are the
+    user's) states none that way."""
+    site = _setter_site_at(state, state, 0)
+    if site is None or site.is_root:
+        return {}
+    found: dict[str, list[int]] = {}
+    for stage in state.stages:
+        for condition in stage.binding_conditions:
+            found.setdefault(condition["id"], []).append(stage.index)
+    return found
+
+
 def _condition_objection_gate(ctx: _ReplanContext) -> Directive | None:
     """A replan that names binding conditions it breaks (`--breaks-condition`) is refused until the
     level that set each one has decided the objection this replan raised (`condition-decide`): the
@@ -1185,43 +1202,65 @@ def _condition_objection_gate(ctx: _ReplanContext) -> Directive | None:
         return None
     parent_state = _parent_state_of(state, store)
     root_order = not state.plan_stack and not state.parent_link
+    built = None
     if root_order:
         site = SetterSite(state, None, None, 0)
-        stage = None
         conditions = gates.with_current_text(_root_order_conditions(state), site.decisions())
-        storage = state.root_conditions.setdefault("objections", [])
-        if not conditions:
-            return _objection_refusal(
-                state, "--breaks-condition names a binding condition of the order this session "
-                "works to, and the agreed order carries none: leave the option out")
+        if conditions:
+            built = (site, None, conditions, state.root_conditions.setdefault("objections", []))
+        no_built = ("--breaks-condition names a binding condition of the order this session "
+                    "works to, and the agreed order carries none: leave the option out")
     else:
         order = _stage_order_context(state, store=store)
-        if order.expected_stage is None or not order.binding_conditions:
-            return _objection_refusal(
-                state, "--breaks-condition names a binding condition of the stage this session's plan "
-                "builds, and no stage's binding conditions bind this session: leave the option out")
-        site = _setter_site(state, parent_state)
-        if site is None:
-            return _objection_refusal(
-                state, "the level that set these conditions cannot be read from this session (its "
-                "state is not available): run the replan again once the parent session's state exists")
-        stage, conditions = order.expected_stage, order.binding_conditions
-        storage = _objection_storage(state, stage)
-    known = [c["id"] for c in conditions]
-    unknown = [i for i in ids if i not in known]
+        no_built = ("--breaks-condition names a binding condition of the stage this session's plan "
+                    "builds, and no stage's binding conditions bind this session: leave the option out")
+        if order.expected_stage is not None and order.binding_conditions:
+            site = _setter_site(state, parent_state)
+            if site is None:
+                return _objection_refusal(
+                    state, "the level that set these conditions cannot be read from this session (its "
+                    "state is not available): run the replan again once the parent session's state exists")
+            built = (site, order.expected_stage, order.binding_conditions,
+                     _objection_storage(state, order.expected_stage))
+    known = [c["id"] for c in built[2]] if built else []
+    own_plan = _own_plan_conditions(state)
+    unknown = [i for i in ids if i not in known and i not in own_plan]
+    if unknown and built is None:
+        return _objection_refusal(state, no_built)
     if unknown:
+        own_ids = [i for i in own_plan if i not in known]
         return _objection_refusal(
             state, f"--breaks-condition names {unknown}, which are not binding conditions of "
-            f"{'the order' if root_order else 'this stage'}; its binding conditions are {known}")
-    own = frozenset(known) if site.is_root else sub_plan.parent_set_ids(conditions, site.above)
-    carrying_key = None if stage is None else sub_plan.record_key(stage, sub_plan.record_level(state))
+            f"{'the order' if root_order else 'this stage'}; its binding conditions are {known}"
+            + (f", and those of this session's own plan are {own_ids}" if own_ids else ""))
+    ambiguous = {i: own_plan[i] for i in ids if i not in known and len(own_plan[i]) > 1}
+    if ambiguous:
+        return _objection_refusal(
+            state, f"--breaks-condition names {sorted(ambiguous)}, which this session's own plan "
+            f"states on more than one stage {ambiguous}: no objection is raised for an id that does "
+            f"not name one condition; give the stages' conditions distinct ids")
     existing = sub_plan.session_objections(state)
     lifted, pending, kept, blockers = [], [], [], []
     for cid in ids:
+        if cid in known:
+            site, stage, conditions, storage = built
+            own = frozenset(known) if site.is_root else sub_plan.parent_set_ids(conditions, site.above)
+            carrying_key = None if stage is None else sub_plan.record_key(stage, sub_plan.record_level(state))
+            origin_of = (lambda c, site=site, own=own:
+                         site if c in own else _origin_site(state, store, parent_state, c))
+        else:
+            site = _setter_site_at(state, state, 0)
+            (stage,) = own_plan[cid]
+            carrying_key = site.key
+            storage = state.sub_plan_records.setdefault(
+                site.key, {"stage": int(site.key.rsplit(":", 1)[-1])}).setdefault("objections", [])
+            origin_of = (lambda c, site=site:
+                         site if c not in {x["id"] for x in site.above or ()}
+                         else _origin_site(state, store, parent_state, c))
         objection = sub_plan.open_objection_for(storage, cid)
         if objection is None:
             objection = sub_plan.new_objection(state.session_id, stage, cid, existing, time.time())
-            origin = site if cid in own else _origin_site(state, store, parent_state, cid)
+            origin = origin_of(cid)
             objection["site"] = {"owner": origin.owner.session_id, "key": origin.key,
                                  "depth": origin.depth}
             if (origin.owner.session_id, origin.key) != (site.owner.session_id, site.key):

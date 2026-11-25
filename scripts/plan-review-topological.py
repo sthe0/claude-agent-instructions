@@ -175,7 +175,8 @@ def forwarded_digest(pair: str, digest: "str | None") -> "str | None":
 def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
                      history_path: "str | None" = None,
                      view_root: "str | None" = None,
-                     agreed_understanding: "str | None" = None) -> list[str]:
+                     agreed_understanding: "str | None" = None,
+                     condition_session: "str | None" = None) -> list[str]:
     selector = ["--model", args.model] if args.model else ["--complexity", args.complexity or "high"]
     argv = [
         "--kind", "thinker", *selector, "--effort", "high",
@@ -189,6 +190,8 @@ def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
     digest = forwarded_digest(pair, agreed_understanding)
     if digest is not None:
         argv += ["--agreed-understanding", digest]
+    if condition_session is not None:
+        argv += ["--condition-session", condition_session]
     if dry_run:
         argv.append("--dry-run")
     return argv
@@ -203,13 +206,15 @@ def _spawner_module():
 
 def reviewer_prompt(plan_path: str, unit_id: str, *, view_root: "str | Path",
                     history_path: "str | None" = None,
-                    agreed_understanding: "str | None" = None) -> str:
+                    agreed_understanding: "str | None" = None,
+                    condition_session: "str | None" = None) -> str:
     """The full prompt the spawn of `build_spawn_argv` sends to the reviewer of `unit_id`
     (a pair id or `unit:<n>`), whatever its length: the spawner's own assembly, nothing
     spawned and no size ceiling applied."""
     argv = build_spawn_argv(argparse.Namespace(model=None, complexity=None), unit_id, plan_path,
                             dry_run=False, history_path=history_path, view_root=str(view_root),
-                            agreed_understanding=agreed_understanding)
+                            agreed_understanding=agreed_understanding,
+                            condition_session=condition_session)
     return _spawner_module().assembled_prompt(argv)
 
 
@@ -464,12 +469,14 @@ def count_pulls(transcript: "str | None", view_dir: str) -> "int | None":
     return len(seen) if parsed or not lines else None
 
 
-def view_dir_for(plan_path: str, pair: str, view_root: "str | None" = None) -> "str | None":
+def view_dir_for(plan_path: str, pair: str, view_root: "str | None" = None,
+                 condition_decisions=()) -> "str | None":
     """The view directory the reviewer of `pair` is granted, or None when the plan does
-    not build one (a plan that does not load, a pair it does not have)."""
+    not build one (a plan that does not load, a pair it does not have). The directory's name
+    follows the files' bytes, so `condition_decisions` are the ones the spawn builds it with."""
     try:
         site = build_site_prompt("topo-pair", plan_path, pair=pair, view_root=view_root,
-                                 materialize=False)
+                                 materialize=False, condition_decisions=condition_decisions)
     except (ValueError, OSError, plan.PlanError):
         return None
     return str(site.view_dir)
@@ -544,6 +551,14 @@ class Driver:
         self.history_lock = threading.Lock()
         self.draft = is_order_draft(plan_path)
         self.agreed: "str | None" = None
+        self.condition_session = self.sid or os.environ.get(OWN_SESSION_ENV, "").strip() or None
+
+    def condition_decisions(self) -> list:
+        """The decisions on binding conditions the reviewers' prompts print the conditions with:
+        the session's own, the same list the spawner reads for `--condition-session`."""
+        from agentctl.cli_common import condition_decisions_in_store
+
+        return condition_decisions_in_store(self.condition_session)
 
     def engine(self, argv: list[str]) -> dict:
         return run_agentctl(argv, self.env, self.engine_script)
@@ -608,7 +623,8 @@ class Driver:
             text = reviewer_prompt(self.plan_path, pair,
                                    view_root=self.view_root or config_root.topo_units_root(),
                                    history_path=history_path,
-                                   agreed_understanding=self.agreed)
+                                   agreed_understanding=self.agreed,
+                                   condition_session=self.condition_session)
         except (plan.PlanError, ValueError, OSError):
             return None
         return topo_unit_refusal(doc, ("meta", *nodes), text, model=self.args.model)
@@ -622,11 +638,13 @@ class Driver:
             self.refuse(pair, refusal)
             return None
         sha = hashlib.sha256(Path(self.plan_path).read_bytes()).hexdigest()
-        view_dir = None if plan.is_unit_id(pair) else view_dir_for(self.plan_path, pair, self.view_root)
+        view_dir = None if plan.is_unit_id(pair) else view_dir_for(
+            self.plan_path, pair, self.view_root, self.condition_decisions())
         offset = cost_log_size()
         argv = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
                                 history_path=history_path, view_root=self.view_root,
-                                agreed_understanding=self.agreed)
+                                agreed_understanding=self.agreed,
+                                condition_session=self.condition_session)
         rc, out, err = spawn_pair(argv)
         return Launched(rc, out, err, offset, sha, view_dir)
 
@@ -733,7 +751,8 @@ class Driver:
                 spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
                                              history_path=HISTORY_PLACEHOLDER if history_path else None,
                                              view_root=self.view_root,
-                                             agreed_understanding=self.agreed)
+                                             agreed_understanding=self.agreed,
+                                             condition_session=self.condition_session)
                 if history_path:
                     emit(f"  history: {shlex.join([sys.executable, str(self.engine_script), 'plan-review-pair-history', *session_args(self.sid), '--target', self.plan_path, '--pair', pair])}"
                          f" > {HISTORY_PLACEHOLDER}")
@@ -745,7 +764,8 @@ class Driver:
                 rc, out, err = spawn_pair(build_spawn_argv(self.args, pair, self.plan_path, dry_run=True,
                                                            history_path=history_path,
                                                            view_root=self.view_root,
-                                                           agreed_understanding=self.agreed))
+                                                           agreed_understanding=self.agreed,
+                                                           condition_session=self.condition_session))
                 chars, files = DRY_CHARS_RE.search(out), DRY_VIEW_RE.search(out)
                 if rc != 0 or chars is None or files is None:
                     emit(f"TOPO-REFUSED: pair={pair} spawner --dry-run exited {rc} ({CEILING_HINT})")

@@ -616,7 +616,7 @@ def test_the_user_authority_verb_set_differs_from_the_stage_five_set_by_the_live
     added_on_main_since = {
         "accept-protected-grant", "adopt-escalation", "mandate-retry", "record-landing",
         "order-submit", "order-agree", "order-challenge-dismiss", "mandate-limits",
-        "approve-subplan", "approve-resources",
+        "approve-subplan", "approve-resources", "condition-decide",
     }
 
     assert AGENTCTL_USER_AUTHORITY_VERBS - stage_five - added_on_main_since == {"plan-convert-live"}

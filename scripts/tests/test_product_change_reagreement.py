@@ -1599,6 +1599,59 @@ def _case_changed_text_reaches_the_presented_rendering(request, tmp_path):
     assert written["version"] == 2 and written["objection"] == objection_id
 
 
+def _prompt_texts(plan: str, decisions) -> list[str]:
+    """What the plan-review site shows of the plan's order: the base text of the plan and the files
+    of the whole-plan-review view directory (their names are the view's, so all are read)."""
+    from agentctl import render
+
+    base = render.build_site_prompt("enumerate-node", plan, condition_decisions=decisions).text
+    view = render.build_site_prompt("whole-plan-review", plan, view_root=Path(plan).parent / "views",
+                                    condition_decisions=decisions)
+    files = [p.read_text(encoding="utf-8") for p in sorted(view.view_dir.iterdir()) if p.is_file()]
+    return [base, view.text, *files]
+
+
+def _case_changed_text_reaches_the_plan_review_prompt_at_the_root(request, tmp_path):
+    """After the user's `changed` decision at the root, the prompt a plan-review site builds shows
+    the new text at version 2 and not the plan file's own text, which is unchanged (a digest binds
+    the plan's own bytes); built before the decision it shows the plan file's text."""
+    store, home, _ = _by_fixture(request, "ostore", "home", "armed_env")
+    plan = _root_order_with_condition(store, tmp_path)
+    old, new = "no change to the release branch", "no change to any branch"
+    plan_bytes = Path(plan).read_bytes()
+    before = _prompt_texts(plan, cli_common.condition_decisions_of_session(SESSION, store))
+    assert any(old in text for text in before) and not any(new in text for text in before)
+
+    (objection_id,) = _objection_ids(_root_replan(store, tmp_path, "B1", name="break.toml"))
+    assert _root_decision(store, objection_id, "changed", new).ok
+
+    after = _prompt_texts(plan, cli_common.condition_decisions_of_session(SESSION, store))
+    assert any(new in text and "version 2" in text for text in after), after
+    assert not any(old in text for text in after)
+    assert Path(plan).read_bytes() == plan_bytes
+
+
+def test_changed_text_reaches_the_plan_review_prompt_below_the_root(home_store, tmp_path):
+    """The same below the root: the user's `changed` decision on the condition the child contour `c`
+    objected to is what a plan-review site built for `c`'s session shows (the decisions it reads
+    are `c`'s: the root list, written at the setter level, and the record `c`'s plan carries)."""
+    store = home_store
+    from test_order_two_sides import BESIDE  # noqa: F401  (the plan below carries the order's text)
+
+    c_dir = _frame_child_contour(store, tmp_path)
+    plan = _root_plan(tmp_path, name="order-plan.toml")
+    old, new = "no change to the release branch", "no change to any branch"
+    assert any(old in text for text in _prompt_texts(
+        plan, cli_common.condition_decisions_of_session("c", store)))
+
+    (objection_id,) = _objection_ids(_break(store, c_dir, "B1", sid="c"))
+    assert _users_decision(store, objection_id, "changed", new, sid=FRAME).ok
+
+    after = _prompt_texts(plan, cli_common.condition_decisions_of_session("c", store))
+    assert any(new in text and "version 2" in text for text in after), after
+    assert not any(old in text for text in after)
+
+
 def _case_old_form_order_has_no_condition_to_object_to(request, tmp_path):
     """An order agreed in the old form carries no binding condition, so `--breaks-condition` names
     nothing there: it is refused, no objection is written, and the same replan without the option
@@ -1710,6 +1763,7 @@ _BREAK_CASES = {
     "kept": _case_kept,
     "root-order": _case_root_session_replanning_the_root_order,
     "root-order-changed-text-shown": _case_changed_text_reaches_the_presented_rendering,
+    "root-order-changed-text-in-plan-review-prompt": _case_changed_text_reaches_the_plan_review_prompt_at_the_root,
     "old-form-order": _case_old_form_order_has_no_condition_to_object_to,
 }
 
@@ -1812,6 +1866,23 @@ def test_replan_file_is_no_writer_of_an_engine_field(home_store, tmp_path, field
     assert _frame_replan(store, tmp_path, name="without.toml").ok
 
 
+def test_replan_file_repeating_a_subset_of_stored_reviews_deletes_none(home_store, tmp_path):
+    """The record stores two reviews; a replan file that repeats only the first is taken, and both
+    rows are still stored afterwards (a file is no writer of the rows, so it cannot remove them)."""
+    store = home_store
+    _frame_plan(store, tmp_path)
+    first, second = ({"kind": "x", "verdict": "pass"}, {"kind": "y", "verdict": "revise"})
+    state = store.load(FRAME)
+    state.sub_plan_records["0:1"]["reviews"] = [first, second]
+    store.save(state)
+
+    repeated = _frame_replan(store, tmp_path,
+                             append='\n[[meta.sub_plan.reviews]]\nkind = "x"\nverdict = "pass"\n')
+
+    assert repeated.ok, (repeated.detail, repeated.data)
+    assert _stored(store).reviews == [first, second]
+
+
 def test_decision_moves_neither_agreed_digest_nor_priced_figures(home_store, tmp_path):
     """An objection and its decision touch the objection list and the decision list only: the
     digest of the sub-plan the user approved, the approval itself and the figure the parent agreed
@@ -1882,25 +1953,27 @@ def test_below_root_decision_lands_where_check_13_reads_it(home_store, tmp_path)
     assert sub_plan.stored_record(store.load("c"), 1).objections[0]["status"] == "consumed"
 
 
-def _frame_child_contour(store, tmp_path: Path) -> Path:
-    """The child contour `c` builds stage 1 of the frame session `w`, which holds the user's order:
-    B1 reaches `c` unchanged from the root. Returns `c`'s plan directory. (`c`'s `parent_link` is
-    written here for the reason given in `_middle_level_contour`.)"""
+def _frame_child_contour(store, tmp_path: Path, sid: str = "c", *, frame: bool = True) -> Path:
+    """The child contour `sid` builds stage 1 of the frame session `w`, which holds the user's
+    order: B1 reaches it unchanged from the root. Returns its plan directory. (Its `parent_link`
+    is written here for the reason given in `_middle_level_contour`.) `frame=False` adds a further
+    child to a frame session that already exists."""
     from test_submit_plan_surfaces import _session as _classified, _write_plan
     from test_stage_order_subplan import _NORM
 
-    _frame_plan(store, tmp_path)
-    c_dir = tmp_path / "c"
+    if frame:
+        _frame_plan(store, tmp_path)
+    c_dir = tmp_path / sid
     c_dir.mkdir()
-    _classified(store, "c")
-    child = store.load("c")
+    _classified(store, sid)
+    child = store.load(sid)
     child.parent_link = {"parent_session": FRAME, "stage_index": 1, "norm": _NORM}
     child.order_searches = [{"id": "S1"}]
     store.save(child)
     plan_file = _write_plan(c_dir, tier="small")
     plan_file.write_text(plan_file.read_text(encoding="utf-8") + _RECORD_HEAD + _HOW_KEPT,
                          encoding="utf-8")
-    submitted = cli.cmd_submit_plan(ns(session="c", plan=str(plan_file)), store=store)
+    submitted = cli.cmd_submit_plan(ns(session=sid, plan=str(plan_file)), store=store)
     assert submitted.ok, submitted.data
     return c_dir
 
@@ -1940,7 +2013,8 @@ def test_inherited_condition_objection_is_decided_at_the_root_and_read_by_the_ch
     assert _users_decision(store, objection_id, "changed", "no push to main", sid=root).ok
     assert [d["objection"] for d in store.load("c").sub_plan_records["1"]["setter_decisions"]
             if d.get("objection")] == [objection_id], "the entry is in the record c's plan carries"
-    assert not store.load(root).root_conditions.get("decisions"), "and not in the root's own list"
+    assert [(d["objection"], d["version"]) for d in store.load(root).root_conditions["decisions"]
+            ] == [(objection_id, 2)], "and in the root's own list, the one sequence every reader resolves from"
 
     seen = cli_common._stage_order_context(store.load("c"), store=store).binding_conditions
     assert [(c["text"], c.get("version")) for c in seen] == [("no push to main", 2)]
@@ -1949,6 +2023,64 @@ def test_inherited_condition_objection_is_decided_at_the_root_and_read_by_the_ch
     assert sub_plan.stored_record(store.load("c"), 1).objections[0]["status"] == "consumed"
     second = _decide(store, objection_id, "withdrawn", by="fedor", sid=root)
     assert second.ok is False and "takes no second decision" in second.detail
+
+
+def test_a_decision_on_an_inherited_condition_reads_alike_in_every_session_bound_by_it(
+        home_store, tmp_path):
+    """Two child contours `c` and `c2` build stage 1 of the frame session `w`, which holds the
+    user's order. The user's `changed` decision on `c`'s objection to B1 is written into the list
+    the root level keeps (the single sequence), so `w`'s own readers, `c`, and `c2` (which raised
+    nothing) all show the same text at version 2; `c2`'s own objection, decided `changed` after it,
+    numbers from the union, version 3, and the text then reads alike in all of them."""
+    store = home_store
+    c_dir = _frame_child_contour(store, tmp_path)
+    c2_dir = _frame_child_contour(store, tmp_path, "c2", frame=False)
+    (first,) = _objection_ids(_break(store, c_dir, "B1", sid="c"))
+    assert _users_decision(store, first, "changed", "no push to main", sid=FRAME).ok
+
+    def readings():
+        seen = {sid: [(c["text"], c.get("version"))
+                      for c in cli_common._stage_order_context(store.load(sid), store=store).binding_conditions]
+                for sid in ("c", "c2")}
+        root = gates.current_condition_text(
+            {"id": "B1", "text": ""}, cli_common.condition_decisions_of_session(FRAME, store))
+        return seen, root
+
+    seen, root = readings()
+    assert seen == {"c": [("no push to main", 2)], "c2": [("no push to main", 2)]}, seen
+    assert root == ("no push to main", 2)
+    assert [d["version"] for d in store.load(FRAME).root_conditions["decisions"]] == [2]
+
+    (second,) = _objection_ids(_break(store, c2_dir, "B1", sid="c2", name="c2-break.toml"))
+    assert second == "c2:1"
+    assert _users_decision(store, second, "changed", "no push to main or release", sid=FRAME).ok
+    seen, root = readings()
+    assert seen == {"c": [("no push to main or release", 3)], "c2": [("no push to main or release", 3)]}, seen
+    assert root == ("no push to main or release", 3)
+    assert [d["version"] for d in store.load(FRAME).root_conditions["decisions"]] == [2, 3]
+    assert _break(store, c2_dir, "B1", sid="c2", name="c2-passes.toml", drop=()).ok
+
+
+def test_a_decision_naming_a_busy_session_records_nothing_and_says_to_run_again(home_store, tmp_path):
+    """The decision on a child's objection is also written into that child's state: while another
+    command holds the child's state lock the decision is refused naming the way on (run it again),
+    and nothing is recorded at the setter level either; once the lock is free the same call records."""
+    store = home_store
+    c_dir = _frame_child_contour(store, tmp_path)
+    (objection_id,) = _objection_ids(_break(store, c_dir, "B1", sid="c"))
+    _user_choice(condition_decide_marker(objection_id, "withdrawn"), session=FRAME)
+
+    with cli_common._state_lock(store, "c") as held:
+        assert held
+        busy = _decide(store, objection_id, "withdrawn", by="fedor", sid=FRAME)
+    assert busy.ok is False and "run `condition-decide` again" in busy.detail, busy.detail
+    assert objection_id not in str(store.load(FRAME).root_conditions.get("decisions") or [])
+    _none_recorded(store, "c", FRAME)
+
+    again = _decide(store, objection_id, "withdrawn", by="fedor", sid=FRAME)
+    assert again.ok, again.detail
+    assert [d["objection"] for d in store.load("c").sub_plan_records["1"]["setter_decisions"]
+            if d.get("objection")] == [objection_id]
 
 
 # --- `condition-decide` is the setter level's act: every refusal paired with the decision that lifts
@@ -2069,6 +2201,37 @@ def _setter_case_the_parent_decides_the_condition_it_set(request, tmp_path):
     assert passed.ok, (passed.detail, passed.data)
 
 
+def _setter_case_a_parent_replanning_its_own_plan_objects_to_its_own_condition(request, tmp_path):
+    """`p` set B1 on stage 1 of its own plan and replans that plan naming B1 (`--breaks-condition`
+    resolves ids against the conditions of its own plan's stages too): the objection is raised and
+    stored in the record `p`'s plan carries (nothing is inherited, so there is no second copy), the
+    replan stays refused, the child below cannot decide it, `p`'s agent decides it itself, and the
+    same replan is then past the objection gate."""
+    store, = _by_fixture(request, "home_store")
+    _middle_level_that_carries_no_condition(store, tmp_path)
+    parent = store.load("p")
+    parent.plan_path = str(tmp_path / "plan.toml")
+    store.save(parent)
+    refused = _break(store, tmp_path, "B1", sid="p", name="own.toml")
+    assert refused.ok is False and "condition-decide" in _text_of(refused), _text_of(refused)
+    (objection_id,) = _objection_ids(refused)
+    (raised,) = store.load("p").sub_plan_records["4"]["objections"]
+    assert raised["id"] == objection_id and raised["stage"] == 1 and raised["status"] == "open"
+    assert raised["site"] == {"owner": "p", "key": "4", "depth": 0} and "inherited_into" not in raised
+    assert _break(store, tmp_path, "B1", sid="p", name="again.toml").ok is False
+    assert len(store.load("p").sub_plan_records["4"]["objections"]) == 1, "no second objection"
+
+    from_below = _decide(store, objection_id, "withdrawn", sid="c")
+    assert from_below.ok is False and objection_id in from_below.detail
+    _none_recorded(store, "c", "p")
+
+    assert _decide(store, objection_id, "withdrawn", sid="p").ok
+    (written,) = store.load("p").sub_plan_records["4"]["setter_decisions"]
+    assert written["objection"] == objection_id and written["decided_by"] == "agent"
+    past = _break(store, tmp_path, "B1", sid="p", name="past.toml")
+    assert "condition-decide" not in _text_of(past), _text_of(past)
+
+
 def _setter_case_a_session_below_the_setters_plan_is_refused_with_a_way_on(request, tmp_path):
     """`p` set B1 for its stage 1 but has pushed a frame, so it runs a plan below the one that set
     it: its agent is refused naming the ways on, and each is walked: the child replans keeping the
@@ -2140,6 +2303,7 @@ _SETTER_CASES = {
     "specialist": _setter_case_a_specialist_is_granted_no_decision,
     "second-decision": _setter_case_second_decision_is_refused,
     "parent-decides-its-own-condition": _setter_case_the_parent_decides_the_condition_it_set,
+    "parent-replanning-its-own-plan": _setter_case_a_parent_replanning_its_own_plan_objects_to_its_own_condition,
     "below-the-setters-plan": _setter_case_a_session_below_the_setters_plan_is_refused_with_a_way_on,
     "id-held-by-two-sessions": _setter_case_an_id_held_by_two_sessions_decides_nothing,
     "user-set-from-a-child-in-a-frame":

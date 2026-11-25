@@ -2912,17 +2912,45 @@ def _parent_state_of(state: SessionState, store: StateStore | None) -> SessionSt
     return store.load(state.parent_link["parent_session"])
 
 
+def _origin_decisions(state: SessionState, store: StateStore | None,
+                      parent_state: SessionState | None, conditions) -> list:
+    """The decisions the level that set each condition of `conditions` recorded on it, for the
+    conditions the nearest setter level carries from above: read from that original setter's own
+    list (`_origin_site`), where `condition-decide` writes them whichever session below raised the
+    objection. This is what makes every session bound by the condition resolve one text and one
+    version, not only the session that raised the objection. Nothing without a store."""
+    nearest = _setter_site(state, parent_state)
+    if store is None or nearest is None or nearest.is_root or not nearest.above:
+        return []
+    carried = {c["id"] for c in nearest.above}
+    found = []
+    for condition in conditions or ():
+        cid = condition["id"]
+        if cid not in carried:
+            continue
+        origin = _origin_site(state, store, parent_state, cid)
+        if origin is None:
+            continue
+        if not origin.is_root and (origin.above is None or cid in {c["id"] for c in origin.above}):
+            continue
+        found += [d for d in origin.decisions() if d.condition == cid]
+    return found
+
+
 def _setter_level_released(state: SessionState, parent_state: SessionState | None,
-                           conditions) -> frozenset[str]:
+                           conditions, store: StateStore | None = None) -> frozenset[str]:
     """The conditions of the stage the carrying plan builds (`conditions`) that the level above
     set itself and released: the setter level's decisions on ids it does not carry from above
     (`sub_plan.released_ids`), or at the root level its decisions on any of them
-    (`sub_plan.root_released_ids`). Never the carrying record's own decisions, and nothing when
-    the setter level's own carried conditions are unknown."""
+    (`sub_plan.root_released_ids`), and for an id the level carries from above, the original
+    setter's own decisions (`_origin_decisions`). Never the carrying record's own decisions, and
+    nothing when the setter level's own carried conditions are unknown."""
     site = _setter_site(state, parent_state)
     if site is None or not conditions:
         return frozenset()
-    inherited = sub_plan.root_released_ids(_inherited_decisions(state), conditions)
+    inherited = sub_plan.root_released_ids(
+        [*_inherited_decisions(state), *_origin_decisions(state, store, parent_state, conditions)],
+        conditions)
     if site.is_root:
         return sub_plan.root_released_ids(site.decisions(), conditions) | inherited
     record = site.owner.sub_plan_records.get(site.key)
@@ -2933,11 +2961,12 @@ def _setter_level_released(state: SessionState, parent_state: SessionState | Non
 
 
 def _current_conditions(state: SessionState, parent_state: SessionState | None,
-                        conditions) -> tuple[dict, ...] | None:
+                        conditions, store: StateStore | None = None) -> tuple[dict, ...] | None:
     """`conditions` with the text the setter level's `changed` decisions give them
     (`gates.with_current_text`): the decisions on ids that level set itself, or at the root any of
-    them, and the decisions the original setter wrote into this session's carrying records for a
-    condition it inherits (`_inherited_decisions`)."""
+    them, the decisions the original setter recorded on a condition the level carries from above
+    (`_origin_decisions`), and those written into this session's carrying records
+    (`_inherited_decisions`)."""
     if conditions is None:
         return None
     site = _setter_site(state, parent_state)
@@ -2947,7 +2976,52 @@ def _current_conditions(state: SessionState, parent_state: SessionState | None,
     if not site.is_root:
         own = sub_plan.parent_set_ids(conditions, site.above)
         decisions = [d for d in decisions if d.condition in own]
-    return gates.with_current_text(conditions, [*decisions, *_inherited_decisions(state)])
+    return gates.with_current_text(
+        conditions, [*decisions, *_origin_decisions(state, store, parent_state, conditions),
+                     *_inherited_decisions(state)])
+
+
+def visible_condition_decisions(state: SessionState, store: StateStore | None) -> list:
+    """Every decision on a binding condition that `state` reads, as `sub_plan.SetterDecision`
+    rows: those of the root level it holds (`root_conditions`), of the level above the plan it
+    carries, of the original setter of a condition that level carries from above, and those
+    written into its own carrying records. The one list a rendering of the plan's conditions
+    resolves their text and version from (`gates.current_condition_text` picks the match by id)."""
+    parent_state = _parent_state_of(state, store)
+    conditions = None
+    if state.plan_stack:
+        conditions = _frame_stage_conditions(state.plan_stack[-1])
+    elif state.parent_link:
+        conditions = _linked_norm_conditions(state.parent_link)
+    site = _setter_site(state, parent_state)
+    return [*(sub_plan.SetterDecision.from_dict(d)
+              for d in state.root_conditions.get("decisions") or []),
+            *(site.decisions() if site is not None else []),
+            *_origin_decisions(state, store, parent_state, conditions),
+            *_inherited_decisions(state)]
+
+
+def condition_decisions_of_session(session_id: str | None, store: StateStore | None) -> list:
+    """`visible_condition_decisions` of the session `session_id`; nothing without a session, a
+    store or a state that loads (a rendering is then the plan file as written)."""
+    if not session_id or store is None:
+        return []
+    try:
+        state = store.load(session_id)
+    except Exception:
+        return []
+    return visible_condition_decisions(state, store) if state is not None else []
+
+
+def condition_decisions_in_store(session_id: str | None, state_root=None) -> list:
+    """`condition_decisions_of_session` for a script that holds no store: the file store at
+    `state_root` (the engine's default root when None)."""
+    if not session_id:
+        return []
+    from .store import FileStateStore
+
+    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
+    return condition_decisions_of_session(session_id, store)
 
 
 def _stage_order_context(state: SessionState, *, store: StateStore | None = None) -> StageOrderContext:
@@ -2989,8 +3063,8 @@ def _stage_order_context(state: SessionState, *, store: StateStore | None = None
     return StageOrderContext(
         engine_approvals=engine_approvals,
         expected_stage=expected,
-        binding_conditions=_current_conditions(state, parent_state, conditions),
-        released=_setter_level_released(state, parent_state, conditions),
+        binding_conditions=_current_conditions(state, parent_state, conditions, store),
+        released=_setter_level_released(state, parent_state, conditions, store),
         parent_ancestors=ancestors,
         search_resolver=lambda search_id: cli_order._search_recorded(state, search_id),
         parent_unreadable=parent_unreadable,

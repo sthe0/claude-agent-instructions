@@ -1206,7 +1206,7 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
 def render_pair_review_bundle(
     doc: PlanDoc, pair_id: str, *, plan_sha256: str, view_dir: "Path | str",
     history: "dict | None" = None, agreed_understanding: "str | None" = None,
-    understanding_doc: "PlanDoc | None" = None,
+    understanding_doc: "PlanDoc | None" = None, condition_decisions=(),
 ) -> str:
     """The `--review-topo` starting prompt for one reliance edge: the order
     context, the base's full node file, the service's declared product
@@ -1237,7 +1237,7 @@ def render_pair_review_bundle(
         lines.append(_base_edge_section(doc, int(service)).rstrip("\n"))
         lines.append("")
     else:
-        base_text = node_file_text(doc, PAIR_BASE_NODE)
+        base_text = node_file_text(doc, PAIR_BASE_NODE, condition_decisions)
         lines.append("## Order context")
         lines.append("")
         lines.append(base_text.rstrip("\n") if base_text else "*(the plan declares no order)*")
@@ -1463,7 +1463,7 @@ def stage_description_site_defects(doc: PlanDoc, stage_index: int, *, runner=Non
 
 def render_unit_review_bundle(
     doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
-    agreed_understanding: "str | None" = None,
+    agreed_understanding: "str | None" = None, condition_decisions=(),
 ) -> str:
     """The `--review-topo` starting prompt for one UNIT: every field of the
     node, inlined, and its full edge set; nothing else is read. `unit:base`
@@ -1483,7 +1483,8 @@ def render_unit_review_bundle(
 
     lines.append("## Fields")
     lines.append("")
-    fields = unit_base_text(doc) if node == PAIR_BASE_NODE else render_stage_fields(doc, int(node))
+    fields = (unit_base_text(doc, condition_decisions) if node == PAIR_BASE_NODE
+              else render_stage_fields(doc, int(node)))
     lines.append(fields.rstrip("\n"))
     lines.append("")
 
@@ -1924,19 +1925,19 @@ def _view_header(view_dir: Path) -> list[str]:
     ]
 
 
-def plan_full_text(doc: PlanDoc) -> str:
+def plan_full_text(doc: PlanDoc, condition_decisions=()) -> str:
     """Every field of the meta and of every stage, references resolved — the reading of a
     site that has no directory to read the stages from."""
-    parts = [unit_base_text(doc).rstrip("\n")]
+    parts = [unit_base_text(doc, condition_decisions).rstrip("\n")]
     parts.extend(render_stage_fields(doc, stage.index).rstrip("\n")
                  for stage in sorted(doc.stages, key=lambda s: s.index))
     return "\n\n".join(parts) + "\n"
 
 
-def plan_summary_text(doc: PlanDoc) -> str:
+def plan_summary_text(doc: PlanDoc, condition_decisions=()) -> str:
     """The whole-plan reading a site without a stage gets: the meta in full, then every
     stage by its declared product only."""
-    lines = unit_base_text(doc).rstrip("\n").split("\n")
+    lines = unit_base_text(doc, condition_decisions).rstrip("\n").split("\n")
     lines.extend(["", "## Stages (declared product only)", ""])
     for stage in sorted(doc.stages, key=lambda s: s.index):
         lines.extend(render_stage_interface(doc, stage.index).rstrip("\n").split("\n"))
@@ -1977,7 +1978,7 @@ def build_site_prompt(
     pair: "str | None" = None, unit: "str | None" = None,
     view_root: "str | Path | None" = None, history: "dict | None" = None,
     materialize: bool = True, inline_max_chars: "int | None" = None, with_view: bool = True,
-    agreed_understanding: "str | None" = None,
+    agreed_understanding: "str | None" = None, condition_decisions=(),
 ) -> SitePrompt:
     """The plan content one model-facing site passes, and the directories the model is
     granted to read the rest from (`add_dirs`). `shown_nodes` names the nodes — "meta" or a
@@ -1995,6 +1996,11 @@ def build_site_prompt(
     the named exception to "never the inlined plan" (ADR-0012) — since there is no view
     for its model to read the stages from.
 
+    `condition_decisions` are the decisions the level that set the order's binding conditions
+    recorded (`cli_common.condition_decisions_of_session`): a condition shows the text and version
+    they leave it with, so a reviewer judges the condition as it now stands. They change what is
+    printed and nothing the digests hash (a digest binds the plan's own bytes).
+
     Raises PlanError for a plan that does not load and ValueError for a stage, pair or
     unit the plan does not have, or for `with_view=False` on any other kind."""
     if kind not in SITE_KINDS:
@@ -2008,11 +2014,11 @@ def build_site_prompt(
         node = parse_unit(doc, unit or "")
         text = render_unit_review_bundle(
             doc, unit, plan_sha256=source.plan_sha256, history=history,
-            agreed_understanding=agreed_understanding)
+            agreed_understanding=agreed_understanding, condition_decisions=condition_decisions)
         return SitePrompt(text, (), frozenset({"meta" if node == PAIR_BASE_NODE else int(node)}))
     if kind == "enumerate-node":
         if stage is None:
-            return SitePrompt(unit_base_text(doc), (), frozenset({"meta"}))
+            return SitePrompt(unit_base_text(doc, condition_decisions), (), frozenset({"meta"}))
         return SitePrompt(render_stage_fields(doc, stage), (), frozenset({int(stage)}))
 
     limit = plan_field_inline_limit() if inline_max_chars is None else inline_max_chars
@@ -2051,7 +2057,7 @@ def build_site_prompt(
             bundle = render_pair_review_bundle(
                 shown_doc, pair, plan_sha256=source.plan_sha256, view_dir=view_dir,
                 history=history, agreed_understanding=agreed_understanding,
-                understanding_doc=doc)
+                understanding_doc=doc, condition_decisions=condition_decisions)
             return ("\n".join([*header(view_dir), bundle]),
                     {node_file_name(service): node_file_text(shown_doc, service)})
     else:
@@ -2063,8 +2069,8 @@ def build_site_prompt(
 
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
             if whole_plan_inline:
-                return plan_full_text(shown_doc), {}
-            summary = plan_summary_text(shown_doc)
+                return plan_full_text(shown_doc, condition_decisions), {}
+            summary = plan_summary_text(shown_doc, condition_decisions)
             parts = [*header(view_dir), summary]
             if with_view:
                 parts.extend(_referenced_files_section(source.visited))
@@ -2084,7 +2090,8 @@ def build_site_prompt(
                     "",
                     f"{PLAN_DIGEST_MARKER} {source.plan_sha256}",
                 ])
-            return "\n".join(parts).rstrip() + "\n", {"meta.md": unit_base_text(shown_doc)}
+            return ("\n".join(parts).rstrip() + "\n",
+                    {"meta.md": unit_base_text(shown_doc, condition_decisions)})
 
     def view_files(text: str, node_files: dict[str, str]) -> dict[str, bytes]:
         printed = "\n".join([text, *node_files.values()])
@@ -2566,16 +2573,12 @@ def _externalized_section(entries: list[dict]) -> str:
 
 
 def _root_condition_decisions(session: "str | None", store) -> list:
-    """The decisions the root level recorded on the order's binding conditions in `session`, so
-    the rendering the user reads shows a changed condition as it stands now. A render with no
-    session, or whose session has no state, is the plan file as written."""
-    if not session or store is None:
-        return []
-    try:
-        state = store.load(session)
-    except Exception:
-        return []
-    return list(state.root_conditions.get("decisions") or []) if state is not None else []
+    """The decisions the level that set the order's binding conditions recorded, as `session`
+    sees them, so the rendering the user reads shows a changed condition as it stands now. A
+    render with no session, or whose session has no state, is the plan file as written."""
+    from .cli_common import condition_decisions_of_session
+
+    return condition_decisions_of_session(session, store)
 
 
 def cmd_plan_render(args, *, store=None, runner=None) -> Directive:

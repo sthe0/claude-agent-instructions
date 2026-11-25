@@ -6,8 +6,11 @@ session writes. A replan that names a condition it breaks (`replan --breaks-cond
 an objection with its own id, stored beside the record the replan's plan carries, and stays refused
 until the level that set the condition has decided that objection here. The decision is written
 where the reader of check 13 reads it (the setter level's own record, or `root_conditions` for the
-root; for a condition inherited from above the nearest level, the record the raising session's plan
-carries), never by the raising session, and a session below the setter's level cannot make it.
+root), and for a condition inherited from above the nearest level also in the record the raising
+session's plan carries. The setter level's list is the single sequence every reader resolves a
+condition's text and version from, so two sessions bound by one condition never see different
+versions. The decision is never made by the raising session, and a session below the setter's
+level cannot make it.
 The predicate that says who may decide is `gates.condition_decider_blockers`.
 """
 from __future__ import annotations
@@ -18,7 +21,7 @@ import time
 from lib import config_root
 
 from . import gates, sub_plan
-from .cli_common import _objection_decisions, _objection_site, _require
+from .cli_common import _objection_decisions, _objection_site, _require, _state_dir, _state_lock
 from .cli_order import _no_marked_answer_refusal, _user_answered_after
 from .directive import Directive
 from .dispatch import Runner
@@ -51,6 +54,28 @@ def _holders(state: SessionState, store: StateStore) -> list[SessionState]:
 def _matches(state: SessionState, store: StateStore, objection_id: str) -> list[tuple[dict, SessionState]]:
     return [(o, holder) for holder in _holders(state, store)
             for o in sub_plan.session_objections(holder) if o.get("id") == objection_id]
+
+
+def _write_into_raising_session(state: SessionState, holder: SessionState, objection: dict,
+                                decision: dict, store: StateStore) -> str | None:
+    """Writes `decision` into the record the raising session's plan carries (for a condition that
+    session inherits). The raising session is another one's state file, so the write is made under
+    its state lock on a fresh load, as `_restamp_on_parent` does for the parent's approval; a lock
+    that stays busy gives the refusal text, and nothing is written anywhere. A store with no state
+    directory has no concurrent writer and needs no lock."""
+    key = objection["inherited_into"]["key"]
+    if holder.session_id == state.session_id:
+        holder.sub_plan_records.setdefault(key, {}).setdefault("setter_decisions", []).append(decision)
+        return None
+    with _state_lock(store, holder.session_id) as locked:
+        if not locked and _state_dir(store) is not None:
+            return (f"session {holder.session_id} raised objection {objection['id']} and its state "
+                    f"is being written by another command, so the decision is not recorded: run "
+                    f"`condition-decide` again in a moment")
+        fresh = store.load(holder.session_id) if locked else holder
+        fresh.sub_plan_records.setdefault(key, {}).setdefault("setter_decisions", []).append(decision)
+        store.save(fresh)
+    return None
 
 
 def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -112,12 +137,10 @@ def cmd_condition_decide(args, *, store: StateStore, runner: Runner | None = Non
                 "decided_by": by, "objection": objection["id"],
                 "new_text": new_text, "version": version}
     if objection.get("inherited_into"):
-        raw = holder.sub_plan_records.setdefault(objection["inherited_into"]["key"], {})
-        raw.setdefault("setter_decisions", []).append(decision)
-        if holder.session_id != state.session_id:
-            store.save(holder)
-    else:
-        _objection_site(state, objection["site"]).write_decision(decision)
+        busy = _write_into_raising_session(state, holder, objection, decision, store)
+        if busy:
+            return refuse(busy)
+    _objection_site(state, objection["site"]).write_decision(decision)
     state.log("condition_decide", objection=objection["id"], condition=objection["condition"],
               value=value, by=by, at=time.time())
     store.save(state)
