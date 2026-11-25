@@ -16,8 +16,10 @@ import time
 from pathlib import Path
 import pytest
 
-from agentctl import cli, gates, plan as plan_mod, sub_plan
+from agentctl import cli, cli_common, gates, plan as plan_mod, sub_plan
 from agentctl.gates import ReplanClasses, classify_replan
+from agentctl.machine import Node
+from agentctl.state import GateRecord, Partition
 from agentctl.plan import load_order_draft, load_plan, product_digest
 from agentctl.render import reagreement_lines
 from conftest import SUBSTANTIVE_ORDER, declare_venue
@@ -31,6 +33,7 @@ from test_effort_fire_diagnosing import (  # noqa: F401  (real is a fixture)
     _marker_of as _correction_marker, _overspent_agreed_stage_in_its_cycle, real,
 )
 from test_order_phase import BUDGET, _LINES, _draft, _present, _review, _submit
+from test_order_two_sides import _replacing
 from test_stage_estimates import _user_choice
 from test_stage_order_subplan import _HOW_KEPT, _RECORD_HEAD, _walk_to_submit
 from test_subplan_presentation_dispatch import CHILD, PARENT, contour, home_store  # noqa: F401  (fixtures)
@@ -100,14 +103,30 @@ def _past_routing(d) -> None:
     assert "order-agree" not in text and "order-executor-revise" not in text, text
 
 
+def _cover_order_element(store, plan: str) -> None:
+    """The premise gate's order element, raised and covered by stage 1 through the real verbs."""
+    cli.cmd_order_raise(ns(session=SESSION, id="O1", element="the release is one command"), store=store)
+    d = cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="", plan=plan),
+                              store=store)
+    assert d.ok, d.detail
+
+
 def _approved(store, home: Path, tmp_path: Path) -> str:
     plan = _plan_ready(store, home, tmp_path)
-    cli.cmd_order_raise(ns(session=SESSION, id="O1", element="the release is one command"), store=store)
-    cli.cmd_order_dispose(ns(session=SESSION, id="O1", as_="covered", stage=1, reason="", plan=plan),
-                          store=store)
+    _cover_order_element(store, plan)
     d = cli.cmd_approve(ns(session=SESSION, by="user"), store=store)
     assert d.ok, (d.detail, d.data.get("blockers"))
     return plan
+
+
+def _redispose_goal_premise(store, proposal: str) -> None:
+    """The premise `BC` is bound to the goal; a changed goal makes it stale, and the user's answer
+    stands against the new plan through the real verb."""
+    answer = next(q["answer"] for q in store.load(SESSION).plugins["premise"]["questions"] if q["id"] == "BC")
+    redisposed = cli.cmd_question_dispose(
+        ns(session=SESSION, id="BC", to="escalated", answer=answer, source="", derivation="",
+           basis="", risk="", plan=proposal), store=store)
+    assert redisposed.ok, redisposed.detail
 
 
 # --- the root product is the user's ------------------------------------------------------------
@@ -134,12 +153,18 @@ def test_root_product_replan_passes_with_reagreement_record(ostore, home, armed_
     _approved(ostore, home, tmp_path)
     proposal = _proposal(tmp_path, *GOAL2)
 
+    before = _replan(ostore, proposal)
+    assert before.ok is False and before.action == "replan" and "order-agree" in _blockers(before)
     agreed = _reagree(ostore, tmp_path)
     assert agreed.ok, agreed.detail
     d = _replan(ostore, proposal)
 
     _past_routing(d)
-    assert "changed since this question was disposed" in _blockers(d) or d.ok
+    assert "question 'BC' is bound to plan.goal" in _blockers(d), (d.detail, _blockers(d))
+    _redispose_goal_premise(ostore, proposal)
+    d = _replan(ostore, proposal)
+    assert d.ok, (d.detail, d.data.get("blockers"))
+    assert ostore.load(SESSION).plan_path == proposal
 
 
 def test_pre_approval_replan_routes_only_root_product(ostore, home, armed_env, tmp_path):
@@ -307,34 +332,59 @@ def test_reagreement_record_rendered_beside_order():
 
 
 def test_reagreement_keeps_understanding_closed(ostore, home, armed_env, tmp_path):
-    """A re-agreement does not reopen the understanding segment of the effort ledger."""
-    _plan_ready(ostore, home, tmp_path)
-    before = ostore.load(SESSION).effort_segments
+    """A re-agreement opens no new understanding arming and reopens none; and a rebuild replan that
+    carries new figures afterwards is not held by the effort ledger."""
+    from agentctl import effort_segments
 
-    assert _reagree(ostore, tmp_path).ok
+    def understanding(store):
+        ledger = store.load(SESSION).effort_segments
+        return ledger, [a for a in ledger.get("armings") or () if a["segment"] == effort_segments.UNDERSTANDING]
 
-    after = ostore.load(SESSION).effort_segments
-    assert after.get("understanding_closed") == before.get("understanding_closed")
-    assert not after.get("understanding_open")
+    _approved(ostore, home, tmp_path)
+    ledger_before, before = understanding(ostore)
+    assert len(before) == 1 and before[0].get("closed_at"), before
+    snapshot = [dict(a) for a in before]
+
+    agreed = _reagree(ostore, tmp_path)
+    assert agreed.ok, agreed.detail
+
+    ledger_after, after = understanding(ostore)
+    assert after == snapshot, (before, after)
+    assert effort_segments.open_arming_of(ledger_after, effort_segments.UNDERSTANDING) is None
+
+    rebuilt = _proposal(tmp_path, *GOAL2, ('negative_control = "false"', 'negative_control = "false"\nexpected_minutes = 20'),
+                        name="rebuilt.toml")
+    assert load_plan(rebuilt).stages[0].expected_minutes == 20
+    _redispose_goal_premise(ostore, rebuilt)
+    d = _replan(ostore, rebuilt)
+    assert d.ok, (d.detail, d.data.get("blockers"))
+    assert ostore.load(SESSION).plan_path == rebuilt
+    assert understanding(ostore)[1] == snapshot
 
 
 # --- the other classes are not the user's -----------------------------------------------------
 
 
-def test_stage_description_edit_needs_no_reagreement(ostore, home, armed_env, tmp_path):
-    """Class (b), a regression guard of the base: a changed stage description passes the
-    routing. The same fixture refuses a changed goal."""
+@pytest.mark.parametrize("edit, leaf", [
+    (('title = "the stage under test"', 'title = "the stage, renamed"'), "title"),
+    (('expected_result_image = "The seam requires a typed order of a substantive plan."',
+      'expected_result_image = "The seam requires a typed order."'), "subject.result"),
+    (('done_criterion = "d1"', 'done_criterion = "d1, restated"'), "criterion.done_criterion"),
+])
+def test_stage_description_edit_needs_no_reagreement(ostore, home, armed_env, tmp_path, edit, leaf):
+    """Class (b), a regression guard of the base: a changed stage description (its title, its
+    result image, its done criterion) passes the routing. The same fixture refuses a changed goal."""
     _plan_ready(ostore, home, tmp_path)
     old = load_plan(ostore.load(SESSION).plan_path)
-    title = ('title = "the stage under test"', 'title = "the stage, renamed"')
-    new_path = _proposal(tmp_path, title, name="described.toml")
+    new_path = _proposal(tmp_path, edit, name="described.toml")
     new = load_plan(new_path)
 
     classes = classify_replan(old, new)
     d = _replan(ostore, new_path)
-    product = _replan(ostore, _proposal(tmp_path, title, *GOAL2, name="both.toml"))
+    product = _replan(ostore, _proposal(tmp_path, edit, *GOAL2, name="both.toml"))
 
     assert classes.description and not classes.product and not classes.method, classes
+    assert any(leaf in name for name in classes.description), (leaf, classes)
     _past_routing(d)
     assert product.ok is False and "order-agree" in _blockers(product)
 
@@ -343,6 +393,7 @@ def test_method_only_replan_not_routed_to_order(ostore, home, armed_env, tmp_pat
     """Class (c), a regression guard of the base: an old-form plan's changed procedure is not
     the order's business; the same fixture refuses a changed goal."""
     plan = _old_form_plan_ready(ostore, home, tmp_path)
+    _cover_order_element(ostore, plan)
     procedure = ("3. re-check the seam", "3. re-check the seam twice")
     d_path = _old_form_proposal(tmp_path, procedure, name="method.toml")
 
@@ -351,31 +402,55 @@ def test_method_only_replan_not_routed_to_order(ostore, home, armed_env, tmp_pat
     product = _replan(ostore, _old_form_proposal(tmp_path, procedure, *GOAL2, name="both.toml"))
 
     assert classes.method and not classes.product, classes
-    assert not any("order-agree" in b for b in d.data.get("blockers", [])), d.data
+    assert d.ok, (d.data.get("blockers"),)
+    assert ostore.load(SESSION).plan_path == d_path
     assert product.ok is False and "order-agree" in _blockers(product)
 
 
-def test_executor_side_change_needs_no_reagreement(ostore, home, armed_env, tmp_path):
-    """Class (a'), a regression guard of the base: an executor-side change the engine has a
-    record of passes the routing without a re-agreement; the same fixture refuses a changed goal."""
-    _plan_ready(ostore, home, tmp_path)
+EXECUTOR_FIELDS = [
+    pytest.param("requirements", "releases are tagged by a command", "releases are tagged by a signed command",
+                 id="how-built-requirement"),
+    pytest.param("requirements", "removes the hand-work", "removes the hand-work and the wait",
+                 id="derivation"),
+    pytest.param("proposals", 'verdict = "adopt"', 'verdict = "adapt"', id="proposal-verdict"),
+    pytest.param("constraints", "no new dependency", "no new dependency and no new service",
+                 id="condition-on-the-product"),
+]
+
+
+@pytest.mark.parametrize("field, old, new", EXECUTOR_FIELDS)
+def test_executor_side_change_needs_no_reagreement(ostore, home, armed_env, tmp_path, field, old, new):
+    """Class (a'), a regression guard of the base: an executor-side change recorded by the real
+    `order-executor-revise` (the method-statement judge a stub) passes the routing without a
+    re-agreement and leaves the agreed digest where it was; the same fixture refuses a changed
+    goal, and refuses the executor-side change until it is recorded."""
+    from test_method_statement_rule import Judge
+
+    _approved(ostore, home, tmp_path)
     state = ostore.load(SESSION)
-    old = load_plan(state.plan_path)
-    side = ('specifics = "releases here are tagged from the main line only"',
-            'specifics = "releases here are tagged from the release branch only"')
-    new_path = _proposal(tmp_path, side, name="executor.toml")
-    new = load_plan(new_path)
-    state.executor_side_revisions.append(
-        {"executor_side_sha256": plan_mod.executor_side_digest(new), "why": "recorded"})
-    ostore.save(state)
-
-    classes = classify_replan(old, new)
-    d = _replan(ostore, new_path)
-    product = _replan(ostore, _proposal(tmp_path, side, *GOAL2, name="both.toml"))
-
+    old_plan = load_plan(state.plan_path)
+    agreed = state.order_agreement.understanding_sha256
+    replace = _replacing(field, old, new)
+    new_path = _plan(tmp_path, replace=replace, name="executor.toml")
+    classes = classify_replan(old_plan, load_plan(new_path))
     assert classes.executor_side and not classes.product, classes
-    assert not any("order-agree" in b for b in d.data.get("blockers", [])), d.data
+    unrecorded = _replan(ostore, new_path)
+    assert unrecorded.ok is False and "order-executor-revise" in _blockers(unrecorded)
+
+    revised = cli.cmd_order_executor_revise(
+        ns(session=SESSION, plan=str(_draft(tmp_path, name="revised.toml", replace=replace)),
+           why="the way it is built changed", by="agent"), store=ostore, method_runner=Judge())
+    assert revised.ok, revised.detail
+    state = ostore.load(SESSION)
+    assert state.order_agreement.understanding_sha256 == agreed
+    assert state.executor_side_revisions[-1]["executor_side_sha256"] == plan_mod.executor_side_digest(
+        load_plan(new_path))
+
+    d = _replan(ostore, new_path)
+    product = _replan(ostore, _edit(_plan(tmp_path, replace=replace, name="both.toml"), *GOAL2))
+    _past_routing(d)
     assert product.ok is False and "order-agree" in _blockers(product)
+    assert ostore.load(SESSION).order_agreement.understanding_sha256 == agreed
 
 
 def test_executor_side_change_unrecorded_refused(ostore, home, armed_env, tmp_path):
@@ -435,9 +510,21 @@ def _old_form_plan_ready(store, home: Path, tmp_path: Path) -> str:
     return plan
 
 
-def test_mark_follows_order_form(tmp_path):
+def test_mark_follows_order_form(ostore, home, armed_env, tmp_path):
     """A two-sided order's plan has stage descriptions; the same title change is a description
-    change there and none in an old-form plan."""
+    change there and none in an old-form plan. The agreement the real verbs recorded carries the
+    same mark as the plan's order (stage 3's `customer_side_agreed` and this stage's
+    `is_two_sided`), also right after a re-agreement."""
+    _approved(ostore, home, tmp_path)
+    first = ostore.load(SESSION).order_agreement
+    assert first.customer_side_agreed is True
+    assert _reagree(ostore, tmp_path).ok
+    state = ostore.load(SESSION)
+    agreed_doc = load_order_draft(state.order_agreement.draft_path)[0]
+    assert state.order_agreement is not first and state.order_agreement.customer_side_agreed is True
+    assert plan_mod.is_two_sided(agreed_doc.meta.order) is True
+    assert plan_mod.is_two_sided(load_plan(state.plan_path).meta.order) is True
+
     two = load_plan(_plan(tmp_path, name="two.toml"))
     two_new = load_plan(_proposal(tmp_path, ('title = "the stage under test"', 'title = "renamed"'),
                                   name="two-new.toml"))
@@ -532,37 +619,120 @@ def _approve_in_frame(store) -> str:
     return sub_plan.approval_digest(record)
 
 
-def _agree_figure_in_frame(store, minutes=40.0) -> None:
+def _agree_figure_in_frame(store, minutes=40.0, corrections=()) -> None:
     """The parent's agreement of the figure; the frame keeps it at the level of the plan whose
-    stage the record describes."""
+    stage the record describes. `corrections`: the entries `estimate-correct` already wrote."""
     state = store.load(FRAME)
     sub_plan._copy_slot(state, 1, 0).update(
         minutes=minutes, usd=None, basis="one module split, one suite run", author=FRAME, agreer="root",
-        authority=sub_plan.AUTHORITY_USER, agreed=True, held=None, corrections=[])
+        authority=sub_plan.AUTHORITY_USER, agreed=True, held=None, corrections=[dict(c) for c in corrections])
     store.save(state)
 
 
-def test_in_boundary_method_change_restamps_digest(store, tmp_path):
-    """A replan that moves the method of a sub-plan the user approved carries the approval to the
-    new method (the executor's act inside the boundary); a changed resource request is not
-    carried, so that stage stays refused until the user approves it."""
-    _frame_plan(store, tmp_path)
-    old = _approve_in_frame(store)
+REQUEST = '\n[[meta.sub_plan.resource_request]]\nstage = 1\nallow = ["Edit", "Write"]\n'
+NARROWER = ('allow = ["Edit", "Write"]', 'allow = ["Edit"]')
 
-    d = _frame_replan(store, tmp_path, METHOD2)
 
-    assert d.ok, (d.detail, d.data)
+def _resolve_and_pop(store):
+    """Settle every stage of the frame and pop it through the real `pop-subplan`, back to the
+    level of the plan whose stage the record describes."""
+    state = store.load(FRAME)
+    for stage in state.stages:
+        stage.outcome.status = "PASSED"
+    state.node = Node.RESOLVED.value
+    state.partition = Partition(verdict="single")
+    state.resolution = GateRecord("resolution", armed=True, passed=True, by="tester")
+    store.save(state)
+    popped = cli.cmd_pop_subplan(ns(session=FRAME), store=store)
+    assert popped.ok, popped.detail
+    return popped
+
+
+def _start_blockers(store, stage: int, sid: str) -> list[str]:
+    """What stops the stage starting, except the method review and the estimate confirmation a
+    decided-later stage also needs (other gates, with their own verbs and tests): the approvals
+    and the request are what these tests move."""
+    state = store.load(sid)
+    return [b for b in gates.stage_start_blockers(state, state.stage(stage), store=store)
+            if "method review" not in b and "confirmed an estimate" not in b]
+
+
+def _push_second_frame(store, tmp_path: Path) -> None:
+    """A second frame for stage 1 whose plan is the first one's file, classified, planned and
+    submitted through the real verbs: its replans run at depth 1, where the user's approval of the
+    sub-plan lives one level up."""
+    pushed = cli.cmd_push_subplan(ns(session=FRAME, plan=str(tmp_path / "plan.toml"), task=None,
+                                     originating_stage=1), store=store)
+    assert pushed.ok, pushed.detail
+    assert cli.cmd_classify(ns(session=FRAME, chat=False, changed_lines=200, files=5, wall_clock_min=60,
+                               tracker_key=None, architectural=True, external_effect=False,
+                               new_dependency=False, public_api_change=False), store=store).ok
+    assert cli.cmd_plan(ns(session=FRAME), store=store).ok
+    submitted = cli.cmd_submit_plan(ns(session=FRAME, plan=str(tmp_path / "plan.toml")), store=store)
+    assert submitted.ok, (submitted.detail, submitted.data)
+
+
+def _approved_frame_at_dispatch(store, tmp_path: Path, *, lazy: bool) -> str:
+    """The user approved the sub-plan and its resources through `approve-subplan` /
+    `approve-resources` at the parent's level (stage 1 whole-plan or decided later), then a second
+    frame for the stage is at its submitted plan. Returns the approval's digest."""
+    from test_subplan_presentation_dispatch import (
+        _agent_approves_stage_resources, _present_and_approve, _user_approves_resources)
+
+    submitted = _walk_to_submit(store, tmp_path, _RECORD_HEAD + _HOW_KEPT + REQUEST)
+    assert submitted.ok, submitted.data
+    _resolve_and_pop(store)
+    state = store.load(FRAME)
+    state.stage(1).lazy = lazy
+    store.save(state)
+    approved = _present_and_approve(store, tmp_path, 1, FRAME)
+    assert approved.ok, approved.detail
+    if lazy:
+        assert _agent_approves_stage_resources(store, 1, FRAME).ok
+    else:
+        assert _user_approves_resources(store, by="fedor", stage=1, sid=FRAME).ok
+    assert _start_blockers(store, 1, FRAME) == []
+    _push_second_frame(store, tmp_path)
+    return store.load(FRAME).stage_approvals["0:1"]["user_subplan_approval"]
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["whole-plan-stage", "decided-later-stage"])
+def test_in_boundary_method_change_restamps_digest(home_store, tmp_path, lazy):
+    """The user approved the sub-plan through `approve-subplan`; a replan of the executor's method
+    inside the second frame carries that approval to the new method, so the stage is dispatchable
+    after the pop with no approval verb run (the executor's act inside the boundary). A replan that
+    also changes the resource request carries none: `parent_resource_dispatch_blockers` refuses the
+    stage with its digest reason until `approve-stage-resources` is run, which lifts it."""
+    from test_subplan_presentation_dispatch import _agent_approves_stage_resources, _present_and_approve
+
+    store = home_store
+    old = _approved_frame_at_dispatch(store, tmp_path, lazy=lazy)
+
+    moved_plan = _frame_replan(store, tmp_path, METHOD2)
+
+    assert moved_plan.ok, (moved_plan.detail, moved_plan.data)
     moved = sub_plan.approval_digest(_stored(store))
     assert moved != old
     assert store.load(FRAME).stage_approvals["0:1"]["user_subplan_approval"] == moved
+    _resolve_and_pop(store)
+    assert _start_blockers(store, 1, FRAME) == []
 
-    request = "\n[[meta.sub_plan.resource_request]]\nstage = 1\nallow = [\"Edit\"]\n"
-    d = _frame_replan(store, tmp_path, METHOD2, ("split it twice", "a third way"), append=request,
-                      name="third.toml")
+    _push_second_frame(store, tmp_path)
+    changed = _frame_replan(store, tmp_path, METHOD2, ("split it twice", "a third way"), NARROWER,
+                            name="third.toml")
 
-    assert d.ok, (d.detail, d.data)
+    assert changed.ok, (changed.detail, changed.data)
     assert sub_plan.approval_digest(_stored(store)) != moved
-    assert store.load(FRAME).stage_approvals["0:1"]["user_subplan_approval"] == moved
+    _resolve_and_pop(store)
+    refused = " ".join(_start_blockers(store, 1, FRAME))
+    if lazy:
+        assert "changed since the user approved it" in refused, refused
+        assert _present_and_approve(store, tmp_path, 1, FRAME).ok
+    else:
+        assert "resource" in refused and "approve-stage-resources" in refused, refused
+    assert "approve-stage-resources" in " ".join(_start_blockers(store, 1, FRAME))
+    assert _agent_approves_stage_resources(store, 1, FRAME).ok
+    assert _start_blockers(store, 1, FRAME) == []
 
 
 def test_replan_file_is_no_writer_of_an_approval(store, tmp_path):
@@ -600,8 +770,16 @@ def test_method_replan_restamp_leaves_an_unapproved_subplan_unapproved(store, tm
 
 def test_estimate_only_replan_needs_correction(store, tmp_path):
     """A figure the parent agreed changes only through the agreed correction: a replan that moves
-    it is refused and names estimate-correct; the same replan at the agreed figure is taken."""
+    it is refused and names estimate-correct; the same replan at the agreed figure is taken. A
+    figure nobody agreed is the executor's own to move, so the same replan passes before the parent
+    has agreed one."""
     _frame_plan(store, tmp_path)
+    assert sub_plan.estimate_copy(store.load(FRAME), 1, 0).get("agreed") in (None, False)
+    unagreed = _frame_replan(store, tmp_path, ("minutes = 40", "minutes = 55"), name="unagreed.toml")
+    assert unagreed.ok, (unagreed.detail, unagreed.data)
+    assert _stored(store).estimate.minutes == 55.0
+    assert _frame_replan(store, tmp_path, name="back.toml").ok
+    assert _stored(store).estimate.minutes == 40.0
     _agree_figure_in_frame(store)
 
     refused = _frame_replan(store, tmp_path, ("minutes = 40", "minutes = 55"))
@@ -615,18 +793,31 @@ def test_estimate_only_replan_needs_correction(store, tmp_path):
 
 
 def test_replan_forged_correction_refused(store, tmp_path):
-    """A replan is no writer of a correction: a plan that adds one is refused, with or without an
-    agreed figure, and nothing is stored."""
+    """A replan is no writer of a correction: a plan that adds one, one that claims the parent's
+    agreement for it, and one that changes an entry `estimate-correct` wrote are each refused with
+    the record's own reason, with or without an agreed figure, and nothing is stored."""
     _frame_plan(store, tmp_path)
+    reason = "carries a correction the record cannot write"
     forged = ("\n[[meta.sub_plan.estimate.corrections]]\nbasis = \"mine\"\n"
               "[meta.sub_plan.estimate.corrections.to]\nminutes = 99.0\n")
+    claiming = ("\n[[meta.sub_plan.estimate.corrections]]\nbasis = \"agreed by root\"\nagreer = \"root\"\n"
+                "agreed = true\n[meta.sub_plan.estimate.corrections.to]\nminutes = 99.0\n")
     for agreed in (False, True):
         if agreed:
             _agree_figure_in_frame(store)
-        refused = _frame_replan(store, tmp_path, append=forged, name=f"forged-{agreed}.toml")
-        assert refused.ok is False, (agreed, refused.detail)
-        assert _stored(store).estimate.corrections == []
+        for label, text in (("added", forged), ("claiming", claiming)):
+            refused = _frame_replan(store, tmp_path, append=text, name=f"forged-{label}-{agreed}.toml")
+            assert refused.ok is False and reason in _text_of(refused), (label, agreed, _text_of(refused))
+            assert _stored(store).estimate.corrections == []
     assert sub_plan.estimate_copy(store.load(FRAME), 1, 0)["corrections"] == []
+
+    written = {"basis": "the suite is slower than thought", "to": {"minutes": 45.0}}
+    _agree_figure_in_frame(store, minutes=45.0, corrections=[written])
+    changed = ("\n[[meta.sub_plan.estimate.corrections]]\nbasis = \"rewritten\"\n"
+               "[meta.sub_plan.estimate.corrections.to]\nminutes = 45.0\n")
+    refused = _frame_replan(store, tmp_path, append=changed, name="forged-changed.toml")
+    assert refused.ok is False and reason in _text_of(refused), _text_of(refused)
+    assert sub_plan.estimate_copy(store.load(FRAME), 1, 0)["corrections"] == [written]
 
 
 def test_unlisted_subplan_field_refused(store, tmp_path, monkeypatch):
@@ -686,15 +877,26 @@ def test_replan_changing_compared_plans_is_a_writable_answer(store, tmp_path):
     assert _stored(store).compared_plans.entries[0]["ref"] == "the seam-keeping split"
 
 
-def test_renormalize_method_edit_still_refused(ostore, home, armed_env, tmp_path):
-    """`--renormalize` stays procedure-only: it is no way round the routing of a changed product."""
-    _plan_ready(ostore, home, tmp_path)
-    path = _proposal(tmp_path, *GOAL2, name="renorm.toml")
+@pytest.mark.parametrize("edit, field", [
+    (('method = "run"\n', 'method = "run twice"\n'), "means.method"),
+    (('means = "bash"\n', 'means = "bash and git"\n'), "means.means"),
+])
+def test_renormalize_method_edit_still_refused(ostore, home, armed_env, tmp_path, edit, field):
+    """`--renormalize` stays procedure-only: a stage's own `method` (or `means`), which the
+    executor's replan may change, is no way round through it, and a changed goal is not either."""
+    plan = _old_form_plan_ready(ostore, home, tmp_path)
+    path = _old_form_proposal(tmp_path, edit, name="renorm.toml")
+    assert classify_replan(load_plan(plan), load_plan(path)).method
 
     d = cli.cmd_replan(ns(session=SESSION, plan=path, renormalize=True), store=ostore)
 
-    assert d.ok is False and "may not edit `goal`" in _blockers(d)
-    assert ostore.load(SESSION).order_agreement.reagreement is None
+    assert d.ok is False and f"a renormalization may not edit `{field}`" in _blockers(d), _blockers(d)
+    state = ostore.load(SESSION)
+    assert state.plan_path == plan and state.order_agreement.reagreement is None
+    by_goal = cli.cmd_replan(
+        ns(session=SESSION, plan=_old_form_proposal(tmp_path, *GOAL2, name="renorm-goal.toml"),
+           renormalize=True), store=ostore)
+    assert by_goal.ok is False and "may not edit `goal`" in _blockers(by_goal)
 
 
 def test_product_and_method_together_classified_product(tmp_path):
@@ -734,26 +936,67 @@ def test_mixed_description_method_edit_reapproved_by_own_approver(ostore, home, 
     _plan_ready(ostore, home, tmp_path)
     old = load_plan(ostore.load(SESSION).plan_path)
     title = ('title = "the stage under test"', 'title = "the stage, renamed"')
-    new_path = _proposal(tmp_path, title, name="mixed.toml")
+    executor = ('executor = "in_thread"', 'executor = "spawn:developer"')
+    new_path = _proposal(tmp_path, title, executor, name="mixed.toml")
 
     classes = classify_replan(old, load_plan(new_path))
-    mixed = ReplanClasses(description=classes.description, method=("stage 1 means.method",))
     d = _replan(ostore, new_path)
 
-    assert classes.description and not classes.product
-    assert mixed.restamps is False
+    assert classes.description and classes.method and not classes.product, classes
+    assert classes.restamps is False
     _past_routing(d)
-    refused = _replan(ostore, _proposal(tmp_path, title, *GOAL2, name="mixed-product.toml"))
+    refused = _replan(ostore, _proposal(tmp_path, title, executor, *GOAL2, name="mixed-product.toml"))
     assert refused.ok is False and "order-agree" in _blockers(refused)
+
+
+def test_mixed_method_and_goal_edit_in_a_frame_is_not_carried(home_store, tmp_path):
+    """A replan inside a second frame that moves the method and also the plan's own goal restamps
+    nothing: the user's approval stays at the old digest, so the stage is refused at its start
+    after the pop until the sub-plan's own approver approves it; the parent's approval of the
+    resources does not lift it (r4-18)."""
+    from test_subplan_presentation_dispatch import (
+        _agent_approves_stage_resources, _present_and_approve)
+
+    store = home_store
+    old = _approved_frame_at_dispatch(store, tmp_path, lazy=True)
+    state = store.load(FRAME)
+    state.plan_snapshot_path, state.plan_snapshot_hash = cli_common._snapshot_approved_plan(store, state)
+    store.save(state)
+
+    d = _frame_replan(store, tmp_path, METHOD2, ('goal = "g"', 'goal = "g elsewhere"'))
+
+    assert d.ok, (d.detail, d.data)
+    assert store.load(FRAME).stage_approvals["0:1"]["user_subplan_approval"] == old
+    assert sub_plan.approval_digest(_stored(store)) != old
+    _resolve_and_pop(store)
+    refused = " ".join(_start_blockers(store, 1, FRAME))
+    assert "sub-plan changed since the user approved it" in refused, refused
+    lifted = _agent_approves_stage_resources(store, 1, FRAME)
+    assert lifted.ok is False and "changed since the user approved it" in lifted.detail, lifted.detail
+    assert "sub-plan changed since the user approved it" in " ".join(_start_blockers(store, 1, FRAME))
+    approved = _present_and_approve(store, tmp_path, 1, FRAME)
+    assert approved.ok, approved.detail
+    assert _start_blockers(store, 1, FRAME) == []
 
 
 def test_order_agreed_before_the_change_with_no_plan_takes_the_old_plan_form(
         ostore, home, armed_env, tmp_path):
     """The mark is read from the order the plan follows: an old-form order agreed before this
-    change, with no plan yet, gets a plan that classifies by the old form."""
+    change, with no plan yet, gets a plan that classifies by the old form. The engine reads the
+    mark when it routes the session's own replans: a title change is no description change there,
+    and a requirement change is a root product change that goes back to the user."""
     plan = _old_form_plan_ready(ostore, home, tmp_path)
+    title = ('title = "the stage under test"', 'title = "the stage, renamed"')
+    requirement = {"requirements": _LINES["requirements"].replace("tagged by a command", "tagged by hand")}
 
     assert plan_mod.is_two_sided(load_plan(plan).meta.order) is False
+    titled = _old_form_proposal(tmp_path, title, name="titled.toml")
+    assert classify_replan(load_plan(plan), load_plan(titled)).description == ()
+    d = _replan(ostore, titled)
+    _past_routing(d)
+    product = _replan(ostore, _old_form_proposal(tmp_path, name="req.toml", replace=requirement))
+    assert product.ok is False and "order-agree" in _blockers(product), _blockers(product)
+    assert ostore.load(SESSION).plan_path == plan
 
 
 def test_old_form_product_replan_way_on_is_walked(ostore, home, armed_env, tmp_path):

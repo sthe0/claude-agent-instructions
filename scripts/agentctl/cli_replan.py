@@ -1208,16 +1208,17 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     change_class = replan_class(tier)
     # Before approval there is no approved snapshot: the registered plan is the baseline, and only
     # a change of the root product is routed (nothing else has been approved yet to need a decider).
+    routed_old = baseline if baseline is not None else prior_plan
+    classes = gates.classify_replan(routed_old, new, tier)
     routing = gates.replan_routing_blockers(
-        state, baseline if baseline is not None else prior_plan, new,
-        tier if baseline is not None else None, product_only=baseline is None)
+        state, routed_old, new, tier, product_only=baseline is None, classes=classes)
     routing += sub_plan.replan_record_blockers(state, new, store)
     _log_gate(state, "replan_routing", routing, passed=not routing)
     if routing:
         return Directive(False, state.node, "replan",
                          "replan refused: the change is not the executor's to apply as it stands",
                          data={"blockers": routing})
-    ctx.classes = gates.classify_replan(baseline, new, tier)
+    ctx.classes = classes if baseline is not None else gates.ReplanClasses()
     reopen_roots = set(getattr(args, "reopen", None) or [])
     unknown_reopen = sorted(reopen_roots - {s.index for s in state.stages})
     if unknown_reopen:

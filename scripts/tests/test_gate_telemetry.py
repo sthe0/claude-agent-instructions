@@ -197,7 +197,8 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     # Every replan also evaluates the nested-difficulty gate (an empty stack here,
     # so it passes) right after the effort-fire precondition. The order-agreement
     # gate logs at submit-plan and approve, and once in the completed replan; the
-    # premature replan is refused at difficulty_blockers before reaching it.
+    # premature replan is refused at difficulty_blockers before reaching it. The
+    # replan routing check logs once in the completed replan, after plan_review.
     assert gates_fired == ["effort_fire", "order_agreement", "order_agreement",
                            "plan_approval",
                            "effort_fire", "difficulty_stack", "difficulty_blockers",
@@ -205,7 +206,7 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
                            "diagnosing_replan", "order_agreement",
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
-                           "frozen_stage", "replan_authorization",
+                           "replan_routing", "frozen_stage", "replan_authorization",
                            "normative_edit", "renorm_retention",
                            "plan_approval_plugin", "replan_coverage"]
     assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan

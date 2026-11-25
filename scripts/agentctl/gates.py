@@ -4649,7 +4649,10 @@ _RENORM_PROTECTED = (
 #: stage is for and how its result is accepted, and the size the description carries. One tuple,
 #: the only place a stage-description field is named for routing.
 STAGE_DESCRIPTION_LEAVES = (
-    "title", "subject.result", "criterion.done_criterion", "place", "binding_conditions",
+    "title", "subject.result", "criterion.done_criterion", "criterion.criterion_type",
+    "criterion.verify_command", "criterion.expected_exit", "criterion.verify_kind",
+    "criterion.verify_venue", "criterion.verify_venue_at_final", "criterion.negative_control",
+    "criterion.negative_control_waiver", "place", "binding_conditions",
     "binding_conditions_stated", "declared_size", "size_flags", "expected_minutes",
 )
 #: The leaves of a stage that state the executor's method: the means, the way of acting, the
@@ -4662,8 +4665,9 @@ class ReplanClasses(NamedTuple):
     """What a replan's diff touches, by who decides it. `product`: the names of the root product
     moved (class (a): the plan's goal and done criterion, every understanding part); `executor_side`:
     the executor side of a two-sided order moved (class (a')); `description`: stage-description
-    leaves moved (class (b)); `method`: method leaves of the plan's stages moved (class (c)). The
-    sub-plan record's own method is not in the plan file; `sub_plan.method_moved` reads it."""
+    leaves moved (class (b)); `method`: method leaves of the plan's stages moved (class (c)). It reads
+    plan files only: the method a sub-plan record states (`meta.sub_plan`) is never read here, and
+    `sub_plan.method_moved` reads it separately, where a replan re-stamps the user's approval."""
     product: tuple[str, ...] = ()
     executor_side: bool = False
     description: tuple[str, ...] = ()
@@ -4725,18 +4729,21 @@ def _executor_side_recorded(state: SessionState, new) -> bool:
 
 
 def replan_routing_blockers(state: SessionState, old, new, change=None, *,
-                            product_only: bool = False) -> list[str]:
+                            product_only: bool = False,
+                            classes: ReplanClasses | None = None) -> list[str]:
     """Where the replan's change must be decided before it is applied ([] == it may be): a root
     product change needs the user's re-agreement of exactly that product (the four-ground record
     `order-submit` took and `order-agree` stored with the agreement), and an executor-side change needs `order-executor-revise`'s record. A
     description change and a method change are no business of the order; they follow the approval
     rule of the plan they change. `product_only`: before approval, where only the root product is
     routed. Inert unless the order-agreement gate applies (an armed substantive root with an
-    agreed order) and `new` states an order."""
+    agreed order) and `new` states an order. `classes`: the classification the caller already holds
+    for the same `old` / `new` / `change`; it is computed here when absent."""
     if (old is None or new is None or new.meta.order is None or state.order_agreement is None
             or not order_agreement_active(state)):
         return []
-    classes = classify_replan(old, new, change)
+    if classes is None:
+        classes = classify_replan(old, new, change)
     if classes.product:
         if _reagreed_product(state, new):
             return []
