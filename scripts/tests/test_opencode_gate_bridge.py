@@ -1700,6 +1700,35 @@ def test_a6_variable_that_stops_nothing_is_k7():
     assert result["any_on"] is True and result["project_config_off"] is False
 
 
+def test_adapter_case_modules_use_no_undefined_global():
+    """A case's ``run`` is reached only by the live phase, so a global it names but never imported would show
+    first as an ``unobserved`` record; every global a function of the adapter package loads is bound."""
+    import builtins
+    import dis
+    import importlib
+    import pkgutil
+    import types
+
+    import opencode_probe.adapter as package
+
+    def code_objects(code):
+        yield code
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                yield from code_objects(const)
+
+    unbound = []
+    for info in pkgutil.iter_modules(package.__path__):
+        module = importlib.import_module(f"{package.__name__}.{info.name}")
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        for code in code_objects(compile(source, module.__file__, "exec")):
+            for ins in dis.get_instructions(code):
+                if ins.opname == "LOAD_GLOBAL" and not (
+                        hasattr(module, ins.argval) or hasattr(builtins, ins.argval)):
+                    unbound.append(f"{info.name}:{code.co_name}:{ins.argval}")
+    assert unbound == []
+
+
 def test_a6_absent_route_needs_sensitivity_and_scan_list():
     """``absent`` needs the same file form to have loaded in the control through another member, and the scan list
     to be the expected one; a tool-file route is ``absent`` only when a plugin tool was seen offered in the control."""

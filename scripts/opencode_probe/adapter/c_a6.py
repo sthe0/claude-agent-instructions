@@ -129,6 +129,8 @@ def run(ctx):
     forms = facts_paths.path_forms(h)
     spellings = facts_spellings.spelling_facts(h)
     search = facts_a6.search_facts(h)
+    from lib import opencode_events as oe
+
     routes = facts_routes.project_routes(h, oe.PROJECT_CONFIG_OFF)
     config_dir = config_dir_writes(h, ctx)
     evidence = {"ctx": facts, "setup_throw": throws, "gate_setup_failure": gate_setup, "path_forms": forms,
