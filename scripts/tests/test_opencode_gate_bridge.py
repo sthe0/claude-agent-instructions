@@ -531,6 +531,23 @@ def test_an_edit_whose_old_string_is_not_in_the_file_exactly_is_refused_before_a
     assert _edit_verdict(tmp_path, target, "", [row])["decision"] == "allow"
 
 
+def test_an_edit_whose_old_string_occurs_more_than_once_needs_replace_all(tmp_path):
+    """OpenCode tries a looser replacer when oldString is not unique. Pinned by changing the uniqueness test of
+    ``require_exact_edit`` (``first != data.rfind(needle)``) to ``False``: the first two verdicts turn to allow."""
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    target = tmp_path / "f.txt"
+    target.write_text("foo\nfoo\n  foo\n", encoding="utf-8")
+    overlap = tmp_path / "o.txt"
+    overlap.write_text("aaa", encoding="utf-8")
+    for path, old in ((target, "foo"), (overlap, "aa")):
+        verdict = _edit_verdict(tmp_path, path, old, [row])
+        assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: argument "), (path, verdict)
+    assert not Path(recorded).exists()
+    data = _call(tmp_path, "edit", {"path": str(target), "oldString": "foo", "newString": "n", "replaceAll": True})
+    assert json.loads(_event(tmp_path, "tool.execute.before", data, [row]).stdout)["decision"] == "allow"
+    assert _edit_verdict(tmp_path, target, "  foo", [row])["decision"] == "allow", "a text that occurs once passes"
+
+
 def test_an_edit_of_a_file_the_bridge_cannot_read_exactly_is_refused(tmp_path):
     (tmp_path / "real.txt").write_text("a", encoding="utf-8")
     (tmp_path / "link.txt").symlink_to(tmp_path / "real.txt")

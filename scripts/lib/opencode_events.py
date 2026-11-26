@@ -647,11 +647,13 @@ def claude_input(tool: str, args: dict, directory: str = "", *, strict: bool = T
 EDIT_FILE_MAX_BYTES = 4 * 1024 * 1024
 
 
-def require_exact_edit(file_path: str, old_string: str) -> None:
-    """Refuse an ``edit`` whose ``oldString`` is not in the file as written. OpenCode matches it fuzzily (curly
-    quotes, indentation, trailing space; A6 ``spellings``), so the rows would be shown another edit than the one
-    made. The file is opened only here, never a link or a device, and nothing of its content leaves this
-    function. An empty ``oldString`` is OpenCode's own write of the whole file."""
+def require_exact_edit(file_path: str, old_string: str, replace_all: bool = False) -> None:
+    """Refuse an ``edit`` whose ``oldString`` is not in the file as written, or occurs more than once without
+    ``replaceAll``. OpenCode matches it fuzzily (curly quotes, indentation, trailing space; A6 ``spellings``)
+    and, when the text is not unique, tries its next replacer, so the rows would be shown another edit than the
+    one made. Occurrences count as OpenCode's own uniqueness test does (first index equals last index), so
+    overlapping ones are several. The file is opened only here, never a link or a device, and nothing of its
+    content leaves this function. An empty ``oldString`` is OpenCode's own write of the whole file."""
     if not old_string:
         return
     unreadable = UnclassifiedArgument(f"edit of {file_path}: the bridge cannot read the file to check that "
@@ -669,9 +671,15 @@ def require_exact_edit(file_path: str, old_string: str) -> None:
         os.close(fd)
     if len(data) > EDIT_FILE_MAX_BYTES:
         raise unreadable
-    if old_string.encode("utf-8") not in data:
+    needle = old_string.encode("utf-8")
+    first = data.find(needle)
+    if first < 0:
         raise UnclassifiedArgument(f"edit of {file_path}: oldString does not occur in the file exactly, and "
                                    f"OpenCode would match it fuzzily and make another edit than the rows see")
+    if not replace_all and first != data.rfind(needle):
+        raise UnclassifiedArgument(f"edit of {file_path}: oldString occurs more than once and replaceAll is not "
+                                   f"set, so OpenCode would try a looser match and make another edit than the "
+                                   f"rows see")
 
 
 def _schema_type(spec) -> str:
@@ -999,7 +1007,8 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: froz
         payload["tool_input"] = claude_input(tool, args, directory, strict=strict)
         if strict:
             if payload["tool_name"] == "Edit":
-                require_exact_edit(payload["tool_input"]["file_path"], payload["tool_input"]["old_string"])
+                require_exact_edit(payload["tool_input"]["file_path"], payload["tool_input"]["old_string"],
+                                   payload["tool_input"].get("replace_all") is True)
             plugin_paths = (declared if declared is not None else declared_config(environ))["plugin_paths"]
             require_no_config_dir_write(payload["tool_name"], payload["tool_input"], payload["cwd"], environ,
                                         directory=directory, plugin_paths=plugin_paths, extra=tuple(row_scripts))
