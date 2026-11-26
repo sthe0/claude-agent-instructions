@@ -575,3 +575,177 @@ def test_sweep_retry_does_not_hold_sweep_lock(live_env, monkeypatch):
     finally:
         process.kill()
         process.wait()
+
+
+# --- PR 10: no tasks-table lookups inside the write transaction ------------------------------
+#
+# Difficulty removed: after PR 9 the sync still held the write lock 8-57 s on the live record,
+# because file_session looked a task row up by epoch alone once per spawn and judge event of the
+# session's whole history (_task_key_for, put_contour), and with no index led by epoch each lookup
+# scanned the whole tasks table (21k rows). Migration 012 adds the index; _read_session reads the
+# session's task rows before the transaction. These tests count statements and read query plans;
+# none asserts a duration.
+
+_TASKS = re.compile(r"\btasks\b")
+
+
+def _tasks_plan_steps(conn, sql: str) -> "list[str]":
+    return [row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql) if _TASKS.search(row[3])]
+
+
+def _uses_epoch_index(steps: "list[str]") -> bool:
+    return bool(steps) and all("tasks_epoch" in step and not step.startswith("SCAN") for step in steps)
+
+
+class FiledStatements:
+    """The statements each write transaction ran, flagged when it filed a session's contours
+    (file_session); traced on the transaction's own connection between BEGIN IMMEDIATE and COMMIT."""
+
+    def __init__(self, monkeypatch):
+        self.transactions: "list[dict]" = []
+        real_transact, real_session = store.transact, sync._materialize_session
+
+        def transact(work, deadline_s=None):
+            current = {"materialized": False, "statements": []}
+            self.transactions.append(current)
+
+            def traced(conn):
+                conn.set_trace_callback(current["statements"].append)
+                try:
+                    return work(conn)
+                finally:
+                    conn.set_trace_callback(None)
+            return real_transact(traced, deadline_s)
+
+        def materialize_session(*args, **kwargs):
+            self.transactions[-1]["materialized"] = True
+            return real_session(*args, **kwargs)
+
+        monkeypatch.setattr(store, "transact", transact)
+        monkeypatch.setattr(sync, "_materialize_session", materialize_session)
+
+    def tasks_statements_in_file_session(self) -> "list[str]":
+        filed = [t for t in self.transactions if t["materialized"]]
+        assert filed, "no write transaction filed a session"
+        return [s for t in filed for s in t["statements"] if _TASKS.search(s)]
+
+
+def _contour_keys(parent: str) -> "list[tuple]":
+    conn = store.open_record()
+    try:
+        return [tuple(r) for r in conn.execute(
+            "SELECT contour_id, task_id, task_epoch, weight_class FROM contours WHERE parent_session = ? "
+            "ORDER BY contour_id", (parent,))]
+    finally:
+        conn.close()
+
+
+def test_tasks_epoch_lookups_use_the_epoch_index(record):
+    statements = []
+    conn = store.open_record()
+    try:
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'tasks_epoch'").fetchone()
+        opens = sync._task_opens(conn, BIG)
+        conn.set_trace_callback(statements.append)
+        assert sync._task_key_for(conn, BIG, _at(5), "big-open")[2] == "big-open"
+        assert sync._task_key_for(conn, BIG, _at(5), None, opens)[2] == "big-open"
+        assert sync._task_row(conn, "big-open")[1] == "task-big"
+        conn.set_trace_callback(None)
+        lookups = [s for s in statements if s.lstrip().upper().startswith("SELECT") and _TASKS.search(s)]
+        assert len(lookups) >= 3
+        for sql in lookups:
+            steps = _tasks_plan_steps(conn, sql)
+            assert _uses_epoch_index(steps), (sql, steps)
+    finally:
+        conn.close()
+
+
+def test_file_task_rows_updates_use_the_epoch_index(record):
+    session = "rows-session"
+    events = [("rows-open", "task", _at(0), {"action": "open", "task_id": "task-rows"}),
+              ("rows-w", "command", _at(1), {"task_epoch": "rows-open", "weight_class": "SUBSTANTIVE"}),
+              ("rows-r", "command", _at(2), {"task_epoch": "rows-open", "node_after": "RESOLVED"}),
+              ("rows-a", "task", _at(3), {"action": "abandon", "epoch": "big-open"})]
+    statements = []
+    conn = store.open_record()
+    try:
+        conn.set_trace_callback(statements.append)
+        sync._file_task_rows(conn, store.origin_id(), session, events)
+        conn.set_trace_callback(None)
+        updates = [s for s in statements if s.lstrip().upper().startswith("UPDATE TASKS")]
+        assert len(updates) == 3
+        for sql in updates:
+            steps = _tasks_plan_steps(conn, sql)
+            assert _uses_epoch_index(steps), (sql, steps)
+        assert conn.execute("SELECT status, weight_class FROM tasks WHERE epoch = 'rows-open'").fetchone() == (
+            "resolved", "SUBSTANTIVE")
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_file_session_runs_no_tasks_query_inside_write_transaction(record, monkeypatch):
+    filed = FiledStatements(monkeypatch)
+
+    assert sync.materialize([BIG])["committed"] is True
+
+    assert filed.tasks_statements_in_file_session() == []
+    keys = _contour_keys(BIG)
+    assert len(keys) == BIG_EVENTS and {k[1] for k in keys} == {"task-big"}
+
+
+def test_file_session_falls_back_inside_transaction_on_outside_miss(record, monkeypatch):
+    """A task row filed after the outside read is still found, by the indexed lookup inside."""
+    late = "late-session"
+    assert store.insert_rows("events", [
+        _event("late-open", late, "task", 0, '{"action":"open","task_id":"task-late"}'),
+        _event("late-spawn", late, "spawn", 1, '{"task_epoch":"late-later"}', child="late-kid")])["inserted"] == 2
+    assert store.insert_rows("tasks", [{"origin": store.origin_id(), "task_id": "task-late", "epoch": "late-open",
+                                        "status": "open", "synthetic": 0, "opened_at": _at(0)}])["inserted"] == 1
+    real_read = sync._read_outside
+    reads = []
+
+    def read_then_file_row(task_rows, session):
+        read = real_read(task_rows, session)
+        if not task_rows and session == late:
+            reads.append(read)
+            assert store.insert_rows("tasks", [{"origin": store.origin_id(), "task_id": "task-later",
+                                                "epoch": "late-later", "status": "open", "synthetic": 0,
+                                                "weight_class": "SUBSTANTIVE", "opened_at": _at(1)}])["inserted"] == 1
+        return read
+    monkeypatch.setattr(sync, "_read_outside", read_then_file_row)
+
+    assert sync.materialize([late])["committed"] is True
+
+    assert reads and "late-later" not in reads[0]["task_keys"] and "late-open" in reads[0]["task_keys"]
+    assert ("late-spawn", "task-later", "late-later", "SUBSTANTIVE") in _contour_keys(late)
+
+
+SCALE = "scale-session"
+SCALE_SPAWNS = 1000
+SCALE_TASKS = 20_000
+SCALE_EPOCHS = 50
+
+
+def test_file_session_at_scale_runs_no_tasks_query_inside_write_transaction(monkeypatch):
+    """At production scale (the live record held 21k tasks rows and sessions with 1100-1300 spawn
+    and judge events), the transaction that files the session's contours touches no tasks row."""
+    origin = store.origin_id()
+    tasks = [{"origin": origin, "task_id": f"task-{n:05d}", "epoch": f"epoch-{n:05d}", "status": "resolved",
+              "synthetic": 0, "weight_class": "SUBSTANTIVE" if n % 2 else "SMALL", "opened_at": _at(n)}
+             for n in range(SCALE_TASKS)]
+    assert store.insert_rows("tasks", tasks)["inserted"] == SCALE_TASKS
+    named = [f"epoch-{n * (SCALE_TASKS // SCALE_EPOCHS):05d}" for n in range(SCALE_EPOCHS)]
+    events = [_event("scale-s", SCALE, "session", 0, '{"depth":0}')]
+    events += [_event(f"scale-{n:05d}", SCALE, "spawn", 1 + n, '{"task_epoch":"%s"}' % named[n % SCALE_EPOCHS],
+                      child=f"scale-kid-{n}") for n in range(SCALE_SPAWNS)]
+    assert store.insert_rows("events", events)["inserted"] == len(events)
+    filed = FiledStatements(monkeypatch)
+
+    assert sync.materialize([SCALE])["committed"] is True
+
+    assert filed.tasks_statements_in_file_session() == []
+    keys = _contour_keys(SCALE)
+    assert len(keys) == SCALE_SPAWNS
+    expected = {named[n % SCALE_EPOCHS] for n in range(SCALE_SPAWNS)}
+    assert {k[2] for k in keys} == expected and all(k[1] is not None and k[3] is not None for k in keys)

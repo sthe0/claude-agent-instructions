@@ -279,23 +279,34 @@ def _task_opens(conn, session: str) -> "list[tuple[datetime, str]]":
         "AND json_extract(fields, '$.action') = 'open'", (session,))]
 
 
-def _task_key_for(conn, session: str, moment: str, explicit_epoch: "str | None", opens=None):
+def _task_row(conn, epoch: str, task_keys=None):
+    """(origin, task_id, epoch, weight_class) of the task row opened by `epoch`, or None: from
+    `task_keys` (read before the write transaction, see _read_task_keys) when it holds the epoch,
+    else by an indexed lookup on `conn`, which catches a row filed after that read."""
+    if task_keys and epoch in task_keys:
+        return task_keys[epoch]
+    row = conn.execute("SELECT origin, task_id, epoch, weight_class FROM tasks WHERE epoch = ?", (epoch,)).fetchone()
+    return tuple(row) if row else None
+
+
+def _task_key_for(conn, session: str, moment: str, explicit_epoch: "str | None", opens=None, task_keys=None):
     """(origin, task_id, epoch) the event of `session` at `moment` belongs to: the epoch it
     names, else the session's task row whose opening event is the latest at or before the event,
     else the session row's own task key, else None. A caller attributing many events of one
-    session passes `opens` (from _task_opens) read once, instead of a re-read per event."""
+    session passes `opens` (from _task_opens) read once, instead of a re-read per event, and
+    `task_keys` (from _read_task_keys) so the task rows need no lookup inside its transaction."""
     if explicit_epoch:
-        row = conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE epoch = ?", (explicit_epoch,)).fetchone()
+        row = _task_row(conn, explicit_epoch, task_keys)
         if row:
-            return tuple(row)
+            return row[:3]
     if opens is None:
         opens = _task_opens(conn, session)
     stamp = parse_time(moment)
     before = [(t, i) for t, i in opens if t is not None and stamp is not None and t <= stamp]
     if before:
-        row = conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE epoch = ?", (max(before)[1],)).fetchone()
+        row = _task_row(conn, max(before)[1], task_keys)
         if row:
-            return tuple(row)
+            return row[:3]
     row = conn.execute("SELECT task_origin, task_id, task_epoch FROM sessions WHERE session_id = ?", (session,)).fetchone()
     if row and row[1] is not None:
         return tuple(row)
@@ -432,12 +443,12 @@ _CONTOUR_UPSERT = (
     "task_id = CASE WHEN contours.task_id IS NULL THEN excluded.task_id ELSE contours.task_id END")
 
 
-def put_contour(conn, contour_id: str, parent: "str | None", role: str, key) -> None:
+def put_contour(conn, contour_id: str, parent: "str | None", role: str, key, task_keys=None) -> None:
     key = key or (None, None, None)
     weight = None
     if key[2]:
-        row = conn.execute("SELECT weight_class FROM tasks WHERE epoch = ?", (key[2],)).fetchone()
-        weight = row[0] if row else None
+        row = _task_row(conn, key[2], task_keys)
+        weight = row[3] if row else None
     conn.execute(_CONTOUR_UPSERT, (contour_id, parent, role, tables.validate("roles", role), weight, *key))
 
 
@@ -462,11 +473,40 @@ def _first_open(conn, session: str):
     return tuple(row) if row else None
 
 
-def _read_session(conn, session: str) -> dict:
+_TASK_KEYS_CHUNK = 500
+
+
+def _read_task_keys(conn, epochs) -> dict:
+    """{epoch: (origin, task_id, epoch, weight_class)} of the task rows opened by `epochs`, read in
+    chunks that stay under SQLite's bound-parameter limit."""
+    wanted = sorted({e for e in epochs if e})
+    found = {}
+    for start in range(0, len(wanted), _TASK_KEYS_CHUNK):
+        chunk = wanted[start:start + _TASK_KEYS_CHUNK]
+        marks = ", ".join("?" * len(chunk))
+        for row in conn.execute(
+                f"SELECT origin, task_id, epoch, weight_class FROM tasks WHERE epoch IN ({marks})", chunk):
+            found[row[2]] = tuple(row)
+    return found
+
+
+def _read_session(conn, session: str, outside: bool = False) -> dict:
     """What _materialize_session reads by scanning a session's events: the events themselves, its
-    task opens and the first task row its events open."""
-    return {"events": _session_events(conn, session), "opens": _task_opens(conn, session),
-            "first_open": _first_open(conn, session)}
+    task opens and the first task row its events open. Read `outside` the write transaction, it
+    also holds `task_keys`, the task rows of every epoch the session's spawn and judge events name
+    or its task opens open, so the transaction looks none of them up; inside, the map is empty and
+    each lookup runs where it is needed."""
+    events = _session_events(conn, session)
+    opens = _task_opens(conn, session)
+    first_open = _first_open(conn, session)
+    task_keys = {}
+    if outside:
+        epochs = [i for _, i in opens]
+        epochs += [f.get("task_epoch") for _, kind, _, f in events if kind in ("spawn", "judge")]
+        if first_open:
+            epochs.append(first_open[2])
+        task_keys = _read_task_keys(conn, epochs)
+    return {"events": events, "opens": opens, "first_open": first_open, "task_keys": task_keys}
 
 
 def _read_outside(task_rows: bool, session: str):
@@ -478,7 +518,7 @@ def _read_outside(task_rows: bool, session: str):
     if conn is None:
         return None
     try:
-        return _session_events(conn, session) if task_rows else _read_session(conn, session)
+        return _session_events(conn, session) if task_rows else _read_session(conn, session, outside=True)
     except Exception:
         return None
     finally:
@@ -544,20 +584,21 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
         "SELECT task_origin, task_id, task_epoch FROM sessions WHERE session_id = ?", (session,)).fetchone()
     session_key = tuple(session_key) if session_key and session_key[1] is not None else None
 
+    task_keys = read.get("task_keys") or {}
     if parent is None:
-        put_contour(conn, session, None, "root", session_key)
+        put_contour(conn, session, None, "root", session_key, task_keys)
     elif spawn_row is None:
-        put_contour(conn, session, parent, role, session_key)
+        put_contour(conn, session, parent, role, session_key, task_keys)
     opens = read["opens"]
     for event_id, kind, moment, fields in events:
         if kind not in ("spawn", "judge"):
             continue
-        key = _task_key_for(conn, session, moment, fields.get("task_epoch"), opens)
+        key = _task_key_for(conn, session, moment, fields.get("task_epoch"), opens, task_keys)
         if kind == "spawn":
             child_role = fields.get("role") if fields.get("role") in ("linked-child", "spawned-child") else "spawned-child"
-            put_contour(conn, event_id, session, child_role, key)
+            put_contour(conn, event_id, session, child_role, key, task_keys)
         else:
-            put_contour(conn, event_id, session, "judge", key)
+            put_contour(conn, event_id, session, "judge", key, task_keys)
     _file_causes(conn, origin, session, events)
     for contour_id in subagents:
         put_contour(conn, contour_id, session, "agent-tool", session_key)
