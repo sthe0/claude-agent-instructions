@@ -717,3 +717,75 @@ def test_rolling_directive_without_ref_asks_for_one_status_comment_or_fold():
     assert "requires this exact per-stage entry" in journaled
     light = _progress_directive_text({"tracker_key": "K"}, journaled=False)
     assert "fold it into the next entry" in light and "--comment" not in light
+
+
+# --- open PR carries the work --------------------------------------------------
+# Once `plugin-record --phase pr --pr <url>` names the PR, the ticket gets no
+# per-stage entries (the linked PR already shows them); the final result stays.
+
+def test_open_pr_directive_asks_for_nothing_on_the_ticket():
+    detail = _progress_directive_text({"tracker_key": "K", "open_pr": "https://pr/1"},
+                                      journaled=True)
+    assert "open PR https://pr/1" in detail and "post NOTHING to the ticket" in detail
+    assert "requires this exact per-stage entry" not in detail
+
+
+def test_journaled_directive_without_pr_names_the_pr_record():
+    detail = _progress_directive_text({"tracker_key": "K"}, journaled=True)
+    assert "--phase pr --pr" in detail
+
+
+def test_open_pr_waives_journal_gate_but_not_result(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-open-pr"
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
+    rec = ("plugin-record", "--session", sid, "--plugin", "tracker")
+    _run(capsys, root, *rec, "--phase", "plan", "--attachment", "att-1")
+    _run(capsys, root, *rec, "--phase", "status")
+    rc, d = _run(capsys, root, *rec, "--phase", "pr", "--pr", "https://pr/1")
+    assert rc == 0
+
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    assert rc == 1
+    blockers = d["data"]["blockers"]
+    assert not [b for b in blockers if "stage(s)" in b]
+    assert any("result" in b for b in blockers)
+
+    _run(capsys, root, *rec, "--phase", "result")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
+    assert rc == 0
+    assert d["node"] == Node.RESOLVED.value
+
+
+def test_pr_phase_without_pr_url_is_refused(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-pr-no-url"
+    _drive_to_resolution(capsys, root, sid, str(venued_fixtures_dir / "plan_two_stage.toml"),
+                         activate_tracker=True)
+    rc, d = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+                 "--phase", "pr")
+    assert rc == 1 and "--pr <url>" in d["detail"]
+    assert "open_pr" not in _bag(root, sid)
+
+
+def test_pr_url_with_another_phase_is_refused(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-pr-wrong-phase"
+    _drive_to_resolution(capsys, root, sid, str(venued_fixtures_dir / "plan_two_stage.toml"),
+                         activate_tracker=True)
+    rc, _ = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+                 "--phase", "progress", "--stage", "1", "--pr", "https://pr/1")
+    assert rc == 1
+    assert "open_pr" not in _bag(root, sid)
+
+
+def test_pr_url_with_stage_is_refused(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-pr-stage"
+    _drive_to_resolution(capsys, root, sid, str(venued_fixtures_dir / "plan_two_stage.toml"),
+                         activate_tracker=True)
+    rc, _ = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+                 "--phase", "pr", "--stage", "1", "--pr", "https://pr/1")
+    assert rc == 1
+    assert "open_pr" not in _bag(root, sid)
