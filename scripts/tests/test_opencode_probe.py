@@ -945,6 +945,8 @@ def test_env_paths_must_lie_under_a_probe_root_of_the_runs_dir(tmp_path):
     log.write_text(env_meta(root, HOME=str(root / "home"), XDG_DATA_HOME=str(root / "xdg" / "data")) + "\n",
                    encoding="utf-8")
     assert record.env_path_problems(log, runs) == []
+    log.write_text(env_meta(root, HOME=str(root / "home"), OPENCODE_CONFIG_DIR="") + "\n", encoding="utf-8")
+    assert record.env_path_problems(log, runs) == []
     log.write_text(env_meta(root, HOME=str(tmp_path / "real-home")) + "\n", encoding="utf-8")
     assert record.env_path_problems(log, runs) == [
         f"P1.jsonl run r1: HOME={tmp_path / 'real-home'} lies outside its root {root}"]

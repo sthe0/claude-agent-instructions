@@ -155,7 +155,7 @@ def env_path_problems(log: Path, runs_dir: Path) -> list[str]:
             continue
         problems += [f"{where}: {key}={value} lies outside its root {root}"
                      for key, value in sorted(env_paths.items())
-                     if Path(value) != root and root not in Path(value).parents]
+                     if value and Path(value) != root and root not in Path(value).parents]
     return problems
 
 
