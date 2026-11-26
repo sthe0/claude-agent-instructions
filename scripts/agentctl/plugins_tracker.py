@@ -14,9 +14,11 @@ actually recorded.
 Division of labour (engine owns WHEN; the skill owns WHAT/WHERE):
   - WHEN — this plugin: which transition fires which publish nudge, and the
     did-publish gate on resolution. Deterministic, no recall.
-  - WHAT/WHERE — the skill: comment content, tracker API/transport, and the
-    open-PR override (status to the PR, not the ticket). The plugin emits the
-    same `publish_progress` nudge either way; the skill routes it.
+  - WHAT/WHERE — the skill: comment content and tracker API/transport.
+    The open-PR override is engine state: once `plugin-record --phase pr --pr
+    <url>` names the PR carrying the work, `publish_progress` asks for nothing on
+    the ticket and the per-stage journal gate is waived; the final result stays
+    mandatory.
 
 Lifecycle: task-scoped. Activated either by the skill on invocation
 (`agentctl plugin-activate --plugin tracker --tracker-key <KEY>`) or by the engine
@@ -154,6 +156,18 @@ def _observe_record_result(state, bag) -> list[PluginDirective]:
     )
     stage_flag = f" --stage {stage_index}" if stage_index is not None else ""
     record = f"`plugin-record --plugin tracker --phase progress{stage_flag}"
+    open_pr = bag.get("open_pr")
+    if open_pr:
+        # The PR already shows the change and its state on the ticket; a ticket
+        # entry per stage would only restate it. The journal gate is waived the
+        # same way (_journal_gate), so this nudge asks for nothing on the ticket.
+        return [PluginDirective(
+            "tracker", "publish_progress",
+            f"the open PR {open_pr} carries this work: post NOTHING to the ticket; "
+            "if the change's current state moved, update the PR description. The "
+            "one ticket comment comes after the merge, as the final result",
+            data={"tracker_key": _key(bag), "stage": stage_index, "open_pr": open_pr},
+        )]
     rolling = bag.get("rolling_comment")
     if journaled:
         what = (
@@ -189,7 +203,10 @@ def _observe_record_result(state, bag) -> list[PluginDirective]:
     if journaled:
         detail += (
             " — the resolution gate requires this exact per-stage entry before "
-            "the task can resolve"
+            "the task can resolve. If this work will ship through a PR, record it "
+            "once the PR exists (`plugin-record --plugin tracker --phase pr --pr "
+            "<url>`): the per-stage entries are then waived, and a stage passed "
+            "before that is closed with `--skipped --note <why>`"
         )
     return [PluginDirective(
         "tracker", "publish_progress", detail,
@@ -342,6 +359,11 @@ def _passed_artifact_stages(state) -> list:
 
 
 def _journal_gate(state, bag) -> list[str]:
+    # An open PR carries the work: its description and the linked-PR view on the
+    # ticket replace per-stage entries. The ticket still gets the final result
+    # (MANDATORY_PHASES), which is the one post-merge comment.
+    if bag.get("open_pr"):
+        return []
     pub = _published(bag)
     missing = [s.index for s in _passed_artifact_stages(state)
                if f"progress:{s.index}" not in pub]

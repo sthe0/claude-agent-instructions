@@ -250,6 +250,27 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
     note = getattr(args, "note", None)
     skipped = bool(getattr(args, "skipped", False))
     comment = (getattr(args, "comment", None) or "").strip()
+    pr = (getattr(args, "pr", None) or "").strip()
+    is_tracker_pr = args.plugin == "tracker" and phase == "pr"
+    if bool(pr) != is_tracker_pr or (pr and (skipped or stage is not None or comment)):
+        return Directive(False, state.node, "noop",
+                         "--plugin tracker --phase pr records the PR that carries the work: "
+                         "it needs --pr <url>, --pr goes with nothing else, and neither "
+                         "takes --skipped, --stage or --comment")
+    if pr:
+        # The PR now carries the work: the tracker plugin stops asking for
+        # per-stage ticket entries (see plugins_tracker._journal_gate).
+        bag["open_pr"] = pr
+        published = bag.setdefault("published_phases", {})
+        published["pr"] = {"pr": pr}
+        state.log("plugin_record", plugin=args.plugin, phase=phase, pr=pr)
+        store.save(state)
+        return Directive(
+            True, state.node, "continue",
+            f"plugin 'tracker': open PR {pr} recorded — per-stage ticket entries are "
+            "no longer required; the final result after the merge still is",
+            data={"published_phases": sorted(published), "open_pr": pr},
+        )
     if comment and (args.plugin != "tracker" or phase != "progress" or skipped):
         return Directive(False, state.node, "noop",
                          "--comment names the tracker's rolling status comment: it goes only "
@@ -537,6 +558,10 @@ def register(sub, add):
     sp.add_argument("--comment", default=None,
                     help="id or URL of the tracker's rolling status comment; only for "
                          "--plugin tracker --phase progress (not with --skipped)")
+    sp.add_argument("--pr", default=None,
+                    help="URL of the PR that now carries the work; only for --plugin "
+                         "tracker --phase pr. Waives the per-stage ticket entries; the "
+                         "final result stays mandatory")
     sp.add_argument("--skipped", action="store_true",
                     help="record the phase as an honest SKIP (transport unavailable): "
                          "stores a marker+reason under the phase key so the gate is "
