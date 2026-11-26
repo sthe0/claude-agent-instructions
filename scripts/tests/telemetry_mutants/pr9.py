@@ -25,7 +25,8 @@ _L = "scripts/tests/test_telemetry_live_shape.py::"
 _RETRIED = _S + "test_deferred_spool_retried_after_budget_until_commit"
 _SPAWN = "            _spawn_retry(stem, begun, session)\n            retried.append(stem)\n"
 _RETRY_START = "    skipped = {NO_TIME_ROWS: 0}\n    ceiling = "
-_UNCHANGED = "return events <= stored[0] and tasks <= stored[1] and keyed <= stored[2]"
+_UNCHANGED = "return events <= stored[0] and spawns <= stored[1] and tasks <= stored[2] and keyed <= stored[3]"
+_RETRY_FILE = "                _materialize_recording_failure([stem])\n                outcome = \"replayed\""
 _HOLD_END = "outcome[\"value\"] = work(conn)\n                _commit(conn)\n"
 _CONTENTION = "tuple(report.outage_end_from_landing(conn, _as_dict(f)) for f in contention)"
 
@@ -69,12 +70,28 @@ MUTANTS = [
      "tests": [_S + "test_materialize_skips_waiting_session_unchanged_since_last_try"]},
     {"name": "materialize_skips_waiting_session_after_task_row", "file": _SYNC,
      "anchor": _UNCHANGED,
-     "replacement": "return events <= stored[0] and keyed <= stored[2]",
+     "replacement": "return events <= stored[0] and spawns <= stored[1] and keyed <= stored[3]",
      "tests": [_S + "test_materialize_rereads_waiting_session_after_task_row_arrives"]},
     {"name": "waiting_mark_ignores_session_key_update", "file": _SYNC,
      "anchor": _UNCHANGED,
-     "replacement": "return events <= stored[0] and tasks <= stored[1]",
+     "replacement": "return events <= stored[0] and spawns <= stored[1] and tasks <= stored[2]",
      "tests": [_S + "test_materialize_rereads_waiting_session_after_session_key_set_by_update"]},
+    {"name": "waiting_mark_ignores_parent_spawn_event", "file": _SYNC,
+     "anchor": _UNCHANGED,
+     "replacement": "return events <= stored[0] and tasks <= stored[2] and keyed <= stored[3]",
+     "tests": [_S + "test_materialize_rereads_waiting_session_after_parent_spawn_event_arrives"]},
+    {"name": "sync_materialize_failure_not_recorded", "file": _SYNC,
+     "anchor": "filed = _materialize_recording_failure([s for s in stems if s not in deferred])",
+     "replacement": "filed = materialize([s for s in stems if s not in deferred])",
+     "tests": [_S + "test_materialize_failure_in_sync_recorded_as_deferred"]},
+    {"name": "retry_materialize_failure_not_recorded", "file": _SYNC,
+     "anchor": _RETRY_FILE,
+     "replacement": "                materialize([stem])\n                outcome = \"replayed\"",
+     "tests": [_S + "test_materialize_failure_in_retry_recorded_as_deferred"]},
+    {"name": "sync_end_hold_carries_earlier_sync", "file": _SYNC,
+     "anchor": "    store.reset_lock_hold()\n    store.replay(SYNC_SESSION)",
+     "replacement": "    store.replay(SYNC_SESSION)",
+     "tests": [_S + "test_sync_end_hold_is_this_syncs_not_an_earlier_syncs_in_the_same_process"]},
     {"name": "sync_end_hold_misses_materialize", "file": _STORE,
      "anchor": _HOLD_END,
      "replacement": "outcome[\"value\"] = work(conn)\n                conn.execute(\"COMMIT\")\n",
@@ -112,6 +129,14 @@ MUTANTS = [
      "anchor": "result[\"ok\"] = result[\"ok\"] and count >= floor",
      "replacement": "result[\"ok\"] = result[\"ok\"]",
      "tests": [_L + "test_min_judged_after_landing_fails_below_floor"]},
+    {"name": "min_judged_below_one_accepted", "file": _CLI,
+     "anchor": "args.min_judged is not None and args.min_judged < 1:",
+     "replacement": "args.min_judged is not None and args.min_judged < 0:",
+     "tests": [_L + "test_min_judged_below_one_refused"]},
+    {"name": "retry_deferred_accepts_ignored_options", "file": _CLI,
+     "anchor": "args.session is not None or args.stale or args.budget is not None):",
+     "replacement": "False):",
+     "tests": [_L + "test_retry_deferred_refuses_options_it_ignores"]},
     {"name": "deferred_after_landing_excused", "file": _REPORT,
      "anchor": "> DEFERRED_JUDGED_AFTER_S):",
      "replacement": "> DEFERRED_JUDGED_AFTER_S and False):",

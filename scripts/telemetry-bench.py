@@ -7,7 +7,10 @@ The clock is CPU time, not wall-clock time: on a loaded machine the wall-clock t
 interpreter measures the queue for a CPU, not the code (on 2026-11-21/22 the wall-clock hook p95
 read 43-97 ms at load 11-16 on 12 CPUs while the CPU time of the same code stayed about 15 ms).
 Each wall-clock p95 is printed beside its CPU figure and judges nothing; the output carries
-"clock": "cpu".
+"clock": "cpu". The price: CPU time does not count blocking waits (the spool flock, the store's
+busy_timeout, fsync), so a regression that makes the hook wait passes the CPU bound. Waits are
+not judged here; read them in hook_wall_p95_ms, and judge lock contention with
+`telemetry.py check-latency --lock-contention-from-landing/--lock-contention-until-landing`.
 
 Hook emission: N fresh interpreters each import the emitter and emit one event; the p95 of that
 child's own CPU time (time.process_time around the import and the emit) must stay within

@@ -638,9 +638,12 @@ def _record_marks(conn) -> "tuple[int, int]":
 
 
 def _waiting_mark(conn, session: str, shared: "tuple[int, int]") -> "list[int]":
-    """[the session's highest event rowid, *shared]: what resolving its task reads, as counters."""
+    """[the session's highest event rowid, the highest rowid of an event naming it as the child
+    (a spawn in its parent's session), *shared]: what resolving its task reads, as counters."""
     events = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM events WHERE session_id = ?", (session,)).fetchone()[0]
-    return [events, *shared]
+    spawns = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM events WHERE child_session_id = ?",
+                          (session,)).fetchone()[0]
+    return [events, spawns, *shared]
 
 
 def _stored_marks(conn) -> "dict[str, list]":
@@ -655,11 +658,11 @@ def _stored_marks(conn) -> "dict[str, list]":
 
 
 def _unchanged(mark: "list[int]", stored) -> bool:
-    """None of the three parts of a waiting session's mark has grown since its last try."""
-    if not isinstance(stored, list) or len(stored) != 3:
+    """None of the four parts of a waiting session's mark has grown since its last try."""
+    if not isinstance(stored, list) or len(stored) != 4:
         return False
-    events, tasks, keyed = mark
-    return events <= stored[0] and tasks <= stored[1] and keyed <= stored[2]
+    events, spawns, tasks, keyed = mark
+    return events <= stored[0] and spawns <= stored[1] and tasks <= stored[2] and keyed <= stored[3]
 
 
 def _put_mark(conn, session: str, mark: "list[int]") -> None:
@@ -687,9 +690,12 @@ def materialize(sessions: "list[str]") -> dict:
     on a read-only connection first (_read_outside), and BEGIN IMMEDIATE wraps only that
     session's upserts and their key lookups. A waiting session is passed over, without counting
     against the cap, while nothing its resolution reads has grown since its last try: its mark
-    (its highest event rowid, the record's highest tasks rowid, the count of sessions rows with a
-    task key; taken before the read) is kept in meta under WAITING_MARK_PREFIX + its id and
-    written in the transaction that files it."""
+    (its highest event rowid, the highest rowid of a spawn event naming it, the record's highest
+    tasks rowid, the count of sessions rows with a task key; taken before the read) is kept in
+    meta under WAITING_MARK_PREFIX + its id and written in the transaction that files it. The last
+    two parts are record-wide, so any new task or newly keyed session re-arms every waiting
+    session: the skip saves work only while the record is quiet and does not bound a call's work
+    (the cap does)."""
     conn = store.open_record()
     if conn is None:
         return {"committed": False, "unattached": None}
@@ -796,6 +802,7 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
     otherwise it is a sweep. Returns {kind, visited, committed, deferred, unattached}."""
     deadline = _monotonic() + (BUDGET_S if budget_s is None else budget_s)
     kind = "session_end" if session else "sweep"
+    store.reset_lock_hold()
     store.replay(SYNC_SESSION)
     begun = _now()
     _write_own(TRIGGER_START, {"kind": kind, **({"session": session} if session else {})}, begun)
@@ -840,9 +847,7 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
             finally:
                 if conn is not None:
                     conn.close()
-        filed = materialize([s for s in stems if s not in deferred])
-        if filed.get("failed_session"):
-            _write_own(SYNC_DEFERRED, {"session": filed["failed_session"], "phase": "materialize"})
+        filed = _materialize_recording_failure([s for s in stems if s not in deferred])
         from lib.telemetry import tokens
         collected = tokens.collect([s for s in stems if s != SYNC_SESSION])
         for stem in deferred:
@@ -852,6 +857,15 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
         _write_sync_end(begun, kind, committed=len(committed), deferred=len(deferred), retries=len(retried))
     return {"kind": kind, "visited": stems, "committed": committed, "deferred": deferred, "retried": retried,
             "unattached": filed["unattached"], "tokens": collected, NO_TIME_ROWS: skipped[NO_TIME_ROWS]}
+
+
+def _materialize_recording_failure(sessions: "list[str]") -> dict:
+    """materialize(sessions); a write that did not commit leaves a sync.deferred row naming the
+    session it stopped at, phase materialize, so the gap is visible before a later rotation."""
+    filed = materialize(sessions)
+    if filed.get("failed_session"):
+        _write_own(SYNC_DEFERRED, {"session": filed["failed_session"], "phase": "materialize"})
+    return filed
 
 
 def _commit_due(stem: str, inserted: int, begun: datetime, session: "str | None", skipped: dict) -> bool:
@@ -871,7 +885,8 @@ def _commit_due(stem: str, inserted: int, begun: datetime, session: "str | None"
 
 def _write_sync_end(begun: datetime, kind: str, **counts) -> None:
     """The sync's last act: one sync.end row carrying the trigger start it answers and the longest
-    write transaction this process held, measured before this row's own write."""
+    write transaction this sync held (store.reset_lock_hold() at its start), measured before this
+    row's own write."""
     fields = {"kind": kind, "trigger_start": _iso(begun), "max_lock_hold_ms": store.max_lock_hold_ms(), **counts}
     _write_own(SYNC_END, fields)
 
@@ -937,6 +952,7 @@ def run_retry(stem: str, parent_begun: str, parent_session: "str | None" = None)
 
 
 def _retry_holding_lock(stem: str, begun: datetime, session: "str | None") -> dict:
+    store.reset_lock_hold()
     skipped = {NO_TIME_ROWS: 0}
     ceiling = begun + timedelta(seconds=RETRY_CEILING_S)
     outcome, inserted, attempts, committed = "ceiling", 0, 0, False
@@ -950,7 +966,7 @@ def _retry_holding_lock(stem: str, begun: datetime, session: "str | None") -> di
                 if _commit_due(stem, inserted, begun, session, skipped):
                     _write_own(SYNC_COMMIT, {"session": stem, "rows_inserted": inserted, "retry": True})
                     committed = True
-                materialize([stem])
+                _materialize_recording_failure([stem])
                 outcome = "replayed"
                 break
             if _replayed_elsewhere(stem):

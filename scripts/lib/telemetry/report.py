@@ -700,8 +700,7 @@ SYNC_OUTAGE = "sync_outage"
 SYNC_LOCK_CONTENTION = "sync_lock_contention"
 SYNC_LOCK_CONTENTION_NOTE = (
     "late sessions whose first trigger fell while the sync held the store's write lock through "
-    "materialize; the cause is attributed to the window as a whole (51 of the 117 sessions of the "
-    "2026-11-24 run carry sync.deferred), not proven per session")
+    "materialize; the cause is attributed to the window as a whole, not proven per session")
 DEFERRED_JUDGED_AFTER_S = sync.RETRY_CEILING_S + 600.0
 PRE_FIX_LATE = "pre_fix_late"
 IMPORT_ONLY = "import_only"

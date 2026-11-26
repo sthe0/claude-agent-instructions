@@ -472,6 +472,9 @@ def main(argv=None) -> int:
     if args.command == "sync" and ((args.retry_deferred is None) != (args.parent_begun is None)
                                    or (args.parent_session is not None and args.retry_deferred is None)):
         sync_cmd.error("--retry-deferred needs --parent-begun, and --parent-begun/--parent-session need it")
+    if args.command == "sync" and args.retry_deferred is not None and (
+            args.session is not None or args.stale or args.budget is not None):
+        sync_cmd.error("--retry-deferred takes none of --session, --stale, --budget")
     if args.command == "check-latency" and (args.sync_outage_from is None) != (
             args.sync_outage_until_landing is None and args.sync_outage_until is None):
         lat.error("--sync-outage-from needs one of --sync-outage-until-landing / --sync-outage-until, and they need it")
@@ -482,6 +485,8 @@ def main(argv=None) -> int:
         lat.error("--lock-contention-from-landing and --lock-contention-until-landing go together")
     if args.command == "check-latency" and (args.min_judged_after_landing is None) != (args.min_judged is None):
         lat.error("--min-judged-after-landing and --min-judged go together")
+    if args.command == "check-latency" and args.min_judged is not None and args.min_judged < 1:
+        lat.error("--min-judged must be at least 1")
     if args.command in ("export", "merge", "check-roundtrip"):
         return _portability(args)
     if args.command == "import":

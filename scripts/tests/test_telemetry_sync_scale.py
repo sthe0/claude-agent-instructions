@@ -366,6 +366,16 @@ def test_materialize_rereads_waiting_session_after_session_key_set_by_update(mon
     assert _visited(monkeypatch) >= WAITING_THREE - {_waiting_session(0)}
 
 
+def test_materialize_rereads_waiting_session_after_parent_spawn_event_arrives(monkeypatch):
+    """The spawn naming a waiting session lands in its parent's session: none of the waiting
+    session's own events grow, no task row and no keyed session appear."""
+    _add_waiting(range(3))
+    assert _visited(monkeypatch) == WAITING_THREE
+    child = _waiting_session(1)
+    assert store.insert_rows("events", [_event("parent-spawn", "parent-late", "spawn", 9, child=child)])["inserted"] == 1
+    assert _visited(monkeypatch) == {child}
+
+
 @pytest.fixture
 def live_env(monkeypatch):
     """A sync's verdict must not depend on the caller's session, the real canon checkout, the
@@ -415,6 +425,28 @@ def test_sync_end_records_max_lock_hold_including_materialize(live_env, monkeypa
 
     [end] = _own(sync.SYNC_END)
     assert end["fields"]["max_lock_hold_ms"] == 7000.0
+
+
+def test_sync_end_hold_is_this_syncs_not_an_earlier_syncs_in_the_same_process(live_env, monkeypatch):
+    """telemetry-synthetic-task.py runs several syncs in one process."""
+    clock = [0.0]
+    monkeypatch.setattr(store, "_hold_clock", lambda: clock[0])
+    monkeypatch.setattr(store, "_hold", {"began": None, "max_ms": 0.0})
+    real = sync._materialize_session
+    step = [7.0]
+
+    def slow(conn, origin, session, *rest):
+        clock[0] += step[0]
+        return real(conn, origin, session, *rest)
+    monkeypatch.setattr(sync, "_materialize_session", slow)
+    _emit("s-first")
+    sync.run("s-first")
+    step[0] = 0.0
+    _emit("s-second")
+    sync.run("s-second")
+
+    first, second = (e["fields"]["max_lock_hold_ms"] for e in _own(sync.SYNC_END))
+    assert first == 7000.0 and second < first, (first, second)
 
 
 def test_sync_end_written_when_nothing_committed(live_env):
@@ -478,6 +510,30 @@ def test_retry_after_budget_stops_when_another_sync_replayed(live_env, monkeypat
     assert max(slept) == sync.BACKOFF_MAX_S and sum(slept) <= sync.RETRY_CEILING_S
     retry_ends = [e["fields"] for e in _own(sync.SYNC_END) if e["fields"]["kind"] == "retry"]
     assert [e["attempts"] for e in retry_ends] == [1, stuck["attempts"]]
+
+
+def _materialize_fails(monkeypatch) -> None:
+    """A filing write that does not commit, stopping at s-file."""
+    _emit("s-file")
+    monkeypatch.setattr(sync, "materialize",
+                        lambda sessions: {"committed": False, "unattached": None, "failed_session": "s-file"})
+
+
+def _materialize_deferrals() -> list:
+    return [{k: e["fields"][k] for k in ("session", "phase")} for e in _own(sync.SYNC_DEFERRED)
+            if e["fields"].get("phase") == "materialize"]
+
+
+def test_materialize_failure_in_sync_recorded_as_deferred(live_env, monkeypatch):
+    _materialize_fails(monkeypatch)
+    sync.run("s-file")
+    assert _materialize_deferrals() == [{"session": "s-file", "phase": "materialize"}]
+
+
+def test_materialize_failure_in_retry_recorded_as_deferred(live_env, monkeypatch):
+    _materialize_fails(monkeypatch)
+    assert sync.run_retry("s-file", sync._iso(sync._now()))["outcome"] == "replayed"
+    assert _materialize_deferrals() == [{"session": "s-file", "phase": "materialize"}]
 
 
 def test_deferred_spool_retried_by_one_sync_only(live_env):

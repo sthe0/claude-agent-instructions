@@ -111,8 +111,9 @@ def _set_busy(conn: sqlite3.Connection, ms: int) -> None:
     conn.execute(f"PRAGMA busy_timeout={int(ms)}")
 
 
-# The write lock this process held longest: each BEGIN IMMEDIATE is timed from the moment it
-# returns (its busy wait excluded) to its COMMIT or ROLLBACK. The sync reports it on sync.end.
+# The write lock this process held longest since reset_lock_hold(): each BEGIN IMMEDIATE is timed
+# from the moment it returns (its busy wait excluded) to its COMMIT or ROLLBACK. Each sync resets
+# it at its start and reports it on its sync.end.
 _hold_clock = time.monotonic
 _hold = {"began": None, "max_ms": 0.0}
 
@@ -143,8 +144,14 @@ def _rollback(conn: sqlite3.Connection) -> None:
 
 
 def max_lock_hold_ms() -> float:
-    """The longest write transaction of this process so far, in milliseconds."""
+    """The longest write transaction since the last reset_lock_hold(), in milliseconds."""
     return round(_hold["max_ms"], 3)
+
+
+def reset_lock_hold() -> None:
+    """Start a new measuring window: each sync resets it, so its sync.end carries its own longest
+    write transaction, not an earlier sync's in the same process."""
+    _hold["max_ms"] = 0.0
 
 
 # --- record creation, origin, migrations -------------------------------------------

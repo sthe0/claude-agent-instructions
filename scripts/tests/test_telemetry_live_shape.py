@@ -1059,6 +1059,23 @@ def test_min_judged_after_landing_fails_below_floor(world, tmp_path):
     assert exit_code(latency_argv(tmp_path, "--min-judged", "1")) == 2
 
 
+@pytest.mark.parametrize("floor", ["0", "-1"])
+def test_min_judged_below_one_refused(world, tmp_path, floor):
+    """The landing is valid and bound to its land event, so only the floor value can refuse."""
+    judged_sessions()
+    landing = tmp_path / "floor.json"
+    landing.write_text(json.dumps({"head": "abc", "landed_at": at(1000)}), encoding="utf-8")
+    landing_event(950)
+    assert exit_code(latency_argv(tmp_path, "--min-judged-after-landing", str(landing), "--min-judged", "1")) == 0
+    assert exit_code(latency_argv(tmp_path, "--min-judged-after-landing", str(landing), "--min-judged", floor)) == 2
+
+
+@pytest.mark.parametrize("extra", [["--session", "s-1"], ["--stale"], ["--budget", "5"]])
+def test_retry_deferred_refuses_options_it_ignores(world, extra):
+    argv = ["sync", "--retry-deferred", "s-r", "--parent-begun", at(0), *extra]
+    assert exit_code(argv) == 2
+
+
 def test_min_judged_after_landing_passes_at_floor(world):
     judged_sessions()
     met = judge(floor=(1000, 2))
