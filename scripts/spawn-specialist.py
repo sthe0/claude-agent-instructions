@@ -281,13 +281,23 @@ def load_review_doc(path: str) -> tuple:
 def site_condition_decisions(args: argparse.Namespace) -> list:
     """The decisions on binding conditions the spawn's session reads, so the plan content a
     reviewer sees shows each condition as it now stands (`render.build_site_prompt`). Nothing for
-    a spawn with no engine session (the plan file as written)."""
+    a spawn with no engine session (the plan file as written). A session named by
+    `--condition-session` must read (the reviewer is promised the current text); the spawn's own
+    session may hold a state this engine cannot read, and a spawn must still launch for it: the
+    plan is then shown as written, with a note on stderr."""
     from agentctl.cli_common import condition_decisions_in_store
 
-    return condition_decisions_in_store(
-        getattr(args, "condition_session", None) or getattr(args, "session", None)
-        or os.environ.get(OWN_SESSION_ENV),
-        getattr(args, "state_root", None))
+    named = getattr(args, "condition_session", None)
+    state_root = getattr(args, "state_root", None)
+    if named:
+        return condition_decisions_in_store(named, state_root)
+    try:
+        return condition_decisions_in_store(
+            getattr(args, "session", None) or os.environ.get(OWN_SESSION_ENV), state_root)
+    except Exception as exc:  # noqa: BLE001 - an unreadable own state must not stop the spawn
+        print(f"spawn-specialist: the session's state does not read ({type(exc).__name__}); "
+              "binding conditions are shown as the plan file writes them", file=sys.stderr)
+        return []
 
 
 def plan_site(
