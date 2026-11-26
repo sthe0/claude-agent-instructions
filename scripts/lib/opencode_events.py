@@ -415,7 +415,10 @@ def global_config_locations(environ=None) -> tuple[str, ...]:
 
 
 _LIB_DIR = Path(__file__).resolve().parent
-GATE_CODE_PATHS = (str(_LIB_DIR), str(_LIB_DIR.parent / "opencode-gate-bridge.py"))
+REPOSITORY_ROOT = _LIB_DIR.parent.parent
+GATE_CODE_PATHS = (str(REPOSITORY_ROOT),)
+GATE_PYTHON_ENV = "AGENT_GATE_PYTHON"
+GATE_BRIDGE_ENV = "AGENT_GATE_BRIDGE"
 
 
 def protected_paths(environ=None, directory: str = "", plugin_paths=(), extra=()) -> tuple[str, ...]:
@@ -423,14 +426,16 @@ def protected_paths(environ=None, directory: str = "", plugin_paths=(), extra=()
     with (``OPENCODE_CONFIG_DIR``), the integration directory (the shadow transcripts, the rows snapshots,
     OpenCode's data), the ``OPENCODE_CONFIG`` file, the ``AGENT_GATE_EXTRA_ROWS`` file, each plugin spec of the
     declared config (the file, and its directory when it is a file: the shim and the directory that holds it),
-    the bridge script and the library directory it imports (``GATE_CODE_PATHS``), ``extra`` (each row's script),
-    the global plugin locations (``global_config_locations``), and the settings files of the session
+    the whole repository the shim and the bridge run from (``GATE_CODE_PATHS``: the bridge, the hooks, every
+    library and table they import), the interpreter that runs them (the bridge's own, the
+    ``AGENT_GATE_PYTHON`` value) and the bridge script named by ``AGENT_GATE_BRIDGE``, ``extra`` (each row's
+    script), the global plugin locations (``global_config_locations``), and the settings files of the session
     directory's own ``.claude``, whose hooks the bridge reads as layer rows. Real paths, so a link to one names
     it."""
     env = os.environ if environ is None else environ
     found = [env.get(OPENCODE_CONFIG_DIR_ENV), env.get(INTEGRATION_ENV) or str(config_root.agent_home() / "opencode"),
-             env.get(OPENCODE_CONFIG_ENV), env.get(EXTRA_ROWS_ENV), *GATE_CODE_PATHS, *extra,
-             *global_config_locations(env)]
+             env.get(OPENCODE_CONFIG_ENV), env.get(EXTRA_ROWS_ENV), *GATE_CODE_PATHS, sys.executable,
+             env.get(GATE_PYTHON_ENV), env.get(GATE_BRIDGE_ENV), *extra, *global_config_locations(env)]
     for path in plugin_paths:
         found.append(path)
         if not os.path.isdir(path):
@@ -469,15 +474,18 @@ def config_dir_write_targets(tool: str, tool_input: dict, cwd: str, environ=None
         normal = os.path.normpath(str(tool_input.get("file_path") or ""))
         candidates = [normal, os.path.realpath(normal)] if tool_input.get("file_path") else []
         unreadable: list[str] = []
+        merged_into: tuple[str, ...] = ()
     elif tool == "Bash":
         try:
             scope = shell_write_scope.write_scope(str(tool_input.get("command") or ""), cwd, env)
         except shell_write_scope.UnreadableCommand as error:
             return WriteScopeHits([], [str(error)])
         candidates, unreadable = list(scope.resolved), list(scope.unreadable)
+        merged_into = scope.whole
     else:
         return WriteScopeHits([], [])
     hits = [c for c in dict.fromkeys(candidates) if any(_inside(c, d) for d in protected)]
+    hits += [d for d in protected if any(_inside(d, whole) and d != whole for whole in merged_into) and d not in hits]
     return WriteScopeHits(hits, unreadable)
 
 
@@ -941,11 +949,16 @@ def combine(decisions: list[Decision]) -> Decision:
     return Decision(chosen.deny, chosen.reason, chosen.script, context)
 
 
+# ``-E`` ignores PYTHON* variables and ``-s`` the user site. Not ``-I``: it implies ``-P`` (safe path), which
+# drops the script directory, and a hook imports its sibling ``lib`` from there.
+HOOK_INTERPRETER_FLAGS = ("-E", "-s")
+
+
 def command_of(row: Row) -> list[str]:
     path = Path(row.script)
     if not path.is_file():
         raise MissingScript(str(path))
-    argv = [sys.executable, str(path)] if path.suffix == ".py" else [str(path)]
+    argv = [sys.executable, *HOOK_INTERPRETER_FLAGS, str(path)] if path.suffix == ".py" else [str(path)]
     return argv + shlex.split(row.args)
 
 

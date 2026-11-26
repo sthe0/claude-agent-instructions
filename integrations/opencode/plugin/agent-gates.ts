@@ -19,18 +19,38 @@
 // be had, every tool call of it is refused: the setup directory is not guessed in its place, since under
 // ``opencode serve`` one process holds sessions of several directories.
 //
-// Environment: AGENT_GATE_BRIDGE (bridge script path), AGENT_GATE_PYTHON (interpreter, default python3),
+// Environment: AGENT_GATE_BRIDGE (bridge script path), AGENT_GATE_PYTHON (interpreter, default the `python3`
+// of PATH; resolved once at load to its real path, and run with -I),
 // AGENT_GATE_LOG (a file that gets one JSON line per refusal and decision, never a tool result),
 // AGENT_GATE_SETUP_MARKER (a file that gets {"status": "ok" | "failed", "failures": [...]} once setup ran).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants as fsConstants, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BRIDGE = process.env.AGENT_GATE_BRIDGE || resolve(HERE, "..", "..", "..", "scripts", "opencode-gate-bridge.py");
-const PYTHON = process.env.AGENT_GATE_PYTHON || "python3";
+// The interpreter is resolved once, here, to the real path of an executable file: the configured value of the
+// launch environment, else the first `python3` on its PATH. A later change of PATH (or a new `python3` earlier on
+// it) cannot select another one. When nothing resolves the path stays a name no file has, so every bridge call fails
+// and setup refuses.
+function resolveInterpreter(name, searchPath) {
+  const candidates = name.includes(sep) ? [name] : searchPath.split(delimiter).filter(Boolean).map((dir) => resolve(dir, name));
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      const real = realpathSync(candidate);
+      if (statSync(real).isFile()) return real;
+    } catch (error) {
+      // try the next PATH entry
+    }
+  }
+  return resolve("/", "no-such-interpreter", name);
+}
+const PYTHON = resolveInterpreter(process.env.AGENT_GATE_PYTHON || "python3", process.env.PATH || "");
+// -I: no PYTHON* variables, no user site, and the bridge's directory is not put first on sys.path (the bridge adds it last).
+const PYTHON_FLAGS = ["-I"];
 const LOG = process.env.AGENT_GATE_LOG || "/dev/null";
 const MARKER = process.env.AGENT_GATE_SETUP_MARKER || "";
 const DENIED_TOOLS = new Set(["opencode_worktree_create", "opencode_worktree_remove", "opencode_session_move"]);
@@ -80,7 +100,7 @@ const BRIDGE_TIMEOUT_MS = Number(process.env.AGENT_GATE_BRIDGE_TIMEOUT_MS) > 0 ?
 
 function runBridge(args, input) {
   return new Promise((done) => {
-    const child = spawn(PYTHON, [BRIDGE, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(PYTHON, [...PYTHON_FLAGS, BRIDGE, ...args], { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
     const timer = setTimeout(() => {
@@ -112,7 +132,7 @@ async function verdict(name, input, cwd) {
 }
 
 function bridgeValue(command) {
-  const result = spawnSync(PYTHON, [BRIDGE, command], { encoding: "utf8" });
+  const result = spawnSync(PYTHON, [...PYTHON_FLAGS, BRIDGE, command], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`gate bridge ${command} failed: ${String(result.error || result.stderr).slice(0, 200)}`);
   return JSON.parse(result.stdout);
 }

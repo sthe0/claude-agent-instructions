@@ -27,7 +27,9 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The shim starts this script with ``-I``, which leaves the script directory off ``sys.path``. Appended, so
+# the standard library and the installed packages win over a module of the same name in this directory.
+sys.path.append(str(Path(__file__).resolve().parent))
 from lib import config_root, opencode_events as oe  # noqa: E402
 
 REFUSING_EVENTS = ("tool.execute.before", "session.prompt")
