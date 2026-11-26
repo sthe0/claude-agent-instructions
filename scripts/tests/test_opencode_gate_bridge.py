@@ -2024,6 +2024,8 @@ def test_rows_snapshot_rebuilt_for_new_process(tmp_path):
 # --- A6 route states: the pure rules and the derived runs ----------------------------------------------
 
 class _FakeRun:
+    root = Path("/probe-root/run")
+
     def __init__(self, loaded, tool_name, exit_code=0, own_plugin_loaded=True):
         self.exit_code = exit_code
         self._loaded = sorted(loaded)
@@ -2209,6 +2211,44 @@ def test_a6_global_runs_empty_the_config_dir_variable_and_record_the_run_that_se
     assert record["with_config_dir_exit"] == 0 and record["loaded_with_config_dir"] == []
 
 
+def test_a6_global_runs_need_the_own_plugin_loaded_as_the_project_routes_do():
+    """A run in which the plugin its own config names did not load observed nothing: no location is ``off`` or
+    ``absent`` then, the record's ``runs_ok`` is false, and ``unprotected`` names what the bridge does not cover."""
+    loaded_in_control = {"xdg-config/plugin/flat-js", "xdg-config/plugin/flat-ts", "xdg-config/plugin/dir"}
+    healthy = _globals(loaded_in_control, set())
+    assert healthy["runs_ok"] is True and healthy["locations"]["home-.claude"]["state"] == "absent"
+    silent = _globals(loaded_in_control, set(), own_in_off=False)
+    assert silent["runs_ok"] is False and silent["off_own_plugin_loaded"] is False
+    assert {v["state"] for v in silent["locations"].values()} == {"unobserved"}
+    assert "home-.claude" in silent["unprotected"]
+
+
+def test_a6_global_location_recorded_on_or_unobserved_must_be_one_the_bridge_protects():
+    """The bridge protects the system directory and the XDG config directory of the environment the session runs
+    in; a location recorded ``on`` or ``unobserved`` outside them is named in ``unprotected`` and fails the case."""
+    from opencode_probe import record
+    from opencode_probe.adapter import c_a6
+
+    loaded_in_control = {"xdg-config/plugin/flat-js", "xdg-config/plugin/flat-ts", "xdg-config/plugin/dir"}
+    healthy = _globals(loaded_in_control, set())
+    assert healthy["unprotected"] == []
+    assert healthy["locations"]["system"]["state"] == "unobserved"
+    assert healthy["locations"]["xdg-config"]["with_variable"] is False
+    on = _globals(loaded_in_control | {"home-.claude/plugins/flat-js"}, {"home-.claude/plugins/flat-js"})
+    assert on["unprotected"] == ["home-.claude"]
+    xdg_on = _globals(loaded_in_control, {"xdg-config/plugin/flat-js"})
+    assert xdg_on["locations"]["xdg-config"]["state"] == "on" and xdg_on["unprotected"] == []
+    other_system = _globals(loaded_in_control, set(), names={**GLOBAL_NAMES, "system": "/etc/another-opencode"})
+    assert "system" in other_system["unprotected"]
+    odd = _globals(loaded_in_control, set(), names={**GLOBAL_NAMES, "home_directories": [".agents"]})
+    assert "home-.claude" in odd["unprotected"]
+    routes = {"any_on": False, "project_config_off": True}
+    config_dir = {"marked_executed": False, "config_dir_write_refused": True}
+    assert c_a6.status(routes, config_dir, healthy, True) == record.PASS
+    assert c_a6.status(routes, config_dir, on, True) == record.FAIL
+    assert c_a6.status(routes, config_dir, odd, True) == record.FAIL
+
+
 def test_binary_facts_read_the_global_directories_out_of_the_discovery_function():
     from opencode_probe.adapter import binary_facts
 
@@ -2290,7 +2330,9 @@ def test_adapter_record_a6_holds():
     assert evidence["scan_names"] and evidence["config_file_names"]
     assert evidence["config_dir_write_refused"] is True and evidence["marked_executed"] is False
     assert {c for c, v in evidence["config_dir"]["calls"].items() if v["refused"] and not v["executed"]} == {
-        "write", "edit", "shell"}
+        "write", "edit", "shell", "write-global"}
+    global_dirs = evidence["global_plugin_dirs"]
+    assert global_dirs["runs_ok"] is True and global_dirs["unprotected"] == []
 
 
 # --- guards on what this stage may not change --------------------------------------------------------

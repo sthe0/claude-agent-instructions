@@ -26,15 +26,18 @@ Two facts the gate shim depends on, observed rather than assumed:
   when every member is ``off`` or ``absent`` and the tool-file route is ``off`` or ``absent``.
 * ``global_plugin_dirs`` (``facts_global``): the locations outside the project that OpenCode loads plugin code from
   (the system directory, the XDG config directory, ``~/.agents``, ``~/.claude``, the directory above the binary),
-  each run as a pair and recorded as ``on`` / ``off`` / ``absent`` / ``unobserved``. They are protected by the gate
-  rather than required to be off, so a location that loads does not fail the case.
+  each run as a pair (each run also loads the plugin its own config names, the positive control) and recorded as
+  ``on`` / ``off`` / ``absent`` / ``unobserved``. They are protected by the gate rather than required to be off, so
+  a location that loads does not fail the case; one recorded ``on`` or ``unobserved`` that is not among the bridge's
+  ``global_config_locations`` for the probe's isolated environment does (``unprotected``).
 * ``config_dir_writes``: with the gate shim loaded, a write, an edit and a shell redirect into the session's own
   config directory, and a write into the global OpenCode config directory, are each refused (``refused:
   config-dir``) and leave their target as it was (``config_dir_write_refused``).
 
 pass when every run exited 0 and produced its log, ``project_config_off`` and ``config_dir_write_refused`` hold;
-fail when a member loads with the variable set (K7: the gates cannot be secured) or a config-directory write
-executed (``marked_executed``); unobserved otherwise.
+fail when a member loads with the variable set (K7: the gates cannot be secured), a config-directory write
+executed (``marked_executed``), or a global location recorded ``on`` or ``unobserved`` is not protected by the
+bridge; unobserved otherwise.
 """
 import json
 
@@ -159,8 +162,12 @@ def run(ctx):
     observed = (bool(entries) and all(e["exit_code"] is not None for e in throws.values()) and bool(marker)
                 and forms["before_count"] == forms["call_count"] and bool(search["outputs"])
                 and spellings["before_count"] == spellings["call_count"] and routes["runs_ok"]
-                and global_dirs["control_exit"] == 0 and global_dirs["off_exit"] == 0)
-    if routes["any_on"] or config_dir["marked_executed"]:
-        return runner.result(record.FAIL, evidence)
+                and global_dirs["runs_ok"])
+    return runner.result(status(routes, config_dir, global_dirs, observed), evidence)
+
+
+def status(routes, config_dir, global_dirs, observed):
+    if routes["any_on"] or config_dir["marked_executed"] or global_dirs["unprotected"]:
+        return record.FAIL
     passed = observed and routes["project_config_off"] and config_dir["config_dir_write_refused"]
-    return runner.result(record.PASS if passed else record.UNOBSERVED, evidence)
+    return record.PASS if passed else record.UNOBSERVED

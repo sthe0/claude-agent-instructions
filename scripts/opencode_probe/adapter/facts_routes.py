@@ -112,6 +112,12 @@ def _probe_text(member: dict) -> str:
     return text.replace("export default {", "export const probe = {") if member["form"] == "named" else text
 
 
+def own_plugin_files() -> dict[str, str]:
+    """The plugin a run's own config names (``MD_PLUGIN``): it logs a listing when it loads, so a run in which it
+    did not load observed no route at all."""
+    return {"mdir/index.mjs": (sa.ASSETS / MD_SOURCE).read_text(encoding="utf-8"), "mdir/package.json": PACKAGE}
+
+
 def member_files(plugin_members: list[dict], tool_members: list[dict], names: dict) -> dict[str, str]:
     """The files of the project, by path under the run root: one probe module per member, the config files that
     name a plugin directory, a ``package.json`` in each scanned directory, and the prompt files."""
@@ -135,8 +141,7 @@ def member_files(plugin_members: list[dict], tool_members: list[dict], names: di
         files[f"{SUBDIR}/{scan}/package.json"] = SCAN_PACKAGE
     for name, kind, path in MARKDOWN:
         files[path] = _markdown_text(name, kind)
-    files["mdir/index.mjs"] = (sa.ASSETS / MD_SOURCE).read_text(encoding="utf-8")
-    files["mdir/package.json"] = PACKAGE
+    files.update(own_plugin_files())
     return files
 
 

@@ -21,6 +21,9 @@ binary's list is the expected one), ``unobserved`` (anything else). The gate pro
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from opencode_probe.adapter import binary_facts, facts_a6, facts_routes, shared_a as sa
 
 SUBDIR = facts_a6.SUBDIR
@@ -106,35 +109,63 @@ def location_states(candidates: list[dict], members: list[dict], control: dict, 
     return result
 
 
+def unprotected_locations(candidates: list[dict], states: dict[str, dict], root) -> list[str]:
+    """The ids of the locations recorded ``on`` or ``unobserved`` that the bridge's protected set does not cover:
+    the directory is neither one of ``global_config_locations`` for the environment the probe runs in (``HOME``
+    and ``XDG_CONFIG_HOME`` inside ``root``) nor inside one. A location the gate cannot be shown to protect is a
+    location a session could plant plugin code in."""
+    from lib import opencode_events as oe
+
+    base = Path(root)
+    protected = [Path(os.path.realpath(p)) for p in oe.global_config_locations(
+        {"HOME": str(base / "home"), "XDG_CONFIG_HOME": str(base / "xdg" / "config")})]
+    found = []
+    for candidate in candidates:
+        if states[candidate["id"]]["state"] not in ("on", "unobserved"):
+            continue
+        directory = (Path(os.path.realpath(base / candidate["path"])) if candidate["path"] is not None
+                     else Path(candidate.get("directory") or oe.SYSTEM_CONFIG_DIR))
+        if not any(directory == p or p in directory.parents for p in protected):
+            found.append(candidate["id"])
+    return found
+
+
 def global_plugin_dirs(h, off_env: dict[str, str], names: dict | None = None,
                        plugin_directories: list[str] | None = None) -> dict:
     """Three runs of one session with the same files placed in every probed location: the control without the
     variable, and the run with ``off_env``, both with ``OPENCODE_CONFIG_DIR`` emptied (the harness sets it, and a
     set one makes the binary skip the XDG directory), and a third with ``off_env`` and the harness's config
-    directory, recorded as ``loaded_with_config_dir``. The record carries the names derived from the binary, each
-    location's state, and the exit codes of the runs."""
+    directory, recorded as ``loaded_with_config_dir``. Each run also loads the plugin its own config names
+    (``own_plugin_loaded``): a run in which it did not load observed nothing, as for the project routes. The
+    record carries the names derived from the binary, each location's state, the exit codes of the runs and
+    ``unprotected``, the locations recorded ``on`` or ``unobserved`` that the bridge does not protect."""
     if names is None:
         names = binary_facts.global_names(binary_facts.binary_text())
     if plugin_directories is None:
         plugin_directories = binary_facts.plugin_directory_names(binary_facts.binary_text())
     candidates = locations(names)
     members = derive_members(names, plugin_directories)
-    files = member_files(members)
-    env = {"ROUTEPROBE_LOG": "{root}/routes.log", CONFIG_DIR_ENV: ""}
-    config = {"plugins": [sa.PROBE_PLUGIN]}
+    files = {**member_files(members), **facts_routes.own_plugin_files()}
+    env = {"ROUTEPROBE_LOG": "{root}/routes.log", "MDPROBE_LOG": "{root}/md.log", CONFIG_DIR_ENV: ""}
+    config = {"plugins": [sa.PROBE_PLUGIN, facts_routes.MD_PLUGIN]}
     control_run = h.run(facts_routes.SCENARIO, label="globals-control", config=config, files=files, env=env,
                         cwd=SUBDIR, timeout=180)
     off_run = h.run(facts_routes.SCENARIO, label="globals-off", config=config, files=files, env={**env, **off_env},
                     cwd=SUBDIR, timeout=180)
     with_config_dir = h.run(facts_routes.SCENARIO, label="globals-off-config-dir", config=config, files=files,
-                            env={"ROUTEPROBE_LOG": "{root}/routes.log", **off_env}, cwd=SUBDIR, timeout=180)
+                            env={"ROUTEPROBE_LOG": "{root}/routes.log", "MDPROBE_LOG": "{root}/md.log", **off_env},
+                            cwd=SUBDIR, timeout=180)
     control, off = facts_routes._observed(control_run, members), facts_routes._observed(off_run, members)
     with_dir = facts_routes._observed(with_config_dir, members)
     list_ok = bool(names) and all(names.get(key) == value for key, value in binary_facts.EXPECTED_GLOBALS.items())
-    exits_ok = control["exit"] == 0 and off["exit"] == 0
-    states = location_states(candidates, members, control, off, list_ok=list_ok, exits_ok=exits_ok)
+    runs_ok = (control["exit"] == 0 and off["exit"] == 0 and control["own_plugin_loaded"]
+               and off["own_plugin_loaded"])
+    states = location_states(candidates, members, control, off, list_ok=list_ok, exits_ok=runs_ok)
     return {"names": names, "plugin_directories": plugin_directories, "list_expected": list_ok,
             "control_exit": control["exit"], "off_exit": off["exit"], "variable": dict(off_env),
+            "runs_ok": runs_ok, "control_own_plugin_loaded": control["own_plugin_loaded"],
+            "off_own_plugin_loaded": off["own_plugin_loaded"],
+            "unprotected": unprotected_locations(candidates, states, control_run.root),
             "locations": states,
             "loaded_with_variable": sorted(k for k, v in states.items() if v["state"] == "on"),
             "with_config_dir_exit": with_dir["exit"],
