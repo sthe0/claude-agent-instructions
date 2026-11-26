@@ -19,6 +19,7 @@ from opencode_probe.mechanisms import c_p5
 
 CASE_ID = "A2"
 K7 = True
+PROMPT_TIMEOUT_S = 180.0  # the first prompt waits for the server to boot the location; a cancelled call aborts the prompt
 
 
 def _state_file(root, session):
@@ -45,7 +46,7 @@ def run(ctx):
         state_file = _state_file(svc.world.root, session)
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text("{}\n", encoding="utf-8")
-        svc.call("POST", f"/api/session/{session}/prompt", {"text": "go"})
+        svc.call("POST", f"/api/session/{session}/prompt", {"text": "go"}, timeout=PROMPT_TIMEOUT_S)
         forms = svc.wait_until(lambda: (svc.call("GET", f"/api/session/{session}/form")[1] or {}).get("data"), 30)
         if not forms:
             return runner.result(record.ABSENT, {"pending_forms": []})
