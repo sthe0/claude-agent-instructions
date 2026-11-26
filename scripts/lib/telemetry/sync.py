@@ -490,23 +490,59 @@ def _read_task_keys(conn, epochs) -> dict:
     return found
 
 
+def _spawn_row(conn, session: str):
+    """(parent session, time, fields) of the earliest spawn event naming `session` as its child."""
+    return conn.execute(
+        "SELECT session_id, time, fields FROM events WHERE kind = 'spawn' AND child_session_id = ? "
+        "ORDER BY time LIMIT 1", (session,)).fetchone()
+
+
+def _parent_of(events: list, spawn_row) -> "str | None":
+    sess_event = next((f for _, kind, _, f in events if kind == "session"), None)
+    return (sess_event or {}).get("parent_session") or (spawn_row[0] if spawn_row else None)
+
+
+def _session_epoch(conn, session: str) -> "str | None":
+    row = conn.execute("SELECT task_epoch FROM sessions WHERE session_id = ?", (session,)).fetchone()
+    return row[0] if row else None
+
+
 def _read_session(conn, session: str, outside: bool = False) -> dict:
     """What _materialize_session reads by scanning a session's events: the events themselves, its
-    task opens and the first task row its events open. Read `outside` the write transaction, it
-    also holds `task_keys`, the task rows of every epoch the session's spawn and judge events name
-    or its task opens open, so the transaction looks none of them up; inside, the map is empty and
-    each lookup runs where it is needed."""
+    task opens and the first task row its events open.
+
+    When read outside the write transaction (`outside`), the dict also holds `task_keys`: the task
+    rows of every epoch the transaction may need. These are the epochs of the session's task opens
+    and first open, the ones its spawn and judge events name, and those its session row already
+    holds. A child session with no task open of its own takes its key from its parent, so for it
+    the map also holds the epoch the spawn names and the parent's opens and session-row epoch, and
+    the dict keeps the parent's opens (`parent`, `parent_opens`). The transaction then runs no
+    tasks lookup unless a row was filed after this read. Read inside the transaction, there is
+    nothing to save by reading ahead, so the map is empty and each lookup runs where it is needed."""
     events = _session_events(conn, session)
     opens = _task_opens(conn, session)
     first_open = _first_open(conn, session)
-    task_keys = {}
-    if outside:
-        epochs = [i for _, i in opens]
-        epochs += [f.get("task_epoch") for _, kind, _, f in events if kind in ("spawn", "judge")]
-        if first_open:
-            epochs.append(first_open[2])
-        task_keys = _read_task_keys(conn, epochs)
-    return {"events": events, "opens": opens, "first_open": first_open, "task_keys": task_keys}
+    read = {"events": events, "opens": opens, "first_open": first_open, "task_keys": {}}
+    if not outside or not events:
+        return read
+    epochs = [i for _, i in opens]
+    epochs += [f.get("task_epoch") for _, kind, _, f in events if kind in ("spawn", "judge")]
+    epochs.append(_session_epoch(conn, session))
+    if first_open:
+        # Usually one of `opens`; kept for a row the importer filed under another task event.
+        epochs.append(first_open[2])
+    else:
+        spawn_row = _spawn_row(conn, session)
+        parent = _parent_of(events, spawn_row)
+        if parent:
+            parent_opens = _task_opens(conn, parent)
+            epochs += [i for _, i in parent_opens]
+            epochs.append(_session_epoch(conn, parent))
+            if spawn_row:
+                epochs.append(_fields(spawn_row[2]).get("task_epoch"))
+            read.update(parent=parent, parent_opens=parent_opens)
+    read["task_keys"] = _read_task_keys(conn, epochs)
+    return read
 
 
 def _read_outside(task_rows: bool, session: str):
@@ -561,21 +597,21 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
     if not events:
         return
     sess_event = next((f for _, kind, _, f in events if kind == "session"), None)
-    spawn_row = conn.execute(
-        "SELECT session_id, time, fields FROM events WHERE kind = 'spawn' AND child_session_id = ? "
-        "ORDER BY time LIMIT 1", (session,)).fetchone()
+    spawn_row = _spawn_row(conn, session)
     spawn = _fields(spawn_row[2]) if spawn_row else None
-    parent = (sess_event or {}).get("parent_session") or (spawn_row[0] if spawn_row else None)
+    parent = _parent_of(events, spawn_row)
     role = _session_role(sess_event, spawn)
     depth = (sess_event or {}).get("depth")
     if depth is None:
         depth = 1 if parent else 0
     conn.execute(SESSION_UPSERT, (session, origin, parent, role, tables.validate("roles", role), depth, events[0][2]))
 
+    task_keys = read.get("task_keys") or {}
     key = read["first_open"]
     if key is None and parent:
         stamp = spawn_row[1] if spawn_row else events[0][2]
-        key = _task_key_for(conn, parent, stamp, (spawn or {}).get("task_epoch"))
+        parent_opens = read.get("parent_opens") if read.get("parent") == parent else None
+        key = _task_key_for(conn, parent, stamp, (spawn or {}).get("task_epoch"), parent_opens, task_keys)
     if key is not None:
         conn.execute(
             "UPDATE sessions SET task_origin = ?, task_id = ?, task_epoch = ? WHERE session_id = ? AND task_id IS NULL",
@@ -584,7 +620,6 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
         "SELECT task_origin, task_id, task_epoch FROM sessions WHERE session_id = ?", (session,)).fetchone()
     session_key = tuple(session_key) if session_key and session_key[1] is not None else None
 
-    task_keys = read.get("task_keys") or {}
     if parent is None:
         put_contour(conn, session, None, "root", session_key, task_keys)
     elif spawn_row is None:
@@ -601,7 +636,7 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
             put_contour(conn, event_id, session, "judge", key, task_keys)
     _file_causes(conn, origin, session, events)
     for contour_id in subagents:
-        put_contour(conn, contour_id, session, "agent-tool", session_key)
+        put_contour(conn, contour_id, session, "agent-tool", session_key, task_keys)
     for kind, text in artifacts:
         _put_artifact(conn, kind, text, session_key, events[-1][2])
 

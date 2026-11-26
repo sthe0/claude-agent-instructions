@@ -12,6 +12,7 @@ _SYNC = "scripts/lib/telemetry/sync.py"
 _S = "scripts/tests/test_telemetry_sync_scale.py::"
 _NO_TASKS = _S + "test_file_session_runs_no_tasks_query_inside_write_transaction"
 _AT_SCALE = _S + "test_file_session_at_scale_runs_no_tasks_query_inside_write_transaction"
+_KIN = _S + "test_child_session_and_subagents_filed_without_tasks_query_inside_write_transaction"
 
 MUTANTS = [
     {"name": "tasks_epoch_index_dropped", "file": _MIGRATION,
@@ -31,4 +32,12 @@ MUTANTS = [
      "anchor": "    if task_keys and epoch in task_keys:\n        return task_keys[epoch]\n",
      "replacement": "    if task_keys:\n        return task_keys.get(epoch)\n",
      "tests": [_S + "test_file_session_falls_back_inside_transaction_on_outside_miss"]},
+    {"name": "child_session_key_looked_up_inside_transaction", "file": _SYNC,
+     "anchor": '(spawn or {}).get("task_epoch"), parent_opens, task_keys)',
+     "replacement": '(spawn or {}).get("task_epoch"))',
+     "tests": [_KIN]},
+    {"name": "subagent_contour_weight_looked_up_inside_transaction", "file": _SYNC,
+     "anchor": 'put_contour(conn, contour_id, session, "agent-tool", session_key, task_keys)',
+     "replacement": 'put_contour(conn, contour_id, session, "agent-tool", session_key)',
+     "tests": [_KIN]},
 ]

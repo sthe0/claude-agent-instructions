@@ -721,6 +721,33 @@ def test_file_session_falls_back_inside_transaction_on_outside_miss(record, monk
     assert ("late-spawn", "task-later", "late-later", "SUBSTANTIVE") in _contour_keys(late)
 
 
+def test_child_session_and_subagents_filed_without_tasks_query_inside_write_transaction(monkeypatch):
+    """A child session with no task open of its own takes its key from its parent, and each
+    session's subagent contours take the session's key: neither looks a task row up inside the
+    transaction once the outside read holds them."""
+    parent, child = "kin-parent", "kin-child"
+    assert store.insert_rows("events", [
+        _event("kin-open", parent, "task", 0, '{"action":"open","task_id":"task-kin"}'),
+        _event("kin-weigh", parent, "command", 1, '{"task_epoch":"kin-open","weight_class":"SUBSTANTIVE"}'),
+        _event("kin-spawn", parent, "spawn", 2, '{"task_epoch":"kin-open"}', child=child),
+        _event("kin-child-s", child, "session", 3, '{"parent_session":"%s","depth":1}' % parent),
+        _event("kin-child-cmd", child, "command", 4, "{}")])["inserted"] == 5
+    monkeypatch.setattr(sync, "subagent_contours", lambda session: [f"{session}/agent-1"])
+    filed = FiledStatements(monkeypatch)
+
+    assert sync.materialize([child])["committed"] is True
+
+    assert filed.tasks_statements_in_file_session() == []
+    for session in (parent, child):
+        assert (f"{session}/agent-1", "task-kin", "kin-open", "SUBSTANTIVE") in _contour_keys(session)
+    conn = store.open_record()
+    try:
+        assert conn.execute("SELECT task_epoch FROM sessions WHERE session_id = ?", (child,)).fetchone() == (
+            "kin-open",)
+    finally:
+        conn.close()
+
+
 SCALE = "scale-session"
 SCALE_SPAWNS = 1000
 SCALE_TASKS = 20_000
