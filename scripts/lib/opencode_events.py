@@ -889,6 +889,8 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: froz
         payload["cwd"] = run_directory(tool, args, directory, strict=strict)
         payload["tool_input"] = claude_input(tool, args, directory, strict=strict)
         if strict:
+            if payload["tool_name"] == "Edit":
+                require_exact_edit(payload["tool_input"]["file_path"], payload["tool_input"]["old_string"])
             require_no_config_dir_write(payload["tool_name"], payload["tool_input"], payload["cwd"], environ)
         payload["tool_use_id"] = data.get("id")
         if event == "tool.execute.after":

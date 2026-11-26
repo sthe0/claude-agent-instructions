@@ -505,8 +505,40 @@ def test_a_tilde_edit_of_the_live_settings_file_is_refused_by_the_real_row(tmp_p
     verdict = json.loads(proc.stdout)
     assert verdict["decision"] == "deny" and verdict["script"] == "hook-guard-permission-surface.py", proc.stdout
     assert settings.read_text(encoding="utf-8") == NARROW
+    (home / "notes.txt").write_text("a", encoding="utf-8")
     harmless = _call(tmp_path, "edit", {"path": "~/notes.txt", "oldString": "a", "newString": "b"})
     assert json.loads(_event(tmp_path, "tool.execute.before", harmless, [], HOME=str(home)).stdout)["decision"] == "allow"
+
+
+def _edit_verdict(tmp_path, target, old, rows=()):
+    data = _call(tmp_path, "edit", {"path": str(target), "oldString": old, "newString": "n"})
+    return json.loads(_event(tmp_path, "tool.execute.before", data, list(rows)).stdout)
+
+
+def test_an_edit_whose_old_string_is_not_in_the_file_exactly_is_refused_before_any_row_runs(tmp_path):
+    """OpenCode matches oldString fuzzily (curly quotes, indentation); the rows would see another edit than the
+    one made. Reverting the ``require_exact_edit`` call in ``build_payload`` turns the first verdict to allow."""
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    target = tmp_path / "f.txt"
+    target.write_text("say 'hi'\n    indented\n", encoding="utf-8")
+    for fuzzy in ("say ‘hi’", "\tindented", "say  'hi'"):
+        verdict = _edit_verdict(tmp_path, target, fuzzy, [row])
+        assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: argument "), (fuzzy, verdict)
+    assert not Path(recorded).exists()
+    assert target.read_text(encoding="utf-8") == "say 'hi'\n    indented\n"
+    assert _edit_verdict(tmp_path, target, "say 'hi'", [row])["decision"] == "allow"
+    assert _edit_verdict(tmp_path, target, "", [row])["decision"] == "allow"
+
+
+def test_an_edit_of_a_file_the_bridge_cannot_read_exactly_is_refused(tmp_path):
+    (tmp_path / "real.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "link.txt").symlink_to(tmp_path / "real.txt")
+    (tmp_path / "dir").mkdir()
+    big = tmp_path / "big.txt"
+    big.write_bytes(b"a" * (oe.EDIT_FILE_MAX_BYTES + 1))
+    for target in (tmp_path / "missing.txt", tmp_path / "link.txt", tmp_path / "dir", big):
+        verdict = _edit_verdict(tmp_path, target, "a")
+        assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: argument "), (target, verdict)
 
 
 @pytest.mark.parametrize("tool, args", [
@@ -523,6 +555,7 @@ def test_an_unrecorded_path_form_is_refused_before_any_row_runs(tmp_path, tool, 
 def test_relative_paths_reach_the_rows_absolute(tmp_path):
     row, recorded = _record_rows(tmp_path, "PreToolUse", "Read|Write|Edit|Glob|Grep")
     directory = str(tmp_path)
+    (tmp_path / "e.txt").write_text("o", encoding="utf-8")
     steps = [("read", {"path": "a/../r.txt"}), ("write", {"path": "w.txt", "content": "c"}),
              ("edit", {"path": "e.txt", "oldString": "o", "newString": "n"}), ("grep", {"pattern": "p", "path": "g"}),
              ("glob", {"pattern": "*.py"}), ("read", {"path": "/abs/x"})]
@@ -606,7 +639,6 @@ def test_no_bridge_path_opens_the_file_a_tool_names(tmp_path, monkeypatch):
     rows = oe.load_rows([tmp_path / "layer"], None)
     transcript = oe.shadow_transcript_path(tmp_path / "oc", "ses_t")
     calls = [("read", {"path": str(secret)}), ("write", {"path": str(secret), "content": "c"}),
-             ("edit", {"path": str(secret), "oldString": "o", "newString": "n"}),
              ("patch", {"patchText": f"*** Update File: {secret}\n@@\n-x\n+y"}),
              ("grep", {"pattern": "p", "path": str(secret)}), ("glob", {"pattern": "*", "path": str(tmp_path)})]
     for index, (tool, args) in enumerate(calls):
@@ -618,6 +650,9 @@ def test_no_bridge_path_opens_the_file_a_tool_names(tmp_path, monkeypatch):
             except oe.UnshowableCall:
                 assert tool == "patch" and event == "tool.execute.before"
     assert str(secret) not in opened and str(secret.resolve()) not in opened
+    edit = {"path": str(secret), "oldString": "FILE-CONTENT", "newString": "n"}
+    bridge._decide_call("tool.execute.before", _call(tmp_path, "edit", edit, "c-edit"), rows, frozenset(), transcript)
+    assert str(secret) in opened, "an edit is the one call whose file the bridge opens, to see oldString occurs in it"
     text = transcript.read_text(encoding="utf-8")
     assert "FILE-CONTENT-SENTINEL" not in text and "tool_use" in text
 
