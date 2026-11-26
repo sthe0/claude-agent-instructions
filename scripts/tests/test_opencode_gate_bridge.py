@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1275,6 +1276,19 @@ def test_bridge_verdict_without_a_decision_refuses_a_pre_tool_event(tmp_path):
     assert result["results"][0]["threw"] == "refused: gate-setup the gate bridge answered no decision"
 
 
+def test_a_bridge_that_does_not_answer_in_time_refuses_the_call(tmp_path):
+    hanging = _script(tmp_path, "hanging-bridge.py",
+                      "import sys, time\nif sys.argv[1:2] == ['event']:\n    time.sleep(60)\n"
+                      "else:\n    print('[]' if sys.argv[1] == 'credential-paths' else '5')\n")
+    steps = [{"hook": "tool.execute.before", "input": {"tool": "read", "id": "c1", "sessionID": "s",
+                                                       "input": {"path": str(tmp_path / "x")}}}]
+    started = time.monotonic()
+    result = _shim(tmp_path, steps, AGENT_GATE_BRIDGE=str(hanging), AGENT_GATE_BRIDGE_TIMEOUT_MS="1500")
+    assert time.monotonic() - started < 30
+    threw = result["results"][0]["threw"]
+    assert threw.startswith("refused: gate-setup ") and "timed out" in threw, threw
+
+
 def _marker(tmp_path):
     return json.loads((tmp_path / "setup.marker").read_text(encoding="utf-8"))
 
@@ -1587,6 +1601,20 @@ def test_project_config_off_or_refused(tmp_path):
         assert after["decision"] == "allow", "an event that cannot refuse a call is not refused"
 
 
+def test_a_write_into_a_rows_script_or_the_bridge_code_is_refused_before_any_row_runs(tmp_path):
+    """The code the gates run is protected wherever it lives: the script of a row the session's rows name, the
+    bridge script and the library it imports (a worktree of the repo is no canon checkout, so no canon row
+    refuses there)."""
+    row, recorded = _record_rows(tmp_path, "PreToolUse")
+    row_script = Path(row["script"])
+    for path in (row_script, REPO / "scripts" / "opencode-gate-bridge.py", REPO / "scripts" / "lib" / "shell_tokens.py"):
+        for tool, args in (("write", {"path": str(path), "content": "x"}),
+                           ("shell", {"command": f"echo x > {path}"})):
+            verdict = _verdict(_event(tmp_path, "tool.execute.before", _call(tmp_path, tool, args), [row]))
+            assert verdict["decision"] == "deny" and verdict["reason"].startswith("refused: config-dir "), (path, tool)
+    assert not Path(recorded).exists()
+
+
 def test_config_dir_write_refused(tmp_path):
     """A write, an edit and a shell redirect into the session's config directory or the integration directory
     are refused before any row runs and leave the target as it was; the same calls elsewhere pass."""
@@ -1714,6 +1742,89 @@ def test_write_and_edit_paths_keep_the_lexical_resolution_of_opencodes_own_tools
     assert not outside.protected
 
 
+class _ProtectedWorld:
+    """Every file the gates' own code or config lives in, laid out under ``tmp_path``: the config file and the
+    extra-rows file named by the environment, the shim and its directory, the global plugin locations under
+    ``HOME`` and ``XDG_CONFIG_HOME``, the session directory's own ``.claude`` settings, and a hook row's script."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        self.home = tmp_path / "home"
+        self.xdg = tmp_path / "xdg"
+        self.work = tmp_path / "work"
+        for directory in (self.home, self.xdg, self.work / ".claude", tmp_path / "cfg", tmp_path / "plug"):
+            directory.mkdir(parents=True)
+        self.config_file = tmp_path / "opencode-main.json"
+        self.rows_file = tmp_path / "rows.toml"
+        self.shim = tmp_path / "plug" / "agent-gates.ts"
+        for path in (self.config_file, self.rows_file, self.shim):
+            path.write_text("x", encoding="utf-8")
+        monkeypatch.setenv("HOME", str(self.home))
+        self.environ = {oe.OPENCODE_CONFIG_DIR_ENV: str(tmp_path / "cfg"), "HOME": str(self.home),
+                        "XDG_CONFIG_HOME": str(self.xdg), INTEGRATION_ENV_NAME: str(tmp_path / "integration"),
+                        oe.OPENCODE_CONFIG_ENV: str(self.config_file), oe.EXTRA_ROWS_ENV: str(self.rows_file)}
+        self.hook = tmp_path / "hook-example.py"
+        self.hook.write_text("x", encoding="utf-8")
+        self.protected = {
+            "OPENCODE_CONFIG file": self.config_file, "AGENT_GATE_EXTRA_ROWS file": self.rows_file,
+            "the shim": self.shim, "a file beside the shim": self.shim.parent / "other.ts",
+            "xdg plugin": self.xdg / "opencode" / "plugin" / "x.js",
+            "xdg config": self.xdg / "opencode" / "opencode.json",
+            "home .config opencode plugin": self.home / ".config" / "opencode" / "plugin" / "x.ts",
+            "system directory": Path(oe.SYSTEM_CONFIG_DIR) / "plugin" / "x.js",
+            "project settings": self.work / ".claude" / "settings.json",
+            "project local settings": self.work / ".claude" / "settings.local.json",
+            "a hook row script": self.hook,
+        }
+        self.free = {"home .claude data": self.home / ".claude" / "projects" / "p.jsonl",
+                     "home .claude plugins (A6: absent)": self.home / ".claude" / "plugins" / "x" / "index.mjs",
+                     "home .agents plugin (A6: absent)": self.home / ".agents" / "plugin" / "x.ts",
+                     "project command": self.work / ".claude" / "commands" / "c.md",
+                     "xdg elsewhere": self.xdg / "other-tool" / "x.json", "scratch": self.work / "notes.txt"}
+
+    def hits(self, tool, path):
+        arguments = {"file_path": str(path)} if tool != "Bash" else {"command": f"echo x > {path}"}
+        return oe.config_dir_write_targets(tool, arguments, str(self.work), self.environ, directory=str(self.work),
+                                           plugin_paths=(str(self.shim),), extra=(str(self.hook),))
+
+
+@pytest.mark.parametrize("tool", ["Write", "Edit", "Bash"])
+def test_protected_set_covers_every_file_that_loads_code_or_holds_gate_state(tmp_path, monkeypatch, tool):
+    world = _ProtectedWorld(tmp_path, monkeypatch)
+    missed = [name for name, path in world.protected.items() if not world.hits(tool, path).protected]
+    assert missed == []
+    wrongly = [name for name, path in world.free.items() if world.hits(tool, path).protected]
+    assert wrongly == []
+
+
+def test_protected_set_covers_the_bridge_script_and_the_library_it_imports(tmp_path, monkeypatch):
+    world = _ProtectedWorld(tmp_path, monkeypatch)
+    bridge = REPO / "scripts" / "opencode-gate-bridge.py"
+    for path in (bridge, REPO / "scripts" / "lib" / "opencode_events.py", REPO / "scripts" / "lib" / "shell_tokens.py"):
+        assert world.hits("Write", path).protected, path
+
+
+def test_protected_set_follows_a_link_to_a_protected_file(tmp_path, monkeypatch):
+    world = _ProtectedWorld(tmp_path, monkeypatch)
+    link = world.work / "alias.json"
+    link.symlink_to(world.config_file)
+    assert world.hits("Write", link).protected and world.hits("Bash", link).protected
+
+
+def test_global_plugin_locations_follow_the_real_environment(tmp_path, monkeypatch):
+    """The locations are resolved from the environment the session really has: the XDG directory where
+    ``XDG_CONFIG_HOME`` names it, ``~/.config/opencode`` whether or not it is set (a command can change the
+    variable for the next session) and the system directory; the directories A6 observed ``absent`` are not."""
+    home = str(tmp_path / "h")
+    monkeypatch.setenv("HOME", home)
+    with_xdg = oe.global_config_locations({"HOME": home, "XDG_CONFIG_HOME": str(tmp_path / "x")})
+    without = oe.global_config_locations({"HOME": home})
+    assert str(tmp_path / "x" / "opencode") in with_xdg and oe.SYSTEM_CONFIG_DIR in with_xdg
+    assert str(tmp_path / "x" / "opencode") not in without
+    for found in (with_xdg, without):
+        assert os.path.join(home, ".config", "opencode") in found and oe.SYSTEM_CONFIG_DIR in found
+        assert not any(".claude" in path or ".agents" in path for path in found)
+
+
 def _rows_session(tmp_path, rows, session="ses_rs", **data):
     """One before-event of ``session`` under the rows file ``rows``; ``data`` may carry ``rowsDigest``."""
     return _verdict(_event(tmp_path, "tool.execute.before", {**_shell(tmp_path), "sessionID": session, **data}, rows))
@@ -1749,6 +1860,34 @@ def test_rows_snapshot_changed_mid_session_refused(tmp_path):
     assert nameless["decision"] == "deny" and nameless["reason"].startswith("refused: rows-snapshot ")
 
 
+def test_the_declared_mcp_servers_are_those_of_the_sessions_first_event(tmp_path):
+    """The config a session declared MCP servers in is read once with the rows: a server added to the file
+    mid-session is not known to that session, one removed from it stays known."""
+    def call(tool, **more):
+        data = {"tool": tool, "sessionID": "ses_mcp", "id": "call_m", "input": {}}
+        return _verdict(_event(tmp_path, "tool.execute.before", data, [], **more))
+
+    first = call("probesrv_x", **_mcp_config(tmp_path, ["probesrv"]))
+    assert not first["reason"].startswith("refused: unclassified"), first
+    pinned = {"rowsDigest": first["digest"]}
+    data = {"tool": "newsrv_x", "sessionID": "ses_mcp", "id": "call_n", "input": {}, **pinned}
+    added = _verdict(_event(tmp_path, "tool.execute.before", data, [], **_mcp_config(tmp_path, ["probesrv", "newsrv"])))
+    assert added["decision"] == "deny" and added["reason"].startswith("refused: unclassified "), added
+    data = {"tool": "probesrv_x", "sessionID": "ses_mcp", "id": "call_p", "input": {}, **pinned}
+    removed = _verdict(_event(tmp_path, "tool.execute.before", data, [], **_mcp_config(tmp_path, [])))
+    assert not removed["reason"].startswith("refused: unclassified"), removed
+
+
+def test_rows_snapshots_are_keyed_by_the_opencode_session_not_the_linked_childs_engine_session(tmp_path):
+    """Two OpenCode sessions of one linked child (one ``AGENTCTL_OWN_SESSION``) keep a snapshot each."""
+    for session in ("ses_one", "ses_two"):
+        verdict = _verdict(_event(tmp_path, "tool.execute.before", {**_shell(tmp_path), "sessionID": session}, [],
+                                  AGENTCTL_OWN_SESSION="U-child"))
+        assert verdict["digest"]
+    names = {p.name for p in oe.snapshots_dir(tmp_path / "oc").iterdir()}
+    assert names == {"ses_one.json", "ses_two.json"}
+
+
 def test_rows_snapshot_rebuilt_for_new_process(tmp_path):
     """An event with no digest (a new process of the shim) builds the snapshot again from the sources."""
     denier = _script(tmp_path, "deny_row.py", DENIER)
@@ -1764,14 +1903,17 @@ def test_rows_snapshot_rebuilt_for_new_process(tmp_path):
 # --- A6 route states: the pure rules and the derived runs ----------------------------------------------
 
 class _FakeRun:
-    def __init__(self, loaded, tool_name):
-        self.exit_code = 0
+    def __init__(self, loaded, tool_name, exit_code=0, own_plugin_loaded=True):
+        self.exit_code = exit_code
         self._loaded = sorted(loaded)
         self._tool_name = tool_name
+        self._own = own_plugin_loaded
 
     def read(self, name):
         if name == "routes.log":
             return "\n".join(json.dumps({"route": r, "at": "module"}) for r in self._loaded)
+        if name == "md.log" and self._own:
+            return json.dumps({"at": "list", "area": "skill", "names": []})
         return ""
 
     def tool_list(self):
@@ -1783,16 +1925,22 @@ class _FakeRun:
 
 class _FakeHarness:
     """Stands in for the probe harness: the control run loads ``control`` members, the run with the variable set
-    loads ``with_variable`` members."""
+    loads ``with_variable`` members. ``off_exit`` is the exit code of the run with the variable, ``own_in_off``
+    whether the plugin the run's own config names loaded in it, ``labels`` the labels it was asked to run."""
 
-    def __init__(self, control, with_variable):
+    def __init__(self, control, with_variable, off_exit=0, own_in_off=True):
         self.control, self.with_variable = control, with_variable
+        self.off_exit, self.own_in_off = off_exit, own_in_off
+        self.labels = []
 
     def run(self, scenario, *, label, config=None, files=None, env=None, cwd=None, timeout=None, **more):
         from opencode_probe.adapter import facts_routes
 
-        loaded = self.with_variable if "OPENCODE_DISABLE_PROJECT_CONFIG" in (env or {}) else self.control
-        return _FakeRun(loaded, facts_routes.tool_name)
+        self.labels.append(label)
+        off = "OPENCODE_DISABLE_PROJECT_CONFIG" in (env or {})
+        if off:
+            return _FakeRun(self.with_variable, facts_routes.tool_name, self.off_exit, self.own_in_off)
+        return _FakeRun(self.control, facts_routes.tool_name)
 
 
 NAMES = {"scan_names": [".claude", ".opencode"], "plugin_directory_names": ["plugin", "plugins"],
@@ -1834,6 +1982,121 @@ def test_a6_variable_that_stops_nothing_is_k7():
     result = _routes(loaded, {".claude/plugin/flat-js"})
     assert result["project_routes"][".claude/plugin/flat-js"]["state"] == "on"
     assert result["any_on"] is True and result["project_config_off"] is False
+
+
+@pytest.mark.parametrize("missing", ["scan_names", "plugin_directory_names", "config_file_names"])
+@pytest.mark.parametrize("empty", [None, []])
+def test_a6_names_the_binary_did_not_give_make_the_check_unobserved(missing, empty):
+    """A list ``binary_facts`` could not derive (None) or derived empty leaves members out of the table: the check
+    must not pass on what is left."""
+    names = {**NAMES, missing: empty}
+    result = _routes(_opencode_dir_members(), set(), names=names)
+    assert result["names_derived"] is False and result["project_config_off"] is False
+    assert _routes(_opencode_dir_members(), set())["project_config_off"] is True
+
+
+def test_a6_off_run_that_failed_or_lost_its_own_plugin_proves_nothing():
+    """The run with the variable must exit 0 and still load the plugin its own config names; without that a
+    member not seen loading is ``unobserved``, not ``off`` or ``absent``, and the exit codes are recorded."""
+    from opencode_probe.adapter import facts_routes
+
+    def run(**options):
+        harness = _FakeHarness(set(_opencode_dir_members()), set(), **options)
+        return facts_routes.project_routes(harness, oe.PROJECT_CONFIG_OFF, names=NAMES)
+
+    healthy = run()
+    assert healthy["runs_ok"] is True and healthy["project_config_off"] is True
+    assert healthy["route_runs"][0]["off_exit"] == 0 and healthy["route_runs"][0]["control_exit"] == 0
+    for broken, why in ((run(off_exit=1), "exit"), (run(own_in_off=False), "own plugin")):
+        assert broken["runs_ok"] is False and broken["project_config_off"] is False, why
+        assert {r["state"] for r in broken["project_routes"].values()} == {"unobserved"}, why
+        assert broken["tool_file_route"]["state"] == "unobserved", why
+    assert run(off_exit=1)["route_runs"][0]["off_exit"] == 1
+    loaded = _FakeHarness(set(_opencode_dir_members()), {".claude/plugin/flat-js"}, off_exit=1)
+    still_on = facts_routes.project_routes(loaded, oe.PROJECT_CONFIG_OFF, names=NAMES)
+    assert still_on["any_on"] is True
+
+
+def test_a6_config_file_names_are_read_in_runs_of_their_own():
+    """``opencode.json`` and ``opencode.jsonc`` in one run may shadow each other: each further config file name
+    gets its own pair of runs, holding only its members."""
+    from opencode_probe.adapter import facts_routes
+
+    names = {**NAMES, "config_file_names": ["opencode.json", "opencode.jsonc"]}
+    harness = _FakeHarness(set(), set())
+    facts_routes.project_routes(harness, oe.PROJECT_CONFIG_OFF, names=names)
+    assert harness.labels == ["routes-control", "routes-off", "routes-opencode-jsonc-control",
+                              "routes-opencode-jsonc-off"]
+    members = facts_routes.derive_members(names)
+    plan = facts_routes.batches(members, facts_routes.tool_file_members(), names)
+    assert [label for label, _, _ in plan] == ["routes", "routes-opencode-jsonc"]
+    assert {m["file_name"] for m in plan[1][1]} == {"opencode.jsonc"} and plan[1][2] == []
+    assert not any(m.get("file_name") == "opencode.jsonc" for m in plan[0][1])
+    assert {m["id"] for _, group, _ in plan for m in group} == {m["id"] for m in members}
+
+
+GLOBAL_NAMES = {"home_directories": [".agents", ".claude"], "xdg_config": True, "system": "/etc/opencode"}
+
+
+def _globals(control_ids, variable_ids, names=GLOBAL_NAMES, **options):
+    from opencode_probe.adapter import facts_global
+
+    harness = _FakeHarness(set(control_ids), set(variable_ids), **options)
+    return facts_global.global_plugin_dirs(harness, oe.PROJECT_CONFIG_OFF, names=names,
+                                           plugin_directories=["plugin", "plugins"])
+
+
+def test_a6_global_plugin_dirs_states_and_the_conditions_for_absent():
+    """``absent`` and ``off`` need a control that loaded the same form somewhere and runs that exited 0; the
+    system directory can never be placed in the run root, so it is always ``unobserved``."""
+    nothing = _globals(set(), set())
+    assert {v["state"] for v in nothing["locations"].values()} == {"unobserved"}
+    loaded_in_control = {"xdg-config/plugin/flat-js", "xdg-config/plugin/flat-ts", "xdg-config/plugin/dir"}
+    healthy = _globals(loaded_in_control, set())
+    states = {k: v["state"] for k, v in healthy["locations"].items()}
+    assert states["xdg-config"] == "off" and states["home-.claude"] == "absent", states
+    assert states["system"] == "unobserved" and healthy["locations"]["system"]["path"] is None
+    assert healthy["loaded_with_variable"] == [] and "system" in healthy["unobserved"]
+    on = _globals(loaded_in_control | {"home-.claude/plugins/flat-js"}, {"home-.claude/plugins/flat-js"})
+    assert on["locations"]["home-.claude"]["state"] == "on" and on["loaded_with_variable"] == ["home-.claude"]
+    failed = _globals(loaded_in_control, set(), off_exit=1)
+    assert {v["state"] for v in failed["locations"].values()} == {"unobserved"} and failed["off_exit"] == 1
+    odd = _globals(loaded_in_control, set(), names={**GLOBAL_NAMES, "home_directories": [".agents"]})
+    assert odd["list_expected"] is False and odd["locations"]["home-.claude"]["state"] == "unobserved"
+    none_derived = _globals(loaded_in_control, set(), names={})
+    assert none_derived["list_expected"] is False and none_derived["locations"]["home-.claude"]["state"] == "unobserved"
+    assert none_derived["locations"]["xdg-config"]["derived"] is False
+
+
+def test_a6_global_runs_empty_the_config_dir_variable_and_record_the_run_that_sets_it():
+    """A set ``OPENCODE_CONFIG_DIR`` makes the binary skip the XDG directory (live: loaded without it, not with it),
+    so the control and the run with the variable must run without it; a third run with it is recorded."""
+    from opencode_probe.adapter import facts_global
+
+    class Recording(_FakeHarness):
+        def run(self, scenario, *, label, env=None, **more):
+            self.envs = getattr(self, "envs", {})
+            self.envs[label] = dict(env or {})
+            return super().run(scenario, label=label, env=env, **more)
+
+    harness = Recording(set(), set())
+    record = facts_global.global_plugin_dirs(harness, oe.PROJECT_CONFIG_OFF, names=GLOBAL_NAMES,
+                                             plugin_directories=["plugin"])
+    assert harness.envs["globals-control"]["OPENCODE_CONFIG_DIR"] == ""
+    assert harness.envs["globals-off"]["OPENCODE_CONFIG_DIR"] == ""
+    assert "OPENCODE_CONFIG_DIR" not in harness.envs["globals-off-config-dir"]
+    assert record["with_config_dir_exit"] == 0 and record["loaded_with_config_dir"] == []
+
+
+def test_binary_facts_read_the_global_directories_out_of_the_discovery_function():
+    from opencode_probe.adapter import binary_facts
+
+    text = ('function bl(e="linux"){return Ue.make("/etc/opencode")}'
+            'var Ks=u("ConfigDiscovery.discover")(function*(e){let l=Ue.make(a.config),m=Ue.make(Gt.join(a.home,".agents")),'
+            'g=Ue.make(Gt.join(a.home,".claude"));return 1})')
+    names = binary_facts.global_names(text)
+    assert names == {"home_directories": [".agents", ".claude"], "xdg_config": True, "system": "/etc/opencode"}
+    assert binary_facts.global_names("no discovery function here") is None
 
 
 def test_adapter_case_modules_use_no_undefined_global():

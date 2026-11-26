@@ -75,15 +75,22 @@ const PROJECT_CONFIG_OFF = process.env.OPENCODE_DISABLE_PROJECT_CONFIG === "1" &
 // The digest of each session's rows snapshot, as the bridge answered it at the session's first event.
 const digests = new Map();
 
+// A bridge that does not answer in time is a failed bridge: the call is refused, not left waiting.
+const BRIDGE_TIMEOUT_MS = Number(process.env.AGENT_GATE_BRIDGE_TIMEOUT_MS) > 0 ? Number(process.env.AGENT_GATE_BRIDGE_TIMEOUT_MS) : 300000;
+
 function runBridge(args, input) {
   return new Promise((done) => {
     const child = spawn(PYTHON, [BRIDGE, ...args], { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done({ code: -2, out, err: `timed out after ${BRIDGE_TIMEOUT_MS} ms` });
+    }, BRIDGE_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => (out += chunk));
     child.stderr.on("data", (chunk) => (err += chunk));
-    child.on("error", (error) => done({ code: -1, out, err: String(error) }));
-    child.on("close", (code) => done({ code, out, err }));
+    child.on("error", (error) => (clearTimeout(timer), done({ code: -1, out, err: String(error) })));
+    child.on("close", (code) => (clearTimeout(timer), done({ code, out, err })));
     child.stdin.on("error", () => {});
     child.stdin.end(JSON.stringify(input));
   });

@@ -84,7 +84,8 @@ def derive_members(names: dict) -> list[dict]:
             for key in CONFIG_KEYS:
                 member_id = f"{location}{file_name}#{key}"
                 members.append({"id": member_id, "kind": "config-file", "form": f"config-{key}", "key": key,
-                                "path": f"{SUBDIR}/{location}{file_name}", "target": f"rdir-{_slug(member_id)}"})
+                                "file_name": file_name, "path": f"{SUBDIR}/{location}{file_name}",
+                                "target": f"rdir-{_slug(member_id)}"})
     return members
 
 
@@ -171,6 +172,7 @@ def _observed(run, members: list[dict]) -> dict:
     descriptions = {"skill": run.tool_description("skill"), "agent": run.tool_description("subagent")}
     return {
         "exit": run.exit_code,
+        "own_plugin_loaded": bool(listed),
         "members": {m["id"]: {"module": bool(seen.get(m["id"], {}).get("module")),
                               "setup": bool(seen.get(m["id"], {}).get("setup")),
                               "tool_offered": tool_name(m["id"]) in offered} for m in members},
@@ -186,14 +188,19 @@ def loaded(observation: dict, member_id: str) -> bool:
     return seen["module"] or seen["setup"] or seen["tool_offered"]
 
 
-def plugin_member_states(members: list[dict], control: dict, off: dict, *, scan_list_ok: bool) -> dict[str, str]:
-    """``off`` / ``absent`` / ``unobserved`` / ``on`` per member (the module docstring has the rules)."""
+def plugin_member_states(members: list[dict], control: dict, off: dict, *, scan_list_ok: bool,
+                         runs_ok: bool = True) -> dict[str, str]:
+    """``off`` / ``absent`` / ``unobserved`` / ``on`` per member (the module docstring has the rules).
+    ``runs_ok`` is false when a run did not exit 0 or the plugin its own config names did not load in it: a
+    member that is not seen loading with the variable is then ``unobserved``, never ``off`` or ``absent``."""
     states: dict[str, str] = {}
     loaded_forms = {m["form"] for m in members if loaded(control, m["id"])}
     for member in members:
         in_control, with_variable = loaded(control, member["id"]), loaded(off, member["id"])
         if with_variable:
             states[member["id"]] = "on"
+        elif not runs_ok:
+            states[member["id"]] = "unobserved"
         elif in_control:
             states[member["id"]] = "off"
         elif member["form"] in loaded_forms and scan_list_ok:
@@ -204,9 +211,11 @@ def plugin_member_states(members: list[dict], control: dict, off: dict, *, scan_
 
 
 def tool_file_state(tool_members: list[dict], control: dict, off: dict, *, plugin_tool_offered_control: bool,
-                    scan_list_ok: bool, tool_directory_glob: bool) -> str:
+                    scan_list_ok: bool, tool_directory_glob: bool, runs_ok: bool = True) -> str:
     if any(loaded(off, m["id"]) for m in tool_members):
         return "on"
+    if not runs_ok:
+        return "unobserved"
     if any(loaded(control, m["id"]) for m in tool_members):
         return "off"
     if plugin_tool_offered_control and scan_list_ok and not tool_directory_glob:
@@ -214,8 +223,28 @@ def tool_file_state(tool_members: list[dict], control: dict, off: dict, *, plugi
     return "unobserved"
 
 
-def project_config_off(states: dict[str, str], tool_state: str) -> bool:
-    return bool(states) and all(s in ("off", "absent") for s in states.values()) and tool_state in ("off", "absent")
+def project_config_off(states: dict[str, str], tool_state: str, *, names_derived: bool = True) -> bool:
+    """True only when every member is ``off`` or ``absent``, the tool-file route too, and the binary's names were
+    all derived (an empty or missing list would leave members out, so the check would pass without testing)."""
+    return (names_derived and bool(states) and all(s in ("off", "absent") for s in states.values())
+            and tool_state in ("off", "absent"))
+
+
+def names_derived(names: dict) -> bool:
+    return all(names.get(key) for key in ("scan_names", "config_file_names", "plugin_directory_names"))
+
+
+def batches(members: list[dict], tool_members: list[dict], names: dict) -> list[tuple[str, list[dict], list[dict]]]:
+    """The runs' member sets. ``opencode.json`` and ``opencode.jsonc`` read in one run may shadow each other, so
+    the first run holds every plugin directory member, the tool-file members and the config-file members of the
+    first config file name, and each further config file name has a run of its own with its members only."""
+    file_names = names["config_file_names"] or []
+    first = file_names[0] if file_names else None
+    primary = [m for m in members if m["kind"] == "plugin-dir" or m.get("file_name") == first]
+    found = [("routes", primary, tool_members)]
+    for file_name in file_names[1:]:
+        found.append((f"routes-{_slug(file_name)}", [m for m in members if m.get("file_name") == file_name], []))
+    return found
 
 
 def project_routes(h, off_env: dict[str, str], names: dict | None = None) -> dict:
@@ -226,22 +255,42 @@ def project_routes(h, off_env: dict[str, str], names: dict | None = None) -> dic
     names = names or binary_facts.route_names()
     members = derive_members(names)
     tool_members = tool_file_members()
-    files = member_files(members, tool_members, names)
     env = {"ROUTEPROBE_LOG": "{root}/routes.log", "MDPROBE_LOG": "{root}/md.log"}
     config = {"plugins": [sa.PROBE_PLUGIN, MD_PLUGIN]}
-    control_run = h.run(SCENARIO, label="routes-control", config=config, files=files, env=env, cwd=SUBDIR,
-                        timeout=180)
-    off_run = h.run(SCENARIO, label="routes-off", config=config, files=files, env={**env, **off_env}, cwd=SUBDIR,
-                    timeout=180)
     everything = members + tool_members
-    control, off = _observed(control_run, everything), _observed(off_run, everything)
+    control: dict = {}
+    off: dict = {}
+    run_records = []
+    for label, batch_members, batch_tools in batches(members, tool_members, names):
+        files = member_files(batch_members, batch_tools, names)
+        control_run = h.run(SCENARIO, label=f"{label}-control", config=config, files=files, env=env, cwd=SUBDIR,
+                            timeout=180)
+        off_run = h.run(SCENARIO, label=f"{label}-off", config=config, files=files, env={**env, **off_env},
+                        cwd=SUBDIR, timeout=180)
+        seen_control, seen_off = (_observed(control_run, batch_members + batch_tools),
+                                  _observed(off_run, batch_members + batch_tools))
+        run_records.append({"label": label, "control_exit": seen_control["exit"], "off_exit": seen_off["exit"],
+                            "control_own_plugin_loaded": seen_control["own_plugin_loaded"],
+                            "off_own_plugin_loaded": seen_off["own_plugin_loaded"]})
+        for merged, seen in ((control, seen_control), (off, seen_off)):
+            merged.setdefault("members", {}).update(seen["members"])
+            merged.setdefault("markdown", seen["markdown"])
+            merged["plugin_tools_offered"] = sorted({*merged.get("plugin_tools_offered", []),
+                                                     *seen["plugin_tools_offered"]})
+            merged.setdefault("exit", seen["exit"])
+    runs_ok = bool(run_records) and all(r["control_exit"] == 0 and r["off_exit"] == 0
+                                        and r["control_own_plugin_loaded"] and r["off_own_plugin_loaded"]
+                                        for r in run_records)
+    derived = names_derived(names)
     scan_list_ok = bool(names["scan_names"]) and names["scan_list_expected"]
     offered_control = any(loaded(control, m["id"]) and control["members"][m["id"]]["tool_offered"] for m in members)
-    states = plugin_member_states(members, control, off, scan_list_ok=scan_list_ok)
+    states = plugin_member_states(members, control, off, scan_list_ok=scan_list_ok, runs_ok=runs_ok)
     tool_state = tool_file_state(tool_members, control, off, plugin_tool_offered_control=offered_control,
-                                 scan_list_ok=scan_list_ok, tool_directory_glob=bool(names["tool_directory_glob"]))
+                                 scan_list_ok=scan_list_ok, tool_directory_glob=bool(names["tool_directory_glob"]),
+                                 runs_ok=runs_ok)
     return {
         "variable": dict(off_env), "control_exit": control["exit"], "off_exit": off["exit"],
+        "route_runs": run_records, "runs_ok": runs_ok, "names_derived": derived,
         "scan_names": names["scan_names"], "config_file_names": names["config_file_names"],
         "plugin_directory_names": names["plugin_directory_names"], "scan_list_expected": scan_list_ok,
         "tool_directory_glob": bool(names["tool_directory_glob"]),
@@ -253,7 +302,7 @@ def project_routes(h, off_env: dict[str, str], names: dict | None = None) -> dic
                             "members": {m["id"]: {"control": loaded(control, m["id"]),
                                                   "with_variable": loaded(off, m["id"])} for m in tool_members}},
         "any_on": "on" in states.values() or tool_state == "on",
-        "project_config_off": project_config_off(states, tool_state),
+        "project_config_off": project_config_off(states, tool_state, names_derived=derived),
         "markdown": {name: {"kind": kind, "control": control["markdown"][name], "off": off["markdown"][name]}
                      for name, kind, _ in MARKDOWN},
         "offered_tools_control": control["plugin_tools_offered"], "offered_tools_off": off["plugin_tools_offered"],

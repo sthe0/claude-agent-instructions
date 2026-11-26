@@ -61,7 +61,8 @@ def _decide_call(event: str, data: dict, rows: list[oe.Row], plugin: frozenset[s
         if event == "tool.execute.after":
             return oe.Decision()
     payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"), plugin=plugin,
-                               environ=environ, servers=servers, directory=directory, declared=declared)
+                               environ=environ, servers=servers, directory=directory, declared=declared,
+                               row_scripts=[row.script for row in rows])
     if transcript is not None:
         oe.append_transcript(transcript, oe.transcript_records(event, {**data, "cwd": directory},
                                                                 payload["session_id"], plugin=plugin,

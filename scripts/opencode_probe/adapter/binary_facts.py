@@ -78,6 +78,26 @@ def has_tool_directory_glob(text: str) -> bool:
     return TOOL_DIRECTORY_GLOB.search(text) is not None
 
 
+GLOBAL_HOME_DIRECTORY = re.compile(rf'\.join\({_IDENT}\.home,"(\.[\w.-]+)"\)')
+GLOBAL_XDG_CONFIG = re.compile(rf'=({_IDENT})\.make\(({_IDENT})\.config\)')
+SYSTEM_DIRECTORY = re.compile(rf'return {_IDENT}\.make\("(/etc/[\w./-]+)"\)')
+EXPECTED_GLOBALS = {"home_directories": [".agents", ".claude"], "xdg_config": True, "system": "/etc/opencode"}
+
+
+def global_names(text: str) -> dict | None:
+    """The directories config discovery reads whatever the project says: the home-relative ones (``.agents``,
+    ``.claude``), whether the XDG config directory is one, and the system directory the binary defaults to on
+    Linux. ``None`` when the discovery function is not found."""
+    start = text.find(f'("{DISCOVER}")')
+    if start < 0:
+        return None
+    body = text[start:start + 1500]
+    system = SYSTEM_DIRECTORY.search(text[max(0, start - 4000):start])
+    return {"home_directories": sorted(set(GLOBAL_HOME_DIRECTORY.findall(body))),
+            "xdg_config": GLOBAL_XDG_CONFIG.search(body) is not None,
+            "system": system.group(1) if system else None}
+
+
 def route_names() -> dict:
     text = binary_text()
     scans = scan_names(text)

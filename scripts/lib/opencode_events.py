@@ -393,39 +393,44 @@ class ConfigDirWrite(UnshowableCall):
     cls = "config-dir"
 
 
-GLOBAL_PLUGIN_NAMES = ("plugin", "plugins")
 SYSTEM_CONFIG_DIR = "/etc/opencode"
 
 
 def global_config_locations(environ=None) -> tuple[str, ...]:
-    """The directories OpenCode loads plugin code from whatever the project config says (probe A6
-    ``global_plugin_dirs`` derives the list from the binary): the system directory, the user's OpenCode config
-    directory (``$XDG_CONFIG_HOME/opencode``, else ``$HOME/.config/opencode``), and the ``plugin`` and
-    ``plugins`` directories of ``$HOME/.agents`` and ``$HOME/.claude``. Resolved from the environment the
-    session really runs in; the home directory of the user (``~``, the passwd entry) is covered as well as
-    ``$HOME``, which a command can set for itself."""
+    """The directories OpenCode loads plugin code from whatever the project config says. Probe A6
+    ``global_plugin_dirs`` (pinned 2.3.2, session started without ``OPENCODE_CONFIG_DIR``) observed ``on`` for
+    ``$XDG_CONFIG_HOME/opencode`` (its ``plugin`` and ``plugins``, with the project config switched off), ``absent``
+    for ``$HOME/.agents``, ``$HOME/.claude``, ``$HOME/.config/opencode`` beside another ``XDG_CONFIG_HOME`` and the
+    directory above the binary, and ``unobserved`` for the system directory, which the probe cannot place. The
+    protected set is each location not ``absent``: the system directory and the XDG config directory
+    (``$HOME/.config/opencode`` when ``XDG_CONFIG_HOME`` is unset, and always, for the passwd home as well as
+    ``$HOME``, which a command can set for itself). Resolved from the environment the session really runs in."""
     env = os.environ if environ is None else environ
     homes = [h for h in dict.fromkeys((env.get("HOME") or "", os.path.expanduser("~"))) if h and os.path.isabs(h)]
     xdg = env.get("XDG_CONFIG_HOME") or ""
     found = [SYSTEM_CONFIG_DIR]
     found += [os.path.join(xdg, "opencode")] if xdg else []
-    for home in homes:
-        found.append(os.path.join(home, ".config", "opencode"))
-        found += [os.path.join(home, base, name) for base in (".agents", ".claude") for name in GLOBAL_PLUGIN_NAMES]
+    found += [os.path.join(home, ".config", "opencode") for home in homes]
     return tuple(found)
 
 
-def protected_paths(environ=None, directory: str = "", plugin_paths=()) -> tuple[str, ...]:
+_LIB_DIR = Path(__file__).resolve().parent
+GATE_CODE_PATHS = (str(_LIB_DIR), str(_LIB_DIR.parent / "opencode-gate-bridge.py"))
+
+
+def protected_paths(environ=None, directory: str = "", plugin_paths=(), extra=()) -> tuple[str, ...]:
     """The files and directories a gated session must not write: the config directory OpenCode was started
     with (``OPENCODE_CONFIG_DIR``), the integration directory (the shadow transcripts, the rows snapshots,
     OpenCode's data), the ``OPENCODE_CONFIG`` file, the ``AGENT_GATE_EXTRA_ROWS`` file, each plugin spec of the
     declared config (the file, and its directory when it is a file: the shim and the directory that holds it),
+    the bridge script and the library directory it imports (``GATE_CODE_PATHS``), ``extra`` (each row's script),
     the global plugin locations (``global_config_locations``), and the settings files of the session
     directory's own ``.claude``, whose hooks the bridge reads as layer rows. Real paths, so a link to one names
     it."""
     env = os.environ if environ is None else environ
     found = [env.get(OPENCODE_CONFIG_DIR_ENV), env.get(INTEGRATION_ENV) or str(config_root.agent_home() / "opencode"),
-             env.get(OPENCODE_CONFIG_ENV), env.get(EXTRA_ROWS_ENV), *global_config_locations(env)]
+             env.get(OPENCODE_CONFIG_ENV), env.get(EXTRA_ROWS_ENV), *GATE_CODE_PATHS, *extra,
+             *global_config_locations(env)]
     for path in plugin_paths:
         found.append(path)
         if not os.path.isdir(path):
@@ -448,7 +453,7 @@ class WriteScopeHits(NamedTuple):
 
 
 def config_dir_write_targets(tool: str, tool_input: dict, cwd: str, environ=None, *, directory: str = "",
-                             plugin_paths=()) -> WriteScopeHits:
+                             plugin_paths=(), extra=()) -> WriteScopeHits:
     """The protected paths a call would write (``protected``) and the write targets of a shell command line
     that cannot be shown to lie outside the protected set (``unreadable``: a ``$`` the environment does not
     expand, a ``cd`` to an unreadable place, a command line that does not tokenize). ``tool`` is the Claude
@@ -459,7 +464,7 @@ def config_dir_write_targets(tool: str, tool_input: dict, cwd: str, environ=None
     from lib import shell_write_scope
 
     env = os.environ if environ is None else environ
-    protected = protected_paths(env, directory, plugin_paths)
+    protected = protected_paths(env, directory, plugin_paths, extra)
     if tool in ("Write", "Edit"):
         normal = os.path.normpath(str(tool_input.get("file_path") or ""))
         candidates = [normal, os.path.realpath(normal)] if tool_input.get("file_path") else []
@@ -477,8 +482,9 @@ def config_dir_write_targets(tool: str, tool_input: dict, cwd: str, environ=None
 
 
 def require_no_config_dir_write(tool: str, tool_input: dict, cwd: str, environ=None, *, directory: str = "",
-                                plugin_paths=()) -> None:
-    hits = config_dir_write_targets(tool, tool_input, cwd, environ, directory=directory, plugin_paths=plugin_paths)
+                                plugin_paths=(), extra=()) -> None:
+    hits = config_dir_write_targets(tool, tool_input, cwd, environ, directory=directory, plugin_paths=plugin_paths,
+                                    extra=extra)
     if hits.protected:
         raise ConfigDirWrite(f"{tool} would write {hits.protected[0]}, a file or directory that loads code into "
                              f"the session or holds the gates' own state (the session's config directory, the "
@@ -974,8 +980,9 @@ def now() -> str:
 
 def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: frozenset[str],
                   environ=None, servers: frozenset[str] = frozenset(), directory: str = "",
-                  declared: dict | None = None) -> dict:
+                  declared: dict | None = None, row_scripts=()) -> dict:
     """The Claude-shaped payload of an OpenCode event ``data`` (the hook input, as the probe recorded it).
+    ``row_scripts`` are the scripts of the rows that will judge the call; a write into one is refused.
     ``cwd`` is the session ``directory``, or for a shell call with a ``workdir`` the directory the command will
     run in; paths of the tool input are resolved by ``resolve_path``. A before-event whose tool is not one the
     session knows, or whose call cannot be shown, raises ``UnshowableCall``; an after-event, which no gate can
@@ -995,7 +1002,7 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: froz
                 require_exact_edit(payload["tool_input"]["file_path"], payload["tool_input"]["old_string"])
             plugin_paths = (declared if declared is not None else declared_config(environ))["plugin_paths"]
             require_no_config_dir_write(payload["tool_name"], payload["tool_input"], payload["cwd"], environ,
-                                        directory=directory, plugin_paths=plugin_paths)
+                                        directory=directory, plugin_paths=plugin_paths, extra=tuple(row_scripts))
         payload["tool_use_id"] = data.get("id")
         if event == "tool.execute.after":
             payload["tool_response"] = claude_response(tool, args, data.get("result") or {})

@@ -2488,8 +2488,22 @@ reviewed_by = "developer"
 
 [sites."scripts/opencode_probe/adapter/binary_facts.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles TOOL_DIRECTORY_GLOB, which finds the glob spelling of a tool-directory scan in the pinned OpenCode binary's source text; matches program syntax of a binary, no meaning of free text."
+ground = "Compiles TOOL_DIRECTORY_GLOB and the three patterns that read the global config directories out of the pinned OpenCode binary's source text (home-relative names, the XDG config call, the system directory); program syntax of a binary, no meaning of free text."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/binary_facts.py::global_names::pattern.findall"]
+class = "structural"
+ground = "GLOBAL_HOME_DIRECTORY.findall lists the home-relative directory names the binary's config discovery joins to the home directory; code shape of a binary, not free-text meaning."
 hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/opencode_probe/adapter/binary_facts.py::global_names::pattern.search"]
+class = "structural"
+ground = "GLOBAL_XDG_CONFIG.search and SYSTEM_DIRECTORY.search report whether the binary's discovery reads the XDG config directory and which system directory it defaults to; code shape of a binary, not free-text meaning."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/opencode_probe/adapter/binary_facts.py::_names::re.findall"]

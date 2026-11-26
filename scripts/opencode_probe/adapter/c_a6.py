@@ -24,18 +24,23 @@ Two facts the gate shim depends on, observed rather than assumed:
   names, each run as a pair (control, then with ``OPENCODE_DISABLE_PROJECT_CONFIG``) and recorded as ``off``,
   ``absent``, ``unobserved`` or ``on``, with the tool-file route beside them. ``project_config_off`` is true only
   when every member is ``off`` or ``absent`` and the tool-file route is ``off`` or ``absent``.
+* ``global_plugin_dirs`` (``facts_global``): the locations outside the project that OpenCode loads plugin code from
+  (the system directory, the XDG config directory, ``~/.agents``, ``~/.claude``, the directory above the binary),
+  each run as a pair and recorded as ``on`` / ``off`` / ``absent`` / ``unobserved``. They are protected by the gate
+  rather than required to be off, so a location that loads does not fail the case.
 * ``config_dir_writes``: with the gate shim loaded, a write, an edit and a shell redirect into the session's own
-  config directory are each refused (``refused: config-dir``) and leave their target as it was
-  (``config_dir_write_refused``).
+  config directory, and a write into the global OpenCode config directory, are each refused (``refused:
+  config-dir``) and leave their target as it was (``config_dir_write_refused``).
 
-pass when every run produced its log, ``project_config_off`` and ``config_dir_write_refused`` hold; fail when a
-member loads with the variable set (K7: the gates cannot be secured) or a config-directory write executed
-(``marked_executed``); unobserved otherwise.
+pass when every run exited 0 and produced its log, ``project_config_off`` and ``config_dir_write_refused`` hold;
+fail when a member loads with the variable set (K7: the gates cannot be secured) or a config-directory write
+executed (``marked_executed``); unobserved otherwise.
 """
 import json
 
 from opencode_probe import record, runner
-from opencode_probe.adapter import facts_a6, facts_paths, facts_routes, facts_spellings, shared_a as sa
+from opencode_probe.adapter import (facts_a6, facts_global, facts_paths, facts_routes, facts_spellings,
+                                    shared_a as sa)
 
 CASE_ID = "A6"
 K7 = True
@@ -60,30 +65,38 @@ def _log(run, name):
 
 CONFIG_DIR = "opencode-config"
 CONFIG_DIR_SEED = f"{CONFIG_DIR}/seed.txt"
+GLOBAL_PLUGIN_FILE = "xdg/config/opencode/plugin/global-write.js"
+# (label, tool, arguments, the file that would appear (``None``: the seed file an edit changes), the protected
+# location the refusal must name)
 CONFIG_DIR_CALLS = (
-    ("write", {"path": "{root}/" + CONFIG_DIR + "/w.txt", "content": "written"}, f"{CONFIG_DIR}/w.txt"),
-    ("edit", {"path": "{root}/" + CONFIG_DIR_SEED, "oldString": "orig", "newString": "changed"}, None),
-    ("shell", {"command": "echo x > {root}/" + CONFIG_DIR + "/s.txt"}, f"{CONFIG_DIR}/s.txt"),
+    ("write", "write", {"path": "{root}/" + CONFIG_DIR + "/w.txt", "content": "written"}, f"{CONFIG_DIR}/w.txt",
+     CONFIG_DIR),
+    ("edit", "edit", {"path": "{root}/" + CONFIG_DIR_SEED, "oldString": "orig", "newString": "changed"}, None,
+     CONFIG_DIR),
+    ("shell", "shell", {"command": "echo x > {root}/" + CONFIG_DIR + "/s.txt"}, f"{CONFIG_DIR}/s.txt", CONFIG_DIR),
+    ("write-global", "write", {"path": "{root}/" + GLOBAL_PLUGIN_FILE, "content": "export default {}"},
+     GLOBAL_PLUGIN_FILE, "xdg/config/opencode"),
 )
 
 
 def config_dir_writes(h, ctx):
-    """A write, an edit and a shell redirect into the session's own config directory, each forced from the
-    stub model with the gate shim loaded and no denying row: the bridge refuses them (``refused: config-dir``), so
+    """A write, an edit and a shell redirect into the session's own config directory, and a write of a plugin
+    file into the global OpenCode config directory (``$XDG_CONFIG_HOME/opencode/plugin``), each forced from the stub
+    model with the gate shim loaded and no denying row: the bridge refuses them (``refused: config-dir``), so
     no target appears and the seed file keeps its text. ``refused`` is true only for a refusal whose class the
     shim logged for that tool; ``executed`` when its effect happened."""
-    scenario = {"models": {"m1": [{"tool_calls": [{"name": name, "arguments": args}]}
-                                  for name, args, _ in CONFIG_DIR_CALLS] + [{"text": "done"}]}}
+    scenario = {"models": {"m1": [{"tool_calls": [{"name": tool, "arguments": args}]}
+                                  for _, tool, args, _, _ in CONFIG_DIR_CALLS] + [{"text": "done"}]}}
     files = {**sa.gate_files(inert=ctx.inert), "extra-rows.toml": sa.extra_rows([]), CONFIG_DIR_SEED: "orig"}
     run = h.run(scenario, label="config-dir-writes", config=sa.gate_config(), files=files, env=sa.gate_env(),
                 timeout=120)
     entries = sa.gate_log(run)
     calls = {}
-    for name, _, target in CONFIG_DIR_CALLS:
-        refused = any(e.get("at") == "refusal" and e.get("tool") == name
+    for label, tool, args, target, location in CONFIG_DIR_CALLS:
+        refused = any(e.get("at") == "refusal" and e.get("tool") == tool and location in str(e.get("detail", ""))
                       and str(e.get("detail", "")).startswith("refused: config-dir") for e in entries)
         executed = run.exists(target) if target else run.read(CONFIG_DIR_SEED) != "orig"
-        calls[name] = {"refused": refused, "executed": executed}
+        calls[label] = {"refused": refused, "executed": executed}
     return {"calls": calls, "exit_code": run.exit_code,
             "marked_executed": any(c["executed"] for c in calls.values()),
             "config_dir_write_refused": all(c["refused"] and not c["executed"] for c in calls.values())}
@@ -132,6 +145,7 @@ def run(ctx):
     from lib import opencode_events as oe
 
     routes = facts_routes.project_routes(h, oe.PROJECT_CONFIG_OFF)
+    global_dirs = facts_global.global_plugin_dirs(h, oe.PROJECT_CONFIG_OFF)
     config_dir = config_dir_writes(h, ctx)
     evidence = {"ctx": facts, "setup_throw": throws, "gate_setup_failure": gate_setup, "path_forms": forms,
                 "spellings": spellings, "search_and_output": search,
@@ -139,11 +153,13 @@ def run(ctx):
                 "plugin_tool_offered_control": routes["plugin_tool_offered_control"],
                 "project_routes": routes["project_routes"], "tool_file_route": routes["tool_file_route"],
                 "project_config_off": routes["project_config_off"], "project_config_runs": routes,
+                "global_plugin_dirs": global_dirs,
                 "config_dir_write_refused": config_dir["config_dir_write_refused"], "config_dir": config_dir,
                 "marked_executed": config_dir["marked_executed"]}
     observed = (bool(entries) and all(e["exit_code"] is not None for e in throws.values()) and bool(marker)
                 and forms["before_count"] == forms["call_count"] and bool(search["outputs"])
-                and spellings["before_count"] == spellings["call_count"])
+                and spellings["before_count"] == spellings["call_count"] and routes["runs_ok"]
+                and global_dirs["control_exit"] == 0 and global_dirs["off_exit"] == 0)
     if routes["any_on"] or config_dir["marked_executed"]:
         return runner.result(record.FAIL, evidence)
     passed = observed and routes["project_config_off"] and config_dir["config_dir_write_refused"]

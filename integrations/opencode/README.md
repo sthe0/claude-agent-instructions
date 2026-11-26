@@ -49,12 +49,33 @@ that mechanism was seen to refuse.
   discovery scans, the names its plugin loader lists, the config file names) and records each as `off`,
   `absent`, `unobserved` or `on`; one `on` stops the work (the gates cannot be secured), and
   `project_config_off` is true only when every member is `off` or `absent`.
-- **Config directory.** A `write` or `edit` into the session's own config directory
-  (`OPENCODE_CONFIG_DIR`) or the integration directory, and a shell command whose write targets
-  (`scripts/lib/bash_write_targets.py`) fall there, is refused (`refused: config-dir`), since a plugin or rows
-  file placed there would be loaded by a later session. Probe A6 `config_dir_write_refused` checks it with a
-  live write, edit and shell redirect. Open limit: an interpreter-inline write (`python3 -c`, `node -e`)
-  names no target the bridge reads, and passes.
+- **Protected set.** A `write` or `edit` into, and a shell command whose write targets fall into, any of these is
+  refused (`refused: config-dir`), since what is placed there loads into a later session or changes how the
+  gates decide: the session's config directory (`OPENCODE_CONFIG_DIR`), the integration directory, the file
+  `OPENCODE_CONFIG` names, the `AGENT_GATE_EXTRA_ROWS` file, the shim file and the directory it sits in, each
+  row's script, the bridge script and `scripts/lib` (what it imports), the global plugin locations below, and
+  `<session directory>/.claude/settings.json` and `settings.local.json` (the project settings the bridge reads
+  as layer rows, as Claude Code does). Paths are compared as real paths and resolved from the environment the
+  session really has, when the call is judged.
+- **Shell write targets** (`lib/shell_write_scope.py`, shared with the Claude hooks' reading): the targets are
+  found after a leading `cd`, `;`, `&&` and a `workdir`, with the variables of the session's environment
+  expanded; a target with a `$` the environment cannot expand, a `cd` to an unreadable place, or a command
+  line that does not tokenize is refused (`refused: config-dir`, "cannot be shown to lie outside").
+- **Global plugin locations.** Probe A6 `global_plugin_dirs` places a probe plugin (`plugin/` and `plugins/`,
+  three forms) in each location OpenCode may load plugin code from, inside an isolated `HOME` and
+  `XDG_CONFIG_HOME`, runs a session the way the adapter starts one (`OPENCODE_DISABLE_PROJECT_CONFIG=1`), and
+  records each as `on`, `off`, `absent` or `unobserved`. On OpenCode 2.3.2 (session started without
+  `OPENCODE_CONFIG_DIR`; the third run sets it): `$XDG_CONFIG_HOME/opencode` **on** (loads with the project config
+  switched off; not loaded when `OPENCODE_CONFIG_DIR` is set), the `.agents` and `.claude` directories of
+  the home, `$HOME/.config/opencode` beside another `XDG_CONFIG_HOME` and the directory above the binary **absent**,
+  `/etc/opencode` **unobserved** (the probe cannot place a file there). The gate protects every location that is
+  not `absent`, instead of requiring it to be off: `$XDG_CONFIG_HOME/opencode`, `$HOME/.config/opencode`,
+  `/etc/opencode` (`global_config_locations` in `scripts/lib/opencode_events.py`).
+- **Open limits** (named, not fixed). A write whose target the bridge cannot read from the command line:
+  an interpreter-inline write (`python3 -c`, `node -e`, `sh -c`, `bash -c`, `eval`); and the forms the Claude
+  hooks also miss: `>|`, `dd of=`, `ln -s`, `tar -C`, `rsync`, `touch`, `mkdir`, `curl -o`, `unzip -d`, and the
+  wrappers `command`, `env`, `sudo` and `xargs`. Probe A6 `config_dir_write_refused` checks the refusal with a
+  live write, edit and shell redirect into the config directory and a write into the global one.
 - **Arguments.** `ARGUMENT_CLASSES` classifies every argument of every enabled built-in tool as mapped to a
   named hook-input field, as a path (resolved, see below), or as irrelevant to every denying row, with a
   one-line reason; an argument that changes where or what a tool reads, writes or runs is never irrelevant.
