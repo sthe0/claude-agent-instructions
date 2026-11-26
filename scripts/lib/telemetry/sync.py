@@ -497,8 +497,11 @@ def _spawn_row(conn, session: str):
         "ORDER BY time LIMIT 1", (session,)).fetchone()
 
 
-def _parent_of(events: list, spawn_row) -> "str | None":
-    sess_event = next((f for _, kind, _, f in events if kind == "session"), None)
+def _session_event(events: list) -> "dict | None":
+    return next((f for _, kind, _, f in events if kind == "session"), None)
+
+
+def _parent_of(sess_event: "dict | None", spawn_row) -> "str | None":
     return (sess_event or {}).get("parent_session") or (spawn_row[0] if spawn_row else None)
 
 
@@ -517,7 +520,7 @@ def _read_session(conn, session: str, outside: bool = False) -> dict:
     holds. A child session with no task open of its own takes its key from its parent, so for it
     the map also holds the epoch the spawn names and the parent's opens and session-row epoch, and
     the dict keeps the parent's opens (`parent`, `parent_opens`). The transaction then runs no
-    tasks lookup unless a row was filed after this read. Read inside the transaction, there is
+    tasks lookup unless an epoch it needs had no task row at the time of this read. Read inside the transaction, there is
     nothing to save by reading ahead, so the map is empty and each lookup runs where it is needed."""
     events = _session_events(conn, session)
     opens = _task_opens(conn, session)
@@ -533,7 +536,7 @@ def _read_session(conn, session: str, outside: bool = False) -> dict:
         epochs.append(first_open[2])
     else:
         spawn_row = _spawn_row(conn, session)
-        parent = _parent_of(events, spawn_row)
+        parent = _parent_of(_session_event(events), spawn_row)
         if parent:
             parent_opens = _task_opens(conn, parent)
             epochs += [i for _, i in parent_opens]
@@ -596,10 +599,10 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
     events = read["events"]
     if not events:
         return
-    sess_event = next((f for _, kind, _, f in events if kind == "session"), None)
+    sess_event = _session_event(events)
     spawn_row = _spawn_row(conn, session)
     spawn = _fields(spawn_row[2]) if spawn_row else None
-    parent = _parent_of(events, spawn_row)
+    parent = _parent_of(sess_event, spawn_row)
     role = _session_role(sess_event, spawn)
     depth = (sess_event or {}).get("depth")
     if depth is None:

@@ -726,26 +726,80 @@ def test_child_session_and_subagents_filed_without_tasks_query_inside_write_tran
     session's subagent contours take the session's key: neither looks a task row up inside the
     transaction once the outside read holds them."""
     parent, child = "kin-parent", "kin-child"
+    _put_task("task-spawned", "kin-spawned", "SMALL")
     assert store.insert_rows("events", [
         _event("kin-open", parent, "task", 0, '{"action":"open","task_id":"task-kin"}'),
         _event("kin-weigh", parent, "command", 1, '{"task_epoch":"kin-open","weight_class":"SUBSTANTIVE"}'),
-        _event("kin-spawn", parent, "spawn", 2, '{"task_epoch":"kin-open"}', child=child),
+        _event("kin-spawn", parent, "spawn", 2, '{"task_epoch":"kin-spawned"}', child=child),
         _event("kin-child-s", child, "session", 3, '{"parent_session":"%s","depth":1}' % parent),
         _event("kin-child-cmd", child, "command", 4, "{}")])["inserted"] == 5
-    monkeypatch.setattr(sync, "subagent_contours", lambda session: [f"{session}/agent-1"])
-    filed = FiledStatements(monkeypatch)
-
-    assert sync.materialize([child])["committed"] is True
+    filed = _file_with_subagents(monkeypatch, child)
 
     assert filed.tasks_statements_in_file_session() == []
-    for session in (parent, child):
-        assert (f"{session}/agent-1", "task-kin", "kin-open", "SUBSTANTIVE") in _contour_keys(session)
+    assert ("kin-parent/agent-1", "task-kin", "kin-open", "SUBSTANTIVE") in _contour_keys(parent)
+    assert ("kin-child/agent-1", "task-spawned", "kin-spawned", "SMALL") in _contour_keys(child)
+    assert _session_epoch(child) == "kin-spawned"
+
+
+def _put_task(task_id: str, epoch: str, weight: str) -> None:
+    assert store.insert_rows("tasks", [{"origin": store.origin_id(), "task_id": task_id, "epoch": epoch,
+                                        "status": "open", "synthetic": 0, "weight_class": weight,
+                                        "opened_at": _at(0)}])["inserted"] == 1
+
+
+def _file_with_subagents(monkeypatch, session: str) -> FiledStatements:
+    """Materialize `session` (and its parent) with one subagent contour per session, tracing the
+    statements of every write transaction."""
+    monkeypatch.setattr(sync, "subagent_contours", lambda s: [f"{s}/agent-1"])
+    filed = FiledStatements(monkeypatch)
+    assert sync.materialize([session])["committed"] is True
+    return filed
+
+
+def _session_epoch(session: str) -> "str | None":
     conn = store.open_record()
     try:
-        assert conn.execute("SELECT task_epoch FROM sessions WHERE session_id = ?", (child,)).fetchone() == (
-            "kin-open",)
+        row = conn.execute("SELECT task_epoch FROM sessions WHERE session_id = ?", (session,)).fetchone()
+        return row[0] if row else None
     finally:
         conn.close()
+
+
+def test_child_key_from_parent_opens_filed_without_tasks_query_inside_write_transaction(monkeypatch):
+    """A spawn that names no epoch: the child takes the parent's task opened latest at or before
+    the spawn, read before the transaction with the parent's other opens."""
+    parent, child = "pop-parent", "pop-child"
+    assert store.insert_rows("events", [
+        _event("pop-early", parent, "task", 0, '{"action":"open","task_id":"task-early"}'),
+        _event("pop-spawn", parent, "spawn", 5, "{}", child=child),
+        _event("pop-late", parent, "task", 10, '{"action":"open","task_id":"task-late"}'),
+        _event("pop-child-s", child, "session", 6, '{"parent_session":"%s","depth":1}' % parent)])["inserted"] == 4
+
+    filed = _file_with_subagents(monkeypatch, child)
+
+    assert filed.tasks_statements_in_file_session() == []
+    assert _session_epoch(child) == "pop-early"
+    assert ("pop-child/agent-1", "task-early", "pop-early", None) in _contour_keys(child)
+
+
+def test_session_row_keys_filed_without_tasks_query_inside_write_transaction(monkeypatch):
+    """A session with no task open of its own whose session row already holds a key (from an
+    earlier sync or the importer), and its child that takes that key: both are read ahead."""
+    parent, child = "row-parent", "row-child"
+    _put_task("task-row", "row-epoch", "SUBSTANTIVE")
+    assert store.insert_rows("sessions", [{"session_id": parent, "role": "root", "depth": 0,
+                                           "task_origin": store.origin_id(), "task_id": "task-row",
+                                           "task_epoch": "row-epoch"}])["inserted"] == 1
+    assert store.insert_rows("events", [
+        _event("row-parent-s", parent, "session", 0, '{"depth":0}'),
+        _event("row-child-s", child, "session", 1, '{"parent_session":"%s","depth":1}' % parent)])["inserted"] == 2
+
+    filed = _file_with_subagents(monkeypatch, child)
+
+    assert filed.tasks_statements_in_file_session() == []
+    assert _session_epoch(child) == "row-epoch"
+    for session in (parent, child):
+        assert (f"{session}/agent-1", "task-row", "row-epoch", "SUBSTANTIVE") in _contour_keys(session)
 
 
 SCALE = "scale-session"

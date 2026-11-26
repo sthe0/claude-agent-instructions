@@ -13,6 +13,8 @@ _S = "scripts/tests/test_telemetry_sync_scale.py::"
 _NO_TASKS = _S + "test_file_session_runs_no_tasks_query_inside_write_transaction"
 _AT_SCALE = _S + "test_file_session_at_scale_runs_no_tasks_query_inside_write_transaction"
 _KIN = _S + "test_child_session_and_subagents_filed_without_tasks_query_inside_write_transaction"
+_PARENT_OPENS = _S + "test_child_key_from_parent_opens_filed_without_tasks_query_inside_write_transaction"
+_ROWS = _S + "test_session_row_keys_filed_without_tasks_query_inside_write_transaction"
 
 MUTANTS = [
     {"name": "tasks_epoch_index_dropped", "file": _MIGRATION,
@@ -39,5 +41,21 @@ MUTANTS = [
     {"name": "subagent_contour_weight_looked_up_inside_transaction", "file": _SYNC,
      "anchor": 'put_contour(conn, contour_id, session, "agent-tool", session_key, task_keys)',
      "replacement": 'put_contour(conn, contour_id, session, "agent-tool", session_key)',
+     "tests": [_KIN]},
+    {"name": "own_session_row_epoch_not_read_ahead", "file": _SYNC,
+     "anchor": "epochs.append(_session_epoch(conn, session))",
+     "replacement": "epochs.append(None)",
+     "tests": [_ROWS]},
+    {"name": "parent_opens_not_read_ahead", "file": _SYNC,
+     "anchor": "epochs += [i for _, i in parent_opens]",
+     "replacement": "epochs += []",
+     "tests": [_PARENT_OPENS]},
+    {"name": "parent_session_row_epoch_not_read_ahead", "file": _SYNC,
+     "anchor": "epochs.append(_session_epoch(conn, parent))",
+     "replacement": "epochs.append(None)",
+     "tests": [_ROWS]},
+    {"name": "spawn_epoch_not_read_ahead", "file": _SYNC,
+     "anchor": 'epochs.append(_fields(spawn_row[2]).get("task_epoch"))',
+     "replacement": "epochs.append(None)",
      "tests": [_KIN]},
 ]
