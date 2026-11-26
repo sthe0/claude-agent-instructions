@@ -517,7 +517,7 @@ def test_deferred_sync_rows_kept_in_reserved_spool_and_replayed_by_next_sync(mon
     monkeypatch.setattr(store, "insert_rows", real)
 
     kept = spool_events(sync.SYNC_SESSION)
-    assert [e["kind"] for e in kept] == [sync.TRIGGER_START, sync.SYNC_COMMIT]
+    assert [e["kind"] for e in kept] == [sync.TRIGGER_START, sync.SYNC_COMMIT, sync.SYNC_END]
     assert all(e["fields"]["time"] == e["time"] == iso(at(500)) for e in kept)
     assert triggers() == [] and commits() == []
 

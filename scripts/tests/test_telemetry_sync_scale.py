@@ -16,23 +16,38 @@ task-open read per session, index searches), not the time. The same record at 24
 contours plus 5000 big-session events, one materialize([BIG]) call on the dev VM on 2026-11-08
 (recorded, never asserted, because wall-clock depends on the machine): the unfixed code held one
 write transaction for 361 s; the fixed code ran 103 transactions, the longest 4.1 s.
+
+Since PR 9 no session is read inside a write transaction: the tests observe it with a probe in the
+patched read, a second connection whose BEGIN IMMEDIATE under the store's real deadline must
+succeed while the read runs. A waiting session is passed over while its mark is unchanged; every
+sync ends with a sync.end row carrying the longest write transaction; a spool still deferred when
+the budget runs out is retried by one detached process per stem. The retry tests inject the clock
+and the sleep, so none asserts a wall-clock duration.
 """
 from __future__ import annotations
 
+import fcntl
 import math
+import os
 import re
+import sqlite3
+import subprocess
+import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from lib.telemetry import store, sync
+from lib import config_root
+from lib.telemetry import live, recorder, store, sync
+from telemetry_live_support import events, no_background_sweep
 
+REAL_DEADLINE_S = store.DEADLINE_S
 SESSIONS = 120
 JUDGES_PER_SESSION = 4
 BIG = "big-session"
 BIG_EVENTS = 1000
 BASE = datetime(2026, 11, 1, tzinfo=timezone.utc)
-TASK_OPEN_SQL = re.compile(r"kind = 'task' AND json_extract\(fields, '\$\.action'\) = 'open'")
 
 
 @pytest.fixture(autouse=True)
@@ -116,9 +131,9 @@ class Transactions:
             self.filed.append(self._current)
             return real_transact(work, deadline_s)
 
-        def file_rows(conn, origin, session):
+        def file_rows(conn, origin, session, *rest):
             self._current.add(session)
-            return real_rows(conn, origin, session)
+            return real_rows(conn, origin, session, *rest)
 
         def materialize_session(conn, origin, session, *rest):
             self._current.add(session)
@@ -148,21 +163,20 @@ def test_each_write_transaction_files_at_most_one_session_and_a_call_takes_at_mo
 
 
 def test_task_opens_of_a_session_are_read_once_per_materialize_session_call(record, monkeypatch):
-    statements = []
-    real = sync._materialize_session
+    """The opens are read with the session's events, outside the write transaction (see
+    test_materialize_reads_sessions_outside_write_transaction), so they are counted as calls."""
+    reads = []
+    real = sync._task_opens
 
-    def traced(conn, origin, session, *rest):
+    def counted(conn, session):
         if session == BIG:
-            conn.set_trace_callback(statements.append)
-        try:
-            return real(conn, origin, session, *rest)
-        finally:
-            conn.set_trace_callback(None)
+            reads.append(session)
+        return real(conn, session)
 
-    monkeypatch.setattr(sync, "_materialize_session", traced)
+    monkeypatch.setattr(sync, "_task_opens", counted)
     assert sync.materialize([BIG])["committed"] is True
 
-    assert len([s for s in statements if TASK_OPEN_SQL.search(s)]) == 1
+    assert len(reads) == 1
     conn = store.open_record()
     try:
         assert conn.execute("SELECT COUNT(*) FROM contours WHERE parent_session = ? AND task_id = 'task-big'",
@@ -219,6 +233,22 @@ def test_rotation_visits_every_waiting_session_within_ceil_n_over_cap_calls(reco
     assert waiting_throughout <= visited
 
 
+def test_rotation_advances_when_a_task_row_arrives_before_every_call(record, monkeypatch):
+    """A new task row before each call makes every waiting session due again, so the waiting
+    marks pass none over: only the cursor carries the rotation on."""
+    calls = math.ceil(SESSIONS / sync.WAITING_PER_SYNC)
+    visited = set()
+    for call in range(calls):
+        assert store.insert_rows("tasks", [{"origin": store.origin_id(), "task_id": f"task-{call}",
+                                            "epoch": f"open-{call}", "status": "open", "synthetic": 0,
+                                            "opened_at": _at(call)}])["inserted"] == 1
+        with monkeypatch.context() as scoped:
+            transactions = Transactions(scoped)
+            assert sync.materialize([])["committed"] is True
+            visited |= transactions.waiting()
+    assert {_waiting_session(i) for i in range(SESSIONS)} <= visited
+
+
 def test_a_replayed_session_left_unfiled_by_a_failed_call_is_filed_by_the_next(record, monkeypatch):
     _replayed("replayed-a")
     _replayed("replayed-b")
@@ -237,3 +267,255 @@ def test_a_replayed_session_left_unfiled_by_a_failed_call_is_filed_by_the_next(r
 
     assert sync.materialize([])["committed"] is True
     assert _has_session_row("replayed-b")
+
+
+# --- PR 9: reads outside the write transaction, waiting marks, sync.end, the deferred retry ------
+
+def _write_lock_free() -> bool:
+    """Whether another writer gets the write lock now, under the store's real deadline."""
+    probe = sqlite3.connect(str(store.record_path()), timeout=REAL_DEADLINE_S)
+    try:
+        probe.execute("BEGIN IMMEDIATE")
+        probe.execute("ROLLBACK")
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        probe.close()
+
+
+def _probe_reads(monkeypatch, during) -> list:
+    """Patch the per-session event read so `during(session)` runs inside it; returns what it saw."""
+    seen = []
+    real = sync._session_events
+
+    def read(conn, session):
+        seen.append((session, during(session)))
+        return real(conn, session)
+    monkeypatch.setattr(sync, "_session_events", read)
+    return seen
+
+
+def test_materialize_reads_sessions_outside_write_transaction(record, monkeypatch):
+    _replayed("replayed-a")
+    seen = _probe_reads(monkeypatch, lambda session: _write_lock_free())
+
+    assert sync.materialize([BIG, "replayed-a"])["committed"] is True
+
+    assert {BIG, "replayed-a"} <= {session for session, _ in seen}
+    assert seen and all(free for _, free in seen), seen
+
+
+def test_writer_with_short_deadline_commits_while_materialize_files_large_session(record, monkeypatch):
+    writes = iter(range(10_000))
+
+    def write(session):
+        if session != BIG:
+            return None
+        n = next(writes)
+        return store.insert_rows("events", [_event(f"writer-{n}", "writer", "note", 5 + n)],
+                                 deadline_s=REAL_DEADLINE_S)
+    seen = _probe_reads(monkeypatch, write)
+
+    assert sync.materialize([BIG])["committed"] is True
+
+    outcomes = [outcome for session, outcome in seen if session == BIG]
+    assert outcomes and all(o["inserted"] == 1 and not o["deferred"] for o in outcomes), outcomes
+
+
+def _visited(monkeypatch) -> "set[str]":
+    with monkeypatch.context() as scoped:
+        transactions = Transactions(scoped)
+        assert sync.materialize([])["committed"] is True
+        return transactions.waiting()
+
+
+WAITING_THREE = {_waiting_session(i) for i in range(3)}
+
+
+def test_materialize_skips_waiting_session_unchanged_since_last_try(monkeypatch):
+    _add_waiting(range(3))
+    assert _visited(monkeypatch) == WAITING_THREE
+    assert _visited(monkeypatch) == set()
+
+
+def test_materialize_rereads_waiting_session_that_gained_events(monkeypatch):
+    _add_waiting(range(3))
+    assert _visited(monkeypatch) == WAITING_THREE
+    session = _waiting_session(1)
+    assert store.insert_rows("events", [_event(f"{session}-late", session, "judge", 9)])["inserted"] == 1
+    assert _visited(monkeypatch) == {session}
+
+
+def test_materialize_rereads_waiting_session_after_task_row_arrives(monkeypatch):
+    _add_waiting(range(3))
+    assert _visited(monkeypatch) == WAITING_THREE
+    assert store.insert_rows("tasks", [{"origin": store.origin_id(), "task_id": "task-new", "epoch": "new-open",
+                                        "status": "open", "synthetic": 0, "opened_at": _at(9)}])["inserted"] == 1
+    assert _visited(monkeypatch) == WAITING_THREE
+
+
+def test_materialize_rereads_waiting_session_after_session_key_set_by_update(monkeypatch):
+    """An UPDATE adds no rowid anywhere; only the count of keyed sessions rows sees it."""
+    _add_waiting(range(3))
+    assert _visited(monkeypatch) == WAITING_THREE
+
+    def key(conn):
+        conn.execute("UPDATE sessions SET task_id = 'keyed' WHERE session_id = ?", (_waiting_session(0),))
+    assert store.transact(key)["committed"] is True
+    assert _visited(monkeypatch) >= WAITING_THREE - {_waiting_session(0)}
+
+
+@pytest.fixture
+def live_env(monkeypatch):
+    """A sync's verdict must not depend on the caller's session, the real canon checkout, the
+    real transcripts or a background sweep."""
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv(live.SYNTHETIC_ENV, raising=False)
+    monkeypatch.delenv(live.SWITCH_ENV, raising=False)
+    monkeypatch.delenv(sync.HARNESS_VERSION_ENV, raising=False)
+    monkeypatch.setattr(sync, "_canon_state", lambda: ("canon-head", 0))
+    monkeypatch.setattr(config_root, "projects_roots", lambda: [])
+    no_background_sweep(monkeypatch)
+    assert store.transact(lambda conn: None)["committed"] is True
+
+
+def _emit(session: str) -> None:
+    assert live.emit_event(session, "note", "telemetry:test", {}) is not None
+
+
+@contextmanager
+def _held(filename: str):
+    """Hold an flock in the spool dir, as a competing process would."""
+    fd = os.open(live.spool_dir() / filename, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _own(kind: str) -> list:
+    return events(kind=kind)
+
+
+def test_sync_end_records_max_lock_hold_including_materialize(live_env, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(store, "_hold_clock", lambda: clock[0])
+    monkeypatch.setattr(store, "_hold", {"began": None, "max_ms": 0.0})
+    real = sync._materialize_session
+
+    def slow(conn, origin, session, *rest):
+        clock[0] += 7.0
+        return real(conn, origin, session, *rest)
+    monkeypatch.setattr(sync, "_materialize_session", slow)
+    _emit("s-held")
+
+    sync.run("s-held")
+
+    [end] = _own(sync.SYNC_END)
+    assert end["fields"]["max_lock_hold_ms"] == 7000.0
+
+
+def test_sync_end_written_when_nothing_committed(live_env):
+    result = sync.run()
+
+    assert result["committed"] == [] and result["deferred"] == []
+    [start] = _own(sync.TRIGGER_START)
+    [end] = _own(sync.SYNC_END)
+    assert end["fields"]["trigger_start"] == start["time"]
+    assert {k: end["fields"][k] for k in ("kind", "committed", "deferred", "retries")} == {
+        "kind": "sweep", "committed": 0, "deferred": 0, "retries": 0}
+
+
+def test_deferred_spool_retried_after_budget_until_commit(live_env, monkeypatch):
+    """The parent's own session stem and another stem: each deferred, each retried to its A mark."""
+    for stem in ("s-own", "s-other"):
+        _emit(stem)
+    monkeypatch.setattr(store, "DEADLINE_S", 0.2)
+    with _held("s-own.lock"), _held("s-other.lock"):
+        parent = sync.run("s-own", budget_s=0)
+    assert sorted(parent["deferred"]) == sorted(parent["retried"]) == ["s-other", "s-own"]
+    assert sorted(stem for stem, _, _ in sync.spawned_retries) == ["s-other", "s-own"]
+    assert {session for _, _, session in sync.spawned_retries} == {"s-own"}
+    begun = sync._iso(sync.spawned_retries[0][1])
+
+    for stem, parent_begun, session in sync.spawned_retries:
+        outcome = sync.run_retry(stem, sync._iso(parent_begun), session)
+        assert outcome["outcome"] == "replayed" and outcome["committed"] is True, outcome
+
+    commits = [e["fields"] for e in _own(sync.SYNC_COMMIT)]
+    assert sorted(c["session"] for c in commits) == ["s-other", "s-own"]
+    assert all(c["retry"] is True for c in commits)
+    assert len(_own(sync.TRIGGER_START)) == 1
+    ends = [e["fields"] for e in _own(sync.SYNC_END)]
+    assert sorted(e["kind"] for e in ends) == ["retry", "retry", "session_end"]
+    assert {e["trigger_start"] for e in ends} == {begun}
+
+
+def test_retry_after_budget_stops_when_another_sync_replayed(live_env, monkeypatch):
+    _emit("s-done")
+    _emit("s-stuck")
+    sync.run()
+    _emit("s-stuck")
+    monkeypatch.setattr(store, "DEADLINE_S", 0.01)
+    begun = sync._now()
+    now, slept = [begun], []
+    monkeypatch.setattr(sync, "_now", lambda: now[0])
+
+    def sleep(seconds):
+        slept.append(seconds)
+        now[0] += timedelta(seconds=seconds)
+    monkeypatch.setattr(sync, "_sleep", sleep)
+
+    with _held("s-done.lock"):
+        done = sync.run_retry("s-done", sync._iso(begun))
+    assert done["outcome"] == "replayed_elsewhere" and done["attempts"] == 1 and slept == []
+
+    with _held("s-stuck.lock"):
+        stuck = sync.run_retry("s-stuck", sync._iso(begun))
+    assert stuck["outcome"] == "ceiling" and stuck["committed"] is False
+    assert max(slept) == sync.BACKOFF_MAX_S and sum(slept) <= sync.RETRY_CEILING_S
+    retry_ends = [e["fields"] for e in _own(sync.SYNC_END) if e["fields"]["kind"] == "retry"]
+    assert [e["attempts"] for e in retry_ends] == [1, stuck["attempts"]]
+
+
+def test_deferred_spool_retried_by_one_sync_only(live_env):
+    _emit("s-held")
+    before = len(events())
+
+    with _held("s-held" + sync.RETRY_LOCK_SUFFIX):
+        outcome = sync.run_retry("s-held", sync._iso(sync._now()))
+
+    assert outcome == {"kind": "retry", "stem": "s-held", "outcome": "held_elsewhere"}
+    assert len(events()) == before
+
+
+def test_sweep_retry_does_not_hold_sweep_lock(live_env, monkeypatch):
+    """A sweep holds SWEEP_LOCK on an inheritable descriptor (recorder passes it to the sweep);
+    the retry child it starts must not inherit it, or every later sweep is refused for the retry's life."""
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(args, **kwargs):
+        started.append(kwargs)
+        process = real_popen(args, **kwargs)
+        started.append(process)
+        return process
+    monkeypatch.setattr(sync.subprocess, "Popen", popen)
+    live.spool_dir().mkdir(parents=True, exist_ok=True)
+    fd = os.open(live.spool_dir() / recorder.SWEEP_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    os.set_inheritable(fd, True)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        sync._popen_detached([sys.executable, "-c", "import time; time.sleep(60)"])
+    finally:
+        os.close(fd)
+    kwargs, process = started
+    try:
+        assert kwargs["close_fds"] is True and not kwargs.get("pass_fds")
+        with _held(recorder.SWEEP_LOCK):
+            pass
+    finally:
+        process.kill()
+        process.wait()

@@ -1,6 +1,7 @@
 """Command line of the telemetry record.
 
     telemetry.py sync [--session <id>] [--stale] [--budget SECONDS]
+    telemetry.py sync --retry-deferred STEM --parent-begun T [--parent-session S]
     telemetry.py emit-precommit --started <epoch seconds> --exit <code>
     telemetry.py import [--transcripts] [--all] [--max-rss-mib N] [--stats-json FILE] [--sources DIR]
     telemetry.py snapshot-sources --out DIR [--since-landing F] [--check-space]
@@ -17,6 +18,8 @@
     telemetry.py check-latency --max-seconds S --since-landing F
         [--sync-outage-from TS (--sync-outage-until-landing F2 | --sync-outage-until TS2)] [--pre-fix-late P]
         [--pre-fix-late-from-landing G [--pre-fix-late-until-landing H]]
+        [--lock-contention-from-landing F --lock-contention-until-landing U]
+        [--min-judged-after-landing L --min-judged N]
     telemetry.py export --out F [--with-text]
     telemetry.py merge F
     telemetry.py check-roundtrip --workdir D
@@ -94,7 +97,15 @@ late, not real and not import-only, or late outside [landed_at, TS), exits 2.
 [G's landed_at, H's landed_at) (to the run time without H), each bound to its land:landed event:
 an entry whose T1 lies there is valid only with the cause
 pre_fix_cause_sync_commit_waits_foreign_retries and a first sync.commit at or after T1 (before H's
-landed_at when H is given); otherwise it exits 2. Both are
+landed_at when H is given); otherwise it exits 2.
+`--lock-contention-from-landing F --lock-contention-until-landing U` (both or neither, else exit 2;
+each bound to its land:landed event as F2 is): a late session whose T1 lies in [F's landed_at, U's
+landed_at) is the counted loss sync_lock_contention, a cause attributed to that window as a whole
+(the sync held the write lock through materialize), not proven per session; a sync_deferred
+session whose T1 is at or after U's landed_at is late once the run time is more than
+sync.RETRY_CEILING_S + 600 s after its T1. `--min-judged-after-landing L --min-judged N` (both or
+neither, else exit 2): the output's judged_after_landing counts the sessions with T1 at or after
+L's landed_at judged on_time or late, and fewer than N fails the check (exit 1). Both are
 lib/telemetry/report.py, as is `agent-report.py core-version`.
 
 `sync` runs one sync (lib/telemetry/sync.py): it replays the named session's spool and every
@@ -102,7 +113,9 @@ other spool with unreplayed bytes, files the rows the events imply and prints th
 JSON line. `--session` marks a sync a SessionEnd hook started; `--stale` a sweep the command path
 started; both may be absent for a manual run. It exits 0 on deferral or store failure (the spools
 keep the events). `--budget S` is how long it keeps retrying a deferred spool (default
-`sync.BUDGET_S`). `emit-precommit` writes the `precommit` event of one pre-commit run; `now` prints
+`sync.BUDGET_S`); a spool still deferred then is retried by a detached
+`sync --retry-deferred STEM --parent-begun T [--parent-session S]` (sync.run_retry), which answers
+the deferring sync's trigger T and gives up sync.RETRY_CEILING_S after it. `emit-precommit` writes the `precommit` event of one pre-commit run; `now` prints
 the epoch time the hook measures from; `path` prints the record's path.
 """
 from __future__ import annotations
@@ -293,6 +306,11 @@ def _check_record(args) -> int:
             if latency and args.pre_fix_late_from_landing else None
         second_until = _read_json_file(args.pre_fix_late_until_landing, None) \
             if latency and args.pre_fix_late_until_landing else None
+        contention = (_read_json_file(args.lock_contention_from_landing, None),
+                      _read_json_file(args.lock_contention_until_landing, None)) \
+            if latency and args.lock_contention_from_landing else None
+        floor_landing = _read_json_file(args.min_judged_after_landing, None) \
+            if latency and args.min_judged_after_landing else None
         outage_from = telemetry_sync.parse_time(args.sync_outage_from) if latency else None
         outage_until = telemetry_sync.parse_time(args.sync_outage_until) if latency else None
         known_losses = None if latency else _known_losses(args)
@@ -318,8 +336,15 @@ def _check_record(args) -> int:
                 second_window = (report.outage_end_from_landing(conn, _as_dict(second_from)),
                                  report.outage_end_from_landing(conn, _as_dict(second_until))
                                  if second_until is not None else None)
+            lock_contention = None
+            if contention is not None:
+                lock_contention = tuple(report.outage_end_from_landing(conn, _as_dict(f)) for f in contention)
+            judged_floor = None
+            if floor_landing is not None:
+                judged_floor = (report.outage_end_from_landing(conn, _as_dict(floor_landing)), args.min_judged)
             result = report.check_latency(conn, args.max_seconds, landed_at, datetime.now(timezone.utc),
-                                          outage, entries if isinstance(entries, list) else None, second_window)
+                                          outage, entries if isinstance(entries, list) else None, second_window,
+                                          lock_contention, judged_floor)
     except (report.KnownLossError, ValueError, TypeError, KeyError) as err:
         print(f"{args.command}: {err}", file=sys.stderr)
         return 2
@@ -356,6 +381,10 @@ def main(argv=None) -> int:
     sync_cmd.add_argument("--session", default=None, help="the session whose SessionEnd started this sync")
     sync_cmd.add_argument("--stale", action="store_true", help="a sweep started by the command path")
     sync_cmd.add_argument("--budget", type=float, default=None, help="seconds to keep retrying while deferred")
+    sync_cmd.add_argument("--retry-deferred", metavar="STEM", default=None,
+                          help="retry this spool a sync left deferred, answering that sync's trigger")
+    sync_cmd.add_argument("--parent-begun", metavar="T", default=None, help="the begun time of the deferring sync")
+    sync_cmd.add_argument("--parent-session", metavar="S", default=None, help="the session of the deferring sync")
     pre = sub.add_parser("emit-precommit", help="record one pre-commit run")
     pre.add_argument("--started", type=float, default=0.0)
     pre.add_argument("--exit", dest="exit_code", type=int, default=0)
@@ -422,6 +451,14 @@ def main(argv=None) -> int:
                      help="landing record opening a second pre-fix window, for the sync-commit cause only")
     lat.add_argument("--pre-fix-late-until-landing", default=None,
                      help="landing record closing that window (open to the run time without it)")
+    lat.add_argument("--lock-contention-from-landing", metavar="F", default=None,
+                     help="landing record opening the sync-lock-contention window (needs the until landing)")
+    lat.add_argument("--lock-contention-until-landing", metavar="U", default=None,
+                     help="landing record closing that window; deferred sessions after it are judged")
+    lat.add_argument("--min-judged-after-landing", metavar="L", default=None,
+                     help="landing record from which sessions judged on_time or late are counted")
+    lat.add_argument("--min-judged", metavar="N", type=int, default=None,
+                     help="fail when fewer than N sessions after that landing were judged")
     exp = sub.add_parser("export", help="export the record's rows for a merge on another machine")
     exp.add_argument("--out", required=True, help="the export file to create (must not exist)")
     exp.add_argument("--with-text", action="store_true", help="also export the text artifacts")
@@ -432,11 +469,19 @@ def main(argv=None) -> int:
     sub.add_parser("now", help="print the epoch time")
     sub.add_parser("path", help="print the record's path")
     args = parser.parse_args(argv)
+    if args.command == "sync" and ((args.retry_deferred is None) != (args.parent_begun is None)
+                                   or (args.parent_session is not None and args.retry_deferred is None)):
+        sync_cmd.error("--retry-deferred needs --parent-begun, and --parent-begun/--parent-session need it")
     if args.command == "check-latency" and (args.sync_outage_from is None) != (
             args.sync_outage_until_landing is None and args.sync_outage_until is None):
         lat.error("--sync-outage-from needs one of --sync-outage-until-landing / --sync-outage-until, and they need it")
     if args.command == "check-latency" and args.pre_fix_late_until_landing and not args.pre_fix_late_from_landing:
         lat.error("--pre-fix-late-until-landing needs --pre-fix-late-from-landing")
+    if args.command == "check-latency" and (args.lock_contention_from_landing is None) != (
+            args.lock_contention_until_landing is None):
+        lat.error("--lock-contention-from-landing and --lock-contention-until-landing go together")
+    if args.command == "check-latency" and (args.min_judged_after_landing is None) != (args.min_judged is None):
+        lat.error("--min-judged-after-landing and --min-judged go together")
     if args.command in ("export", "merge", "check-roundtrip"):
         return _portability(args)
     if args.command == "import":
@@ -474,7 +519,11 @@ def main(argv=None) -> int:
     if args.command == "emit-precommit":
         emit_precommit(args.started, args.exit_code)
         return 0
-    print(json.dumps(telemetry_sync.run(args.session, args.budget), sort_keys=True, default=str))
+    if args.retry_deferred is not None:
+        result = telemetry_sync.run_retry(args.retry_deferred, args.parent_begun, args.parent_session)
+    else:
+        result = telemetry_sync.run(args.session, args.budget)
+    print(json.dumps(result, sort_keys=True, default=str))
     return 0
 
 

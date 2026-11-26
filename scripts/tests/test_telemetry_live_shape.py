@@ -975,6 +975,118 @@ def test_sync_outage_landed_at_bound_to_landing_event(world):
         end(990)
 
 
+def judge(lock=None, floor=None, now_s=100_000) -> dict:
+    conn = store.open_readonly()
+    try:
+        return report.check_latency(
+            conn, S, at(-10_000), moment(now_s),
+            lock_contention=(moment(lock[0]), moment(lock[1])) if lock else None,
+            judged_floor=(moment(floor[0]), floor[1]) if floor else None)
+    finally:
+        conn.close()
+
+
+def deferred_session(session, seconds) -> None:
+    """A session whose sync rows wait in the reserved spool: triggered, never committed."""
+    from lib.telemetry import emit
+    cv_event(session, "command", seconds, {"command": "status"}, "cli:status")
+    trigger(seconds + 10, "session_end", session)
+    path = emit.spool_path(sync.SYNC_SESSION)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"kind": sync.SYNC_DEFERRED, "fields": {"session": session}}) + "\n")
+
+
+def test_lock_contention_window_names_late_session_in_window(world):
+    for session, seconds in (("s-before", -500), ("s-in", 1000), ("s-until", 2000)):
+        late_session(session, seconds)
+    result = judge(lock=(10, 2010))
+    assert statuses(result) == {"s-before": "late", "s-in": report.SYNC_LOCK_CONTENTION, "s-until": "late"}
+    assert result["losses"] == {report.SYNC_LOCK_CONTENTION: 1}
+    assert result["loss_notes"] == {report.SYNC_LOCK_CONTENTION: report.SYNC_LOCK_CONTENTION_NOTE}
+    assert result["late"] == ["s-before", "s-until"] and not result["ok"]
+
+
+def test_lock_contention_window_judges_session_after_until(world):
+    late_session("s-after", 3000)
+    result = judge(lock=(10, 2010))
+    assert statuses(result) == {"s-after": "late"} and "loss_notes" not in result
+
+
+def test_deferred_after_until_landing_judged_late_past_ceiling(world):
+    """Past the retry's ceiling a deferred session after U is late; before it, or inside the
+    window, it stays sync_deferred."""
+    deferred_session("s-deferred", 3000)
+    deferred_session("s-in-window", 1000)
+    first = 3010
+    within = judge(lock=(10, 2010), now_s=first + int(report.DEFERRED_JUDGED_AFTER_S) - 1)
+    past = judge(lock=(10, 2010), now_s=first + int(report.DEFERRED_JUDGED_AFTER_S) + 1)
+    assert statuses(within) == {"s-deferred": "sync_deferred", "s-in-window": "sync_deferred"}
+    assert statuses(past) == {"s-deferred": "late", "s-in-window": "sync_deferred"}
+    assert past["late"] == ["s-deferred"] and not past["ok"]
+
+
+def judged_sessions() -> None:
+    for session, seconds in (("s-early", 500), ("s-one", 1500), ("s-two", 2500)):
+        on_time_session(session, seconds)
+
+
+def latency_argv(tmp_path, *extra) -> list:
+    landing = tmp_path / "since.json"
+    landing.write_text(json.dumps({"head": "abc", "landed_at": at(-9_000)}), encoding="utf-8")
+    return ["check-latency", "--max-seconds", str(S), "--since-landing", str(landing), *extra]
+
+
+def exit_code(argv) -> int:
+    import telemetry as telemetry_cli
+    try:
+        return telemetry_cli.main(argv)
+    except SystemExit as stop:
+        return stop.code
+
+
+def test_min_judged_after_landing_fails_below_floor(world, tmp_path):
+    judged_sessions()
+    short = judge(floor=(1000, 3))
+    assert short["judged_after_landing"] == {"since": moment(1000).isoformat(), "count": 2, "min": 3}
+    assert not short["ok"]
+    landing = tmp_path / "floor.json"
+    landing.write_text(json.dumps({"head": "abc", "landed_at": at(1000)}), encoding="utf-8")
+    landing_event(950)
+    assert exit_code(latency_argv(tmp_path, "--min-judged-after-landing", str(landing), "--min-judged", "3")) == 1
+    assert exit_code(latency_argv(tmp_path, "--min-judged-after-landing", str(landing), "--min-judged", "2")) == 0
+    assert exit_code(latency_argv(tmp_path, "--min-judged-after-landing", str(landing))) == 2
+    assert exit_code(latency_argv(tmp_path, "--min-judged", "1")) == 2
+
+
+def test_min_judged_after_landing_passes_at_floor(world):
+    judged_sessions()
+    met = judge(floor=(1000, 2))
+    assert met["judged_after_landing"]["count"] == 2 and met["ok"]
+
+
+@pytest.mark.parametrize("flag", ["--lock-contention-from-landing", "--lock-contention-until-landing"])
+def test_lock_contention_window_requires_both_landings(world, tmp_path, flag):
+    assert exit_code(latency_argv(tmp_path, flag, str(tmp_path / "since.json"))) == 2
+
+
+def test_lock_contention_landing_bound_to_land_event(world, tmp_path):
+    import telemetry as telemetry_cli
+    on_time_session("s-ok", 0)
+    landings = []
+    for name, head, landed_s in (("from.json", "aaa", 500), ("until.json", "bbb", 1500)):
+        path = tmp_path / name
+        path.write_text(json.dumps({"head": head, "landed_at": at(landed_s)}), encoding="utf-8")
+        landings.append(str(path))
+    argv = latency_argv(tmp_path, "--lock-contention-from-landing", landings[0],
+                        "--lock-contention-until-landing", landings[1])
+    assert telemetry_cli.main(argv) == 2
+    landing_event(450, "aaa")
+    assert telemetry_cli.main(argv) == 2
+    landing_event(1450, "bbb")
+    assert telemetry_cli.main(argv) != 2
+
+
 def test_pre_fix_late_refuses_entry_outside_pre_outage_span(world):
     late_session("s-real", 5000)
     late_session("s-imp", 5000, provenance="imported")

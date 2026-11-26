@@ -17,8 +17,9 @@ the skill files, and a test that fails on the copy for want of them would read a
 
 `--control` runs the same tests on the unmutated copy: 0 when all pass, 7 otherwise; a
 control that fails would make every kill meaningless. It runs every catalogued test, so it
-fans out under pytest-xdist within the per-run share of the machine's test slots; a mutant
-runs its few tests serially. `--list` prints the mutant names.
+fans out under pytest-xdist within the per-run share of the machine's test slots, which the
+harness takes before starting the child, so the child's timeout counts its run and not the
+queue (a slot wait that expires exits 7); a mutant runs its few tests serially. `--list` prints the mutant names.
 `--root` names the tree holding `scripts/` (tests build a synthetic one). Stdlib only.
 """
 from __future__ import annotations
@@ -66,34 +67,64 @@ def apply_mutant(scratch: Path, mutant: dict) -> bool:
     return True
 
 
-def _control_workers() -> int:
-    """The per-run share of the machine's test slots, or 0 (serial) when xdist is not importable."""
-    if importlib.util.find_spec("xdist") is None:
-        return 0
+SLOTS_CONFTEST = Path("scripts") / "tests" / "conftest.py"
+
+
+def _test_slots():
+    """scripts/lib/test_slots.py, loaded by path (the harness runs without the repo on sys.path)."""
+    if "test_slots" in sys.modules:
+        return sys.modules["test_slots"]
     spec = importlib.util.spec_from_file_location("test_slots", Path(__file__).resolve().parent.parent
                                                   / "lib" / "test_slots.py")
     test_slots = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = test_slots  # its dataclasses resolve their module through sys.modules
     spec.loader.exec_module(test_slots)
-    return test_slots.configured().per_run
+    return test_slots
 
 
-def _run_tests(scratch: Path, test_ids: list, workers: int = 0) -> str:
+def _control_workers() -> int:
+    """The per-run share of the machine's test slots, or 0 (serial) when xdist is not importable."""
+    if importlib.util.find_spec("xdist") is None:
+        return 0
+    return _test_slots().configured().per_run
+
+
+def _run_child(command: list, **kwargs) -> None:
+    subprocess.run(command, capture_output=True, check=False, **kwargs)
+
+
+def _run_tests(scratch: Path, test_ids: list, workers: int = 0, *, slots=None, child=_run_child) -> str:
     """'green', 'red' or 'no-verdict' for the given tests run in the scratch tree.
 
-    With ``workers`` the child runs under pytest-xdist; the scratch conftest takes that many
-    slots from the machine-wide limiter (scripts/lib/test_slots.py) before fanning out.
+    With ``workers`` the child runs under pytest-xdist. When the scratch tree carries the repo's
+    conftest (the one that would take slots inside the child) and this process holds none, the
+    harness takes them from the machine-wide limiter (scripts/lib/test_slots.py) before starting
+    the child and hands their count down, so CHILD_TIMEOUT_S counts the child's run, not the
+    queue; a slot wait that expires gives no verdict. ``slots`` and ``child`` are for tests.
     """
     report = scratch / "junit.xml"
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTEST_ADDOPTS")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    holder = None
+    if workers and (scratch / SLOTS_CONFTEST).is_file():
+        slots = slots or _test_slots()
+        if slots.inherited(slots.configured().directory) is None:
+            try:
+                holder = slots.acquire(workers)
+            except slots.SlotWaitExpired:
+                return "no-verdict"
+            workers = holder.count
+            env[slots.HELD_ENV] = str(holder.count)
     parallel = ["-n", str(workers)] if workers else ["-p", "no:xdist"]
     command = [sys.executable, "-m", "pytest", *parallel, "-p", "no:cacheprovider", "-q", "--tb=no",
                f"--junitxml={report}", *test_ids]
     try:
-        subprocess.run(command, cwd=scratch, env=env, capture_output=True, timeout=CHILD_TIMEOUT_S, check=False)
+        child(command, cwd=scratch, env=env, timeout=CHILD_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return "no-verdict"
+    finally:
+        if holder is not None:
+            holder.release()
     if not report.exists():
         return "no-verdict"
     suites = ET.parse(report).getroot().iter("testcase")

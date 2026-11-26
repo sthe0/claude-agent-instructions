@@ -147,11 +147,11 @@ MUTANTS = [
      "replacement": "    elif False:\n",
      "tests": [_T + "test_scale_measurement_count_above_pinned_fails"]},
     {"name": "sync_commit_after_retries", "file": _SYNC,
-     "anchor": "    results = _replay_all(stems, deadline, commit_replayed)\n",
-     "replacement": ("    results = _replay_all(stems, deadline, lambda stem, result: None)\n"
-                     "    for stem in stems:\n"
-                     "        if results[stem][\"ok\"]:\n"
-                     "            commit_replayed(stem, results[stem])\n"),
+     "anchor": "        results = _replay_all(stems, deadline, commit_replayed)\n",
+     "replacement": ("        results = _replay_all(stems, deadline, lambda stem, result: None)\n"
+                     "        for stem in stems:\n"
+                     "            if results[stem][\"ok\"]:\n"
+                     "                commit_replayed(stem, results[stem])\n"),
      "tests": [_SYNC_T + "test_replayed_spool_commits_before_retries_of_a_deferred_one_end"]},
     {"name": "sync_budget_counts_only_sleeps", "file": _SYNC,
      "anchor": "    while _monotonic() + wait <= deadline and not all(r[\"ok\"] for r in results.values()):\n",

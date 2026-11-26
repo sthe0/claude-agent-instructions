@@ -7,7 +7,10 @@ offset and event id, so replaying a live session early is safe). It then materia
 replayed session, the rows the events imply (session, task, contour, artifacts) and writes its own
 work as events under the reserved source key `telemetry:sync`, through `store.insert_rows`, never
 into a visited spool: `trigger.start` when it begins, `sync.commit` per spool it replayed,
-`sync.deferred` past the retry budget. A row `insert_rows` could not place goes to the reserved
+`sync.deferred` past the retry budget, and `sync.end` as its last act (the trigger it answers and
+the longest write transaction it held). A spool still deferred is then retried by a detached
+process of its own (`run_retry`) until it commits, another sync replays it, or RETRY_CEILING_S
+after the trigger, so it is not left to the next unrelated trigger. A row `insert_rows` could not place goes to the reserved
 spool `telemetry:sync.jsonl`, which the next sync replays first; none is lost.
 
 A spool is eligible (its session counts as ended) when it has an end marker, or has none and its
@@ -19,10 +22,12 @@ Hot-path rule: git, the harness version and transcripts are read here, never in 
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -44,8 +49,13 @@ SOURCE_KEY = "telemetry:sync"
 TRIGGER_START = "trigger.start"
 SYNC_COMMIT = "sync.commit"
 SYNC_DEFERRED = "sync.deferred"
+SYNC_END = "sync.end"
+RETRY_CEILING_S = 3600.0
+RETRY_LOCK_SUFFIX = ".retry-lock"
 WAITING_PER_SYNC = 50
 CURSOR_KEY = "materialize_cursor"
+# meta key prefix of a waiting session's last-tried mark (see materialize)
+WAITING_MARK_PREFIX = "waiting_mark:"
 HARNESS_VERSION_ENV = "AGENTCTL_HARNESS_VERSION"
 CORE_ROOT = Path(__file__).resolve().parents[3]
 GIT_TIMEOUT_S = 5.0
@@ -445,10 +455,42 @@ def _session_events(conn, session: str) -> list:
         "SELECT event_id, kind, time, fields FROM events WHERE session_id = ? ORDER BY time, event_id", (session,))]
 
 
-def _file_task_rows(conn, origin: str, session: str) -> None:
+def _first_open(conn, session: str):
+    row = conn.execute(
+        "SELECT t.origin, t.task_id, t.epoch FROM events e JOIN tasks t ON t.epoch = e.event_id "
+        "WHERE e.session_id = ? AND e.kind = 'task' ORDER BY e.time LIMIT 1", (session,)).fetchone()
+    return tuple(row) if row else None
+
+
+def _read_session(conn, session: str) -> dict:
+    """What _materialize_session reads by scanning a session's events: the events themselves, its
+    task opens and the first task row its events open."""
+    return {"events": _session_events(conn, session), "opens": _task_opens(conn, session),
+            "first_open": _first_open(conn, session)}
+
+
+def _read_outside(task_rows: bool, session: str):
+    """A session's reads for one filing step, on a read-only connection of their own, so that no
+    write transaction is open while they run: its events for _file_task_rows, _read_session's
+    dict for _materialize_session. None when the record cannot be read; the step then reads
+    inside its transaction."""
+    conn = store.open_readonly()
+    if conn is None:
+        return None
+    try:
+        return _session_events(conn, session) if task_rows else _read_session(conn, session)
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _file_task_rows(conn, origin: str, session: str, events=None) -> None:
     """The task rows a session's events open, abandon, weigh and resolve. Run for every session of a
-    sync before any session's contours, so a child filed in the same sync finds its parent's row."""
-    events = _session_events(conn, session)
+    sync before any session's contours, so a child filed in the same sync finds its parent's row.
+    `events`: the session's events read before the transaction (read here when None)."""
+    if events is None:
+        events = _session_events(conn, session)
     for event_id, kind, moment, fields in events:
         if kind == "task" and fields.get("action") == "open" and fields.get("task_id"):
             conn.execute(
@@ -469,8 +511,13 @@ def _file_task_rows(conn, origin: str, session: str) -> None:
                          (moment, epoch))
 
 
-def _materialize_session(conn, origin: str, session: str, subagents: "list[str]", artifacts) -> None:
-    events = _session_events(conn, session)
+def _materialize_session(conn, origin: str, session: str, subagents: "list[str]", artifacts,
+                         read: "dict | None" = None) -> None:
+    """The session, contour, cause and artifact rows of one session. `read`: _read_session's
+    result taken before the transaction, so only key lookups run inside it (read here when None)."""
+    if read is None:
+        read = _read_session(conn, session)
+    events = read["events"]
     if not events:
         return
     sess_event = next((f for _, kind, _, f in events if kind == "session"), None)
@@ -485,10 +532,7 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
         depth = 1 if parent else 0
     conn.execute(SESSION_UPSERT, (session, origin, parent, role, tables.validate("roles", role), depth, events[0][2]))
 
-    first_open = conn.execute(
-        "SELECT t.origin, t.task_id, t.epoch FROM events e JOIN tasks t ON t.epoch = e.event_id "
-        "WHERE e.session_id = ? AND e.kind = 'task' ORDER BY e.time LIMIT 1", (session,)).fetchone()
-    key = tuple(first_open) if first_open else None
+    key = read["first_open"]
     if key is None and parent:
         stamp = spawn_row[1] if spawn_row else events[0][2]
         key = _task_key_for(conn, parent, stamp, (spawn or {}).get("task_epoch"))
@@ -504,7 +548,7 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
         put_contour(conn, session, None, "root", session_key)
     elif spawn_row is None:
         put_contour(conn, session, parent, role, session_key)
-    opens = _task_opens(conn, session)
+    opens = read["opens"]
     for event_id, kind, moment, fields in events:
         if kind not in ("spawn", "judge"):
             continue
@@ -585,6 +629,44 @@ def _rotation(pool: "list[str]", cursor: "str | None", cap: int) -> "list[str]":
     return (after + before)[:cap]
 
 
+def _record_marks(conn) -> "tuple[int, int]":
+    """The parts of a waiting mark shared by every session: the record's highest tasks rowid and
+    the count of sessions rows whose task key is set."""
+    tasks = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM tasks").fetchone()[0]
+    keyed = conn.execute("SELECT COUNT(*) FROM sessions WHERE task_id IS NOT NULL").fetchone()[0]
+    return tasks, keyed
+
+
+def _waiting_mark(conn, session: str, shared: "tuple[int, int]") -> "list[int]":
+    """[the session's highest event rowid, *shared]: what resolving its task reads, as counters."""
+    events = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM events WHERE session_id = ?", (session,)).fetchone()[0]
+    return [events, *shared]
+
+
+def _stored_marks(conn) -> "dict[str, list]":
+    marks = {}
+    for key, value in conn.execute("SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?",
+                                   (len(WAITING_MARK_PREFIX), WAITING_MARK_PREFIX)):
+        try:
+            marks[key[len(WAITING_MARK_PREFIX):]] = json.loads(value)
+        except ValueError:
+            continue
+    return marks
+
+
+def _unchanged(mark: "list[int]", stored) -> bool:
+    """None of the three parts of a waiting session's mark has grown since its last try."""
+    if not isinstance(stored, list) or len(stored) != 3:
+        return False
+    events, tasks, keyed = mark
+    return events <= stored[0] and tasks <= stored[1] and keyed <= stored[2]
+
+
+def _put_mark(conn, session: str, mark: "list[int]") -> None:
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                 (WAITING_MARK_PREFIX + session, json.dumps(mark)))
+
+
 def materialize(sessions: "list[str]") -> dict:
     """Idempotently file the rows the replayed events of `sessions` imply, plus a bounded share of
     the sessions still waiting. Returns {committed, unattached} and, when a write did not commit,
@@ -599,7 +681,15 @@ def materialize(sessions: "list[str]") -> dict:
     advanced before filing, so a session that fails is passed over, not retried at every sync.
     Every waiting session is thus visited within ceil(waiting / WAITING_PER_SYNC) syncs. The
     session's HEAD, dirty flag and harness version are captured only for a row that has none, so
-    a later sync never rewrites them."""
+    a later sync never rewrites them.
+
+    No write transaction is open while a session's events are read: each filing step reads them
+    on a read-only connection first (_read_outside), and BEGIN IMMEDIATE wraps only that
+    session's upserts and their key lookups. A waiting session is passed over, without counting
+    against the cap, while nothing its resolution reads has grown since its last try: its mark
+    (its highest event rowid, the record's highest tasks rowid, the count of sessions rows with a
+    task key; taken before the read) is kept in meta under WAITING_MARK_PREFIX + its id and
+    written in the transaction that files it."""
     conn = store.open_record()
     if conn is None:
         return {"committed": False, "unattached": None}
@@ -611,7 +701,14 @@ def materialize(sessions: "list[str]") -> dict:
         unfiled = [s for s in _unfiled(conn) if s not in forced][:WAITING_PER_SYNC]
         row = conn.execute("SELECT value FROM meta WHERE key = ?", (CURSOR_KEY,)).fetchone()
         pool = [s for s in _waiting(conn) if s not in forced and s not in unfiled]
-        rotated = _rotation(pool, row[0] if row else None, WAITING_PER_SYNC - len(unfiled))
+        shared, stored, marks, rotated = _record_marks(conn), _stored_marks(conn), {}, []
+        for session in _rotation(pool, row[0] if row else None, len(pool)):
+            if len(rotated) >= WAITING_PER_SYNC - len(unfiled):
+                break
+            mark = _waiting_mark(conn, session, shared)
+            if not _unchanged(mark, stored.get(session)):
+                rotated.append(session)
+                marks[session] = mark
         targets = sorted(forced) + unfiled + rotated
         needing_head = {s for s in targets if not conn.execute(
             "SELECT core_head FROM sessions WHERE session_id = ? AND core_head IS NOT NULL", (s,)).fetchone()}
@@ -633,12 +730,16 @@ def materialize(sessions: "list[str]") -> dict:
         return {"committed": False, "unattached": None}
     origin = started["value"]
 
+    reads = {}
+
     def file_rows(conn, session):
-        _file_task_rows(conn, origin, session)
+        _file_task_rows(conn, origin, session, reads.pop(session, None))
 
     def file_session(conn, session):
         subagents, artifacts = extras[session]
-        _materialize_session(conn, origin, session, subagents, artifacts)
+        _materialize_session(conn, origin, session, subagents, artifacts, reads.pop(session, None))
+        if session in marks:
+            _put_mark(conn, session, marks[session])
         if hosts.get(session):
             conn.execute("UPDATE sessions SET host = COALESCE(host, ?) WHERE session_id = ?",
                          (hosts[session], session))
@@ -649,6 +750,7 @@ def materialize(sessions: "list[str]") -> dict:
 
     for step in (file_rows, file_session):
         for session in targets:
+            reads[session] = _read_outside(step is file_rows, session)
             outcome = store.transact(lambda conn, s=session: step(conn, s))
             if not outcome["committed"]:
                 return {"committed": False, "unattached": None, "failed_session": session}
@@ -718,39 +820,147 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
         stems.append(session)
     stems = sorted(stems, key=lambda s: s != session)
 
-    committed, deferred = [], []
+    committed, deferred, retried = [], [], []
 
     def commit_replayed(stem, result):
-        if result["inserted"] > 0 or stem == session:
-            write = True
-        else:
-            conn = store.open_record()
-            try:
-                end, _, commit = latency_marks(conn, stem, skipped) if conn is not None else (None, None, None)
-            finally:
-                if conn is not None:
-                    conn.close()
-            write = end is not None and end <= begun and commit is None and is_eligible(stem, begun)
-        if write:
+        if _commit_due(stem, result["inserted"], begun, session, skipped):
             _write_own(SYNC_COMMIT, {"session": stem, "rows_inserted": result["inserted"]})
             committed.append(stem)
 
-    results = _replay_all(stems, deadline, commit_replayed)
-    unreplayed = [stem for stem in stems if not results[stem]["ok"]]
-    if unreplayed:
-        conn = store.open_record()
-        try:
-            for stem in unreplayed:
-                left = unreplayed_bytes(conn, stem) if conn is not None else 0
-                _write_own(SYNC_DEFERRED, {"session": stem, "unreplayed_bytes": left})
-                deferred.append(stem)
-        finally:
-            if conn is not None:
-                conn.close()
-    filed = materialize([s for s in stems if s not in deferred])
-    if filed.get("failed_session"):
-        _write_own(SYNC_DEFERRED, {"session": filed["failed_session"], "phase": "materialize"})
-    from lib.telemetry import tokens
-    collected = tokens.collect([s for s in stems if s != SYNC_SESSION])
-    return {"kind": kind, "visited": stems, "committed": committed, "deferred": deferred,
+    try:
+        results = _replay_all(stems, deadline, commit_replayed)
+        unreplayed = [stem for stem in stems if not results[stem]["ok"]]
+        if unreplayed:
+            conn = store.open_record()
+            try:
+                for stem in unreplayed:
+                    left = unreplayed_bytes(conn, stem) if conn is not None else 0
+                    _write_own(SYNC_DEFERRED, {"session": stem, "unreplayed_bytes": left})
+                    deferred.append(stem)
+            finally:
+                if conn is not None:
+                    conn.close()
+        filed = materialize([s for s in stems if s not in deferred])
+        if filed.get("failed_session"):
+            _write_own(SYNC_DEFERRED, {"session": filed["failed_session"], "phase": "materialize"})
+        from lib.telemetry import tokens
+        collected = tokens.collect([s for s in stems if s != SYNC_SESSION])
+        for stem in deferred:
+            _spawn_retry(stem, begun, session)
+            retried.append(stem)
+    finally:
+        _write_sync_end(begun, kind, committed=len(committed), deferred=len(deferred), retries=len(retried))
+    return {"kind": kind, "visited": stems, "committed": committed, "deferred": deferred, "retried": retried,
             "unattached": filed["unattached"], "tokens": collected, NO_TIME_ROWS: skipped[NO_TIME_ROWS]}
+
+
+def _commit_due(stem: str, inserted: int, begun: datetime, session: "str | None", skipped: dict) -> bool:
+    """Whether a replayed spool gets its sync.commit row (the A mark): it inserted rows, or it is
+    the session that started the sync, or it ended at or before `begun`, is eligible and has no
+    commit yet (a drained spool of an ended session that nobody committed)."""
+    if inserted > 0 or stem == session:
+        return True
+    conn = store.open_record()
+    try:
+        end, _, commit = latency_marks(conn, stem, skipped) if conn is not None else (None, None, None)
+    finally:
+        if conn is not None:
+            conn.close()
+    return end is not None and end <= begun and commit is None and is_eligible(stem, begun)
+
+
+def _write_sync_end(begun: datetime, kind: str, **counts) -> None:
+    """The sync's last act: one sync.end row carrying the trigger start it answers and the longest
+    write transaction this process held, measured before this row's own write."""
+    fields = {"kind": kind, "trigger_start": _iso(begun), "max_lock_hold_ms": store.max_lock_hold_ms(), **counts}
+    _write_own(SYNC_END, fields)
+
+
+# --- the retry of a spool still deferred after the budget -------------------------------
+
+def _popen_detached(args: "list[str]") -> None:
+    """Start `args` in its own session with every descriptor closed, so the child inherits no lock
+    (a sweep's SWEEP_LOCK in particular, which would block every later sweep for the retry's life)."""
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True, close_fds=True, cwd=str(CORE_ROOT / "scripts"))
+
+
+def _spawn_retry(stem: str, begun: datetime, session: "str | None") -> None:
+    args = [sys.executable, str(CORE_ROOT / "scripts" / "telemetry.py"), "sync", "--retry-deferred", stem,
+            "--parent-begun", _iso(begun)]
+    if session:
+        args += ["--parent-session", session]
+    try:
+        _popen_detached(args)
+    except OSError:
+        pass
+
+
+def _retry_lock_path(stem: str) -> Path:
+    return live.spool_dir() / (stem + RETRY_LOCK_SUFFIX)
+
+
+def _replayed_elsewhere(stem: str) -> bool:
+    conn = store.open_record()
+    if conn is None:
+        return False
+    try:
+        return unreplayed_bytes(conn, stem) == 0
+    finally:
+        conn.close()
+
+
+def run_retry(stem: str, parent_begun: str, parent_session: "str | None" = None) -> dict:
+    """Retry one spool a sync left deferred, in a process of its own. It answers the parent's
+    trigger: T (`parent_begun`) is its begun time and S its session, so it writes no trigger.start
+    (that row would become T1 of sessions it never replays). One retrier per stem: without the
+    stem's retry lock it exits at once and writes nothing. Holding it, it retries with backoff
+    capped at BACKOFF_MAX_S until the spool replays (sync.commit under the parent's rule, then the
+    stem's materialize), until another sync replayed it (no bytes left), or until RETRY_CEILING_S
+    after T; it then writes its own sync.end carrying T."""
+    begun = parse_time(parent_begun)
+    if begun is None:
+        return {"kind": "retry", "stem": stem, "outcome": "bad_parent_begun"}
+    try:
+        emit.ensure_private_dir(live.spool_dir())
+        fd = os.open(_retry_lock_path(stem), os.O_RDWR | os.O_CREAT, emit.PRIVATE_FILE_MODE)
+    except OSError:
+        return {"kind": "retry", "stem": stem, "outcome": "no_lock_file"}
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return {"kind": "retry", "stem": stem, "outcome": "held_elsewhere"}
+        return _retry_holding_lock(stem, begun, parent_session)
+    finally:
+        os.close(fd)
+
+
+def _retry_holding_lock(stem: str, begun: datetime, session: "str | None") -> dict:
+    skipped = {NO_TIME_ROWS: 0}
+    ceiling = begun + timedelta(seconds=RETRY_CEILING_S)
+    outcome, inserted, attempts, committed = "ceiling", 0, 0, False
+    wait = BACKOFF_FIRST_S
+    try:
+        while True:
+            attempts += 1
+            replayed = store.replay(stem)
+            inserted += replayed["inserted"]
+            if not replayed["deferred"] and replayed["drained"] and not replayed["failed"]:
+                if _commit_due(stem, inserted, begun, session, skipped):
+                    _write_own(SYNC_COMMIT, {"session": stem, "rows_inserted": inserted, "retry": True})
+                    committed = True
+                materialize([stem])
+                outcome = "replayed"
+                break
+            if _replayed_elsewhere(stem):
+                outcome = "replayed_elsewhere"
+                break
+            if _now() + timedelta(seconds=wait) > ceiling:
+                break
+            _sleep(wait)
+            wait = min(wait * 2, BACKOFF_MAX_S)
+    finally:
+        _write_sync_end(begun, "retry", committed=int(committed), attempts=attempts)
+    return {"kind": "retry", "stem": stem, "outcome": outcome, "attempts": attempts, "committed": committed,
+            "inserted": inserted}

@@ -697,6 +697,12 @@ def _reserved_spool_sessions(conn) -> "tuple[int, set]":
 
 
 SYNC_OUTAGE = "sync_outage"
+SYNC_LOCK_CONTENTION = "sync_lock_contention"
+SYNC_LOCK_CONTENTION_NOTE = (
+    "late sessions whose first trigger fell while the sync held the store's write lock through "
+    "materialize; the cause is attributed to the window as a whole (51 of the 117 sessions of the "
+    "2026-11-24 run carry sync.deferred), not proven per session")
+DEFERRED_JUDGED_AFTER_S = sync.RETRY_CEILING_S + 600.0
 PRE_FIX_LATE = "pre_fix_late"
 IMPORT_ONLY = "import_only"
 PRE_FIX_CAUSE_PREFIX = "pre_fix_cause_"
@@ -854,7 +860,8 @@ def _pre_fix_causes(conn, entries, rows: dict, landed, span_end, second_window: 
 
 
 def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple | None" = None,
-                  pre_fix_entries: "list | None" = None, pre_fix_second_window: "tuple | None" = None) -> dict:
+                  pre_fix_entries: "list | None" = None, pre_fix_second_window: "tuple | None" = None,
+                  lock_contention: "tuple | None" = None, judged_floor: "tuple | None" = None) -> dict:
     """Each session of the population that ended after `landed_at`, by the latency rule over
     sync.latency_marks: on_time, late, waiting (no trigger yet), in_flight (a trigger younger than
     the bound, no commit) or sync_deferred (its rows wait in the reserved spool). A late session is
@@ -864,7 +871,13 @@ def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple 
     timed row precedes `landed_at`. A pre-fix-late entry's T1 lies in [landed_at, outage start), or
     in `pre_fix_second_window` ((from, until or None)) for the one cause that window serves. The
     check fails on a late session and when no session of the population has appeared; it raises
-    LatencyInputError on an entry it refuses."""
+    LatencyInputError on an entry it refuses.
+
+    `lock_contention` ((from, until)): a late session whose T1 lies in [from, until) is the counted
+    loss sync_lock_contention; a sync_deferred session whose T1 is at or after `until` is late once
+    `now` is more than DEFERRED_JUDGED_AFTER_S past its T1 (the retry of a deferred spool gives up
+    RETRY_CEILING_S after its trigger). `judged_floor` ((since, n)): the check also fails when fewer
+    than n sessions with T1 at or after `since` were judged on_time or late."""
     landed = sync.parse_time(landed_at)
     pending, spooled = _reserved_spool_sessions(conn)
     deferred_rows = {r[0] for r in conn.execute(
@@ -891,6 +904,12 @@ def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple 
             status = "late"
         if status == "late" and outage and outage[0] <= first < outage[1]:
             status = SYNC_OUTAGE
+        if lock_contention and first is not None:
+            if status == "late" and lock_contention[0] <= first < lock_contention[1]:
+                status = SYNC_LOCK_CONTENTION
+            elif (status == "sync_deferred" and first >= lock_contention[1]
+                  and (now - first).total_seconds() > DEFERRED_JUDGED_AFTER_S):
+                status = "late"
         rows.append({"session": session, "E": end, "T1": first, "A": commit, "latency_s": seconds, "status": status})
     by_session = {r["session"]: r for r in rows}
     named = _pre_fix_causes(conn, pre_fix_entries or (), by_session, landed, outage[0] if outage else now,
@@ -907,10 +926,18 @@ def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple 
     by_status = {s: 0 for s in ("on_time", "late", "waiting", "in_flight", "sync_deferred")}
     for row in rows:
         by_status[row["status"]] = by_status.get(row["status"], 0) + 1
-    losses = {s: n for s, n in by_status.items() if s == SYNC_OUTAGE or ":" in s}
-    return {"ok": ok, "max_seconds": max_seconds, "landed_at": landed_at, "late": late, "by_status": by_status,
-            "losses": losses, "excluded": excluded, "excluded_count": len(excluded),
-            sync.NO_TIME_ROWS: skipped[sync.NO_TIME_ROWS], "sessions": rows}
+    losses = {s: n for s, n in by_status.items() if s in (SYNC_OUTAGE, SYNC_LOCK_CONTENTION) or ":" in s}
+    result = {"ok": ok, "max_seconds": max_seconds, "landed_at": landed_at, "late": late, "by_status": by_status,
+              "losses": losses, "excluded": excluded, "excluded_count": len(excluded),
+              sync.NO_TIME_ROWS: skipped[sync.NO_TIME_ROWS], "sessions": rows}
+    if SYNC_LOCK_CONTENTION in losses:
+        result["loss_notes"] = {SYNC_LOCK_CONTENTION: SYNC_LOCK_CONTENTION_NOTE}
+    if judged_floor is not None:
+        since, floor = judged_floor
+        count = sum(1 for r in rows if r["status"] in ("on_time", "late") and r["T1"] is not None and r["T1"] >= since)
+        result["judged_after_landing"] = {"since": since.isoformat(), "count": count, "min": floor}
+        result["ok"] = result["ok"] and count >= floor
+    return result
 
 
 # --- the report's own usage event and the CLI -----------------------------------------------

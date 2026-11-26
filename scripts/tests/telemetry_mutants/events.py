@@ -11,7 +11,7 @@ _EVENTS = "scripts/tests/test_telemetry_events.py::"
 _COST = "scripts/tests/test_telemetry_recorder_cost.py::"
 _DUAL = "scripts/tests/test_telemetry_dual_write.py::"
 
-_COMMIT_WRITE = "write = end is not None and end <= begun and commit is None and is_eligible(stem, begun)"
+_COMMIT_WRITE = "return end is not None and end <= begun and commit is None and is_eligible(stem, begun)"
 _VISIT_RULE = "if stem == session or unreplayed_bytes(conn, stem) > 0:"
 _MARKS = "end = last[-1] + timedelta(seconds=LIVE_TTL_S)"
 
@@ -92,7 +92,7 @@ MUTANTS = [
      "replacement": '{"kind": kind}',
      "tests": [_COST + "test_session_end_trigger_start_names_its_session"]},
     {"name": "no_commit_for_drained_eligible_spool", "file": _SYNC,
-     "anchor": _COMMIT_WRITE, "replacement": "write = False",
+     "anchor": _COMMIT_WRITE, "replacement": "return False",
      "tests": [_COST + "test_eligible_spool_without_unreplayed_bytes_gets_one_sync_commit_with_zero_rows"]},
     {"name": "gate_backref_lacks_line_hash", "file": _LIVE,
      "anchor": "return str(path), end - len(data), hashlib.sha256(data).hexdigest()",
@@ -106,7 +106,7 @@ MUTANTS = [
      "tests": [_COST + "test_sync_events_written_through_insert_rows_never_to_a_visited_spool"]},
     {"name": "zero_row_commit_on_every_sweep", "file": _SYNC,
      "anchor": _COMMIT_WRITE,
-     "replacement": "write = end is not None and end <= begun and is_eligible(stem, begun)",
+     "replacement": "return end is not None and end <= begun and is_eligible(stem, begun)",
      "tests": [_COST + "test_second_sweep_over_a_drained_spool_adds_no_sync_commit"]},
     {"name": "deferred_visit_counts_as_appearance", "file": _SYNC,
      "anchor": "                deferred.append(stem)\n",
@@ -122,7 +122,7 @@ MUTANTS = [
      "replacement": "    if False:\n        conn.execute(\n            \"UPDATE sessions SET task_origin",
      "tests": [_IDENTITY + "test_sync_attaches_live_events_of_session_running_before_pr1_to_its_imported_task_row"]},
     {"name": "drained_live_spool_gets_zero_row_commit", "file": _SYNC,
-     "anchor": _COMMIT_WRITE, "replacement": "write = True",
+     "anchor": _COMMIT_WRITE, "replacement": "return True",
      "tests": [_COST + "test_repeated_sweeps_over_a_live_drained_spool_add_no_sync_commit"]},
     {"name": "deferred_sync_rows_dropped", "file": _SYNC,
      "anchor": '        _keep_in_reserved_spool(row)\n    return row["event_id"]',

@@ -175,6 +175,14 @@ MUTANTS = [
     {"name": "pre_fix_cause_deferred_sync_not_retried_within_bound", "file": _SYNC,
      "anchor": "BUDGET_S = LATENCY_S - COMMIT_MARGIN_S\n", "replacement": "BUDGET_S = 120.0\n",
      "tests": [_T + "test_deferred_sync_retried_within_latency_bound"]},
+    {"name": "pre_fix_cause_sync_commit_waits_foreign_retries", "file": _SYNC,
+     "anchor": "        results = _replay_all(stems, deadline, commit_replayed)\n",
+     "replacement": ("        results = _replay_all(stems, deadline, lambda stem, result: None)\n"
+                     "        for stem in stems:\n"
+                     "            if results[stem][\"ok\"]:\n"
+                     "                commit_replayed(stem, results[stem])\n"),
+     "tests": ["scripts/tests/test_telemetry_recorder_cost.py::"
+               "test_replayed_spool_commits_before_retries_of_a_deferred_one_end"]},
     # the command row of a verb interrupted after its state save
     {"name": "command_row_lost_on_interrupt", "file": _CLI,
      "anchor": '            recorder.record_cut_short(recording, store, "interrupted",',

@@ -7,7 +7,9 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -136,3 +138,59 @@ def test_every_declared_mutant_is_applicable_and_names_existing_tests():
             if not source.is_file() or f"def {test}(" not in source.read_text(encoding="utf-8"):
                 problems.append(f"{mutant['name']}: no test {node}")
     assert problems == []
+
+
+class _WaitExpired(Exception):
+    pass
+
+
+@pytest.mark.parametrize("case", ["slot_wait_longer_than_child_timeout", "slot_wait_expires",
+                                  "root_without_conftest"])
+def test_control_child_timeout_counts_run_time_not_slot_wait(tmp_path, monkeypatch, case):
+    """The harness takes the slots before the child starts, so a long queue does not eat the
+    child's timeout; an expired wait gives no verdict; a synthetic root takes no slots."""
+    monkeypatch.delenv("CORE_TEST_SLOTS_HELD", raising=False)
+    monkeypatch.setattr(control, "CHILD_TIMEOUT_S", 2.0)
+    scratch = tmp_path / "tree"
+    (scratch / "scripts" / "tests").mkdir(parents=True)
+    if case != "root_without_conftest":
+        (scratch / control.SLOTS_CONFTEST).write_text("")
+    acquired, released, children = [], [], []
+
+    class Holder:
+        count = 2
+
+        def release(self):
+            released.append(True)
+
+    def acquire(want):
+        acquired.append(want)
+        if case == "slot_wait_expires":
+            raise _WaitExpired()
+        time.sleep(control.CHILD_TIMEOUT_S + 0.5)
+        return Holder()
+
+    slots = SimpleNamespace(configured=lambda: SimpleNamespace(directory=tmp_path / "slots"),
+                            inherited=lambda directory: None, acquire=acquire,
+                            SlotWaitExpired=_WaitExpired, HELD_ENV="CORE_TEST_SLOTS_HELD")
+
+    def child(command, *, cwd, env, timeout):
+        children.append((command, env))
+        report = next(a.partition("=")[2] for a in command if a.startswith("--junitxml="))
+        writer = ("import sys; open(sys.argv[1], 'w').write("
+                  "'<testsuite><testcase classname=\"c\" name=\"t\"/></testsuite>')")
+        subprocess.run([sys.executable, "-c", writer, report], cwd=cwd, timeout=timeout, check=True)
+
+    verdict = control._run_tests(scratch, ["t"], workers=4, slots=slots, child=child)
+
+    if case == "slot_wait_expires":
+        assert (verdict, acquired, children) == ("no-verdict", [4], [])
+        return
+    assert verdict == "green"
+    command, env = children[0]
+    if case == "root_without_conftest":
+        assert acquired == [] and "CORE_TEST_SLOTS_HELD" not in env
+        assert command[command.index("-n") + 1] == "4"
+    else:
+        assert acquired == [4] and released == [True]
+        assert env["CORE_TEST_SLOTS_HELD"] == "2" and command[command.index("-n") + 1] == "2"

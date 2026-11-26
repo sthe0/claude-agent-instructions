@@ -71,8 +71,8 @@ MUTANTS = [
      "replacement": "origin = str(uuid.uuid4())",
      "tests": [_STORE_TESTS + "test_origin_id_created_once_and_kept_in_side_file"]},
     {"name": "offset_outside_transaction", "file": _STORE_FILE,
-     "anchor": '        _upsert_offset(conn, spool, generation, new_offset)\n        conn.execute("COMMIT")',
-     "replacement": '        conn.execute("COMMIT")\n        _upsert_offset(conn, spool, generation, new_offset)',
+     "anchor": '        _upsert_offset(conn, spool, generation, new_offset)\n        _commit(conn)',
+     "replacement": '        _commit(conn)\n        _upsert_offset(conn, spool, generation, new_offset)',
      "tests": [_STORE_TESTS + "test_prefix_inserts_and_offset_commit_together"]},
     {"name": "torn_counted_twice", "file": _STORE_FILE,
      "anchor": "            torn += 1",
@@ -177,5 +177,6 @@ MUTANTS = [
     {"name": "materialize_cursor_not_advanced", "file": _SYNC_FILE,
      "anchor": '"value = excluded.value", (CURSOR_KEY, rotated[-1]))',
      "replacement": '"value = meta.value", (CURSOR_KEY, rotated[-1]))',
-     "tests": [_SCALE_TESTS + "test_rotation_visits_every_waiting_session_within_ceil_n_over_cap_calls"]},
+     "tests": [_SCALE_TESTS + "test_rotation_visits_every_waiting_session_within_ceil_n_over_cap_calls",
+               _SCALE_TESTS + "test_rotation_advances_when_a_task_row_arrives_before_every_call"]},
 ]

@@ -111,9 +111,27 @@ def _set_busy(conn: sqlite3.Connection, ms: int) -> None:
     conn.execute(f"PRAGMA busy_timeout={int(ms)}")
 
 
+# The write lock this process held longest: each BEGIN IMMEDIATE is timed from the moment it
+# returns (its busy wait excluded) to its COMMIT or ROLLBACK. The sync reports it on sync.end.
+_hold_clock = time.monotonic
+_hold = {"began": None, "max_ms": 0.0}
+
+
 def _begin(conn: sqlite3.Connection, deadline: _Deadline) -> None:
     _set_busy(conn, deadline.busy_ms())
     conn.execute("BEGIN IMMEDIATE")
+    _hold["began"] = _hold_clock()
+
+
+def _end_hold() -> None:
+    began, _hold["began"] = _hold["began"], None
+    if began is not None:
+        _hold["max_ms"] = max(_hold["max_ms"], (_hold_clock() - began) * 1000.0)
+
+
+def _commit(conn: sqlite3.Connection) -> None:
+    conn.execute("COMMIT")
+    _end_hold()
 
 
 def _rollback(conn: sqlite3.Connection) -> None:
@@ -121,6 +139,12 @@ def _rollback(conn: sqlite3.Connection) -> None:
         conn.execute("ROLLBACK")
     except sqlite3.Error:
         pass
+    _end_hold()
+
+
+def max_lock_hold_ms() -> float:
+    """The longest write transaction of this process so far, in milliseconds."""
+    return round(_hold["max_ms"], 3)
 
 
 # --- record creation, origin, migrations -------------------------------------------
@@ -222,7 +246,7 @@ def _bootstrap(conn: sqlite3.Connection, record: Path, deadline: _Deadline) -> N
             if has_fts5:
                 _create_artifacts_index(conn)
             conn.execute("INSERT INTO meta (key, value) VALUES ('fts5', ?)", ("1" if has_fts5 else "0",))
-        conn.execute("COMMIT")
+        _commit(conn)
     except BaseException:
         _rollback(conn)
         raise
@@ -372,7 +396,7 @@ def insert_rows(table: str, rows, deadline_s: "float | None" = None) -> dict:
             try:
                 for row in prepared:
                     _insert_prepared(conn, table, row)
-                conn.execute("COMMIT")
+                _commit(conn)
             except BaseException:
                 _rollback(conn)
                 raise
@@ -464,7 +488,7 @@ def insert_rows_with_offset(rows, offset: dict, deadline_s: "float | None" = Non
                     _table_columns(conn, table)
                     conn.execute(f'UPDATE "{table}" SET "{column}" = ? WHERE "{key_column}" = ? AND "{column}" IS NULL',
                                  (value, key))
-                conn.execute("COMMIT")
+                _commit(conn)
             except BaseException:
                 _rollback(conn)
                 raise
@@ -497,7 +521,7 @@ def record_read_attempt(source: str, generation: str, consumer: str, read_size: 
             _begin(conn, deadline)
             try:
                 conn.execute(_READ_ATTEMPT_UPSERT, (source, generation, consumer, _EMPTY_SHA256, read_size, read_outcome))
-                conn.execute("COMMIT")
+                _commit(conn)
             except BaseException:
                 _rollback(conn)
                 raise
@@ -523,7 +547,7 @@ def transact(work, deadline_s: "float | None" = None) -> dict:
             _begin(conn, deadline)
             try:
                 outcome["value"] = work(conn)
-                conn.execute("COMMIT")
+                _commit(conn)
             except BaseException:
                 _rollback(conn)
                 raise
@@ -1001,7 +1025,7 @@ def _apply_prefix(conn, spool, generation, new_offset, lines, origin, deadline) 
         if torn:
             add_loss(conn, spool, "torn_event", torn)
         _upsert_offset(conn, spool, generation, new_offset)
-        conn.execute("COMMIT")
+        _commit(conn)
     except BaseException:
         _rollback(conn)
         raise

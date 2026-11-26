@@ -257,10 +257,18 @@ def _isolate_telemetry(tmp_path_factory, monkeypatch):
 
     An in-process store call gets a 30 s deadline instead of the production 0.25 s, so a
     test on a loaded machine does not lose its write to the fail-open timeout. Subprocesses
-    a test spawns keep the production deadline."""
+    a test spawns keep the production deadline.
+
+    An in-process sync never starts a detached retry process (it would outlive the test and write
+    into a record the test has already left); `sync.spawned_retries` lists what it would start."""
     from lib.telemetry import store
+    from lib.telemetry import sync as telemetry_sync
 
     monkeypatch.setattr(store, "DEADLINE_S", 30.0)
+    spawned = []
+    monkeypatch.setattr(telemetry_sync, "spawned_retries", spawned, raising=False)
+    monkeypatch.setattr(telemetry_sync, "_spawn_retry", lambda stem, begun, session: spawned.append(
+        (stem, begun, session)))
     record_dir = tmp_path_factory.mktemp("telemetry-record")
     monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(record_dir / "telemetry.sqlite"))
     monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(record_dir / "spool"))
