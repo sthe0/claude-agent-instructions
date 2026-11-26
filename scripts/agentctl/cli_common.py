@@ -3682,6 +3682,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
     ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),
     ("comment", ("plugin-record",), "ticket comment id or URL, not a file to read"),
+    ("pr", ("plugin-record",), "pull request URL, not a file to read"),
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
     ("title", ("classify",), "one-line task label capped at 48 characters, never a file"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
