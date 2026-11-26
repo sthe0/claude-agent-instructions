@@ -574,3 +574,84 @@ def test_check_tokens_exit_codes(world, capsys):
     write_record("UPDATE token_usage SET input_tokens = 99")
     rc, out = check(capsys, "--task", "task-e")
     assert rc == 1 and not out["conserved"]
+
+
+# --- a transcript deleted between listing and reading ------------------------------------------
+
+def vanish_after_listing(monkeypatch, path: Path) -> None:
+    """transcripts() lists `path`, which is deleted right after the listing, as a session of
+    another project ending mid-scan deletes its transcript."""
+    real = tokens.transcripts
+
+    def listed(sessions=None):
+        found = real(sessions)
+        assert any(p == path for p, _, _ in found)
+        path.unlink()
+        return found
+    monkeypatch.setattr(tokens, "transcripts", listed)
+
+
+def _two_transcripts(world) -> "tuple[Path, Path]":
+    open_task("s", "task-v", 0)
+    world.transcript("s", [usage(1, "m1", "s", inp=7)])
+    gone = subagent(world, "s", "agent-v", [usage(2, "a1", "s", inp=11)])
+    tokens.collect()
+    return world.projects / "p" / "s.jsonl", gone
+
+
+def test_check_imported_coverage_counts_transcript_vanished_after_listing(world, monkeypatch):
+    kept, gone = _two_transcripts(world)
+    vanish_after_listing(monkeypatch, gone)
+    conn = store.open_readonly()
+    try:
+        result = tokens.check_imported_coverage(conn)
+    finally:
+        conn.close()
+    assert result["vanished"] == [str(gone)]
+    assert result["covered"] == 1 and result["uncovered"] == []
+    assert result["ok"]
+
+
+def test_check_tokens_counts_transcript_vanished_after_listing(world, monkeypatch):
+    kept, gone = _two_transcripts(world)
+    vanish_after_listing(monkeypatch, gone)
+    conn = store.open_readonly()
+    try:
+        result = tokens.check_task(conn, "task-v")
+    finally:
+        conn.close()
+    assert result["vanished"] == [str(gone)]
+    assert result["expected"]["input_tokens"] == 7
+    assert all(g["transcript"] != str(gone) for g in result["gaps"]["grown_since_read"])
+
+
+def test_check_tokens_cli_reports_vanished(world, monkeypatch, capsys):
+    kept, gone = _two_transcripts(world)
+    vanish_after_listing(monkeypatch, gone)
+    rc, out = check(capsys, "--imported-coverage")
+    assert rc == 0 and out["vanished"] == [str(gone)] and out["covered"] == 1
+    gone.write_bytes(line(usage(2, "a1", "s", inp=11)))
+    rc, out = check(capsys, "--task", "task-v")
+    assert out["vanished"] == [str(gone)]
+    assert out["expected"]["input_tokens"] == 7
+
+
+def test_snapshot_skips_transcript_vanished_after_listing(world, monkeypatch, tmp_path):
+    from lib.telemetry import snapshot
+    kept, gone = _two_transcripts(world)
+    at_copy = world.transcript("t", [usage(3, "m3", "t")])
+    vanish_after_listing(monkeypatch, gone)
+    real_copy = snapshot._copy_prefix
+
+    def copy(source, target, size):
+        if source == at_copy:
+            at_copy.unlink()
+        return real_copy(source, target, size)
+    monkeypatch.setattr(snapshot, "_copy_prefix", copy)
+    result = snapshot.take(tmp_path / "snap")
+    assert sorted(result["vanished"]) == sorted([str(gone), str(at_copy)])
+    assert all(s["live"] not in (str(gone), str(at_copy)) for s in result["skipped"])
+    manifest = json.loads((tmp_path / "snap" / snapshot.MANIFEST).read_text(encoding="utf-8"))
+    live = {f["live"] for f in manifest["files"]}
+    assert str(kept) in live and str(gone) not in live and str(at_copy) not in live
+    assert sorted(manifest["vanished"]) == sorted(result["vanished"])

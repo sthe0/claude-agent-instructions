@@ -67,7 +67,9 @@ collector read that committed up to its last complete line, with a token row per
 an unmarked not_requested line before the landing is listed under `usage_not_requested_before_fix`,
 one at or after it under `pre_fix_writer:not_requested`; a line carrying `writer_marker` fails.
 `--not-requested-known K` (judge-ledger JSONL) counts the excused lines it pins apart. `--json`
-prints `failures` and `excused` at the top level. Both exit 2 on a usage error.
+prints `failures` and `excused` at the top level. Both forms list under `vanished` a transcript
+deleted between listing and reading; it is neither covered nor uncovered and leaves the exit
+unchanged. Both exit 2 on a usage error.
 
 `check-events --task <id>` matches every engine-history command and gate evaluation of the task's
 sessions to its live event row and exits 1 on an unmatched act; an act inside the

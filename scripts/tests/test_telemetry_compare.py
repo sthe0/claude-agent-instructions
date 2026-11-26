@@ -420,12 +420,12 @@ def test_trace_classifies_hook_and_command_path_processes(tmp_path):
 # --- bench ----------------------------------------------------------------------------------
 
 def _fake_runs(monkeypatch, hook_ms, excess):
-    """hook_run returns hook_ms; each recording-on command run costs the next value of `excess`
-    over its recording-off pair."""
+    """hook_run costs hook_ms; each recording-on command run costs the next value of `excess`
+    over its recording-off pair (CPU and wall-clock time alike)."""
     values = iter(excess)
-    monkeypatch.setattr(bench, "hook_run", lambda env: hook_ms)
-    monkeypatch.setattr(bench, "command_run",
-                        lambda verb, env, root: 0.0 if env.get(bench.OFF_ENV) == "off" else next(values))
+    monkeypatch.setattr(bench, "hook_run", lambda env: (hook_ms, hook_ms))
+    monkeypatch.setattr(bench, "command_run", lambda verb, env, root: (
+        (0.0, 0.0) if env.get(bench.OFF_ENV) == "off" else (lambda v: (v, v))(next(values))))
 
 
 def test_both_sides_in_one_call_report_each_and_exit_with_the_worse(tmp_path, monkeypatch, capsys):

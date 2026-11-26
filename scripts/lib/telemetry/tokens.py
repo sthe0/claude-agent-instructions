@@ -498,14 +498,19 @@ def check_task(conn, task_id: str, require_spawn: bool = False, require_compacti
     who = _Attribution(conn)
     gaps = {"no_open_epoch": [], "owned_by_another_task": [], "grown_since_read": [], "missing_judge_call": [],
             "unexpected_judge_rows": [], "judge_rows_without_usage": 0}
-    best = {}
+    best, vanished = {}, []
     for path, session, _ in transcripts(sorted(_task_sessions(conn, epochs))):
         offset = _offset_row(conn, path)
         limit = offset["byte_offset"] if offset else 0
-        size = path.stat().st_size
+        try:
+            size = path.stat().st_size
+            lines = list(_usage_lines(path, session, limit))
+        except FileNotFoundError:
+            vanished.append(str(path))
+            continue
         if size > limit:
             gaps["grown_since_read"].append({"transcript": str(path), "bytes": size - limit})
-        for message_id, rank, counts, ts_ms in _usage_lines(path, session, limit):
+        for message_id, rank, counts, ts_ms in lines:
             if message_id not in best or rank < best[message_id][0]:
                 best[message_id] = (rank, counts, session, ts_ms)
     expected = dict.fromkeys(TOKEN_COLUMNS, 0)
@@ -558,7 +563,7 @@ def check_task(conn, task_id: str, require_spawn: bool = False, require_compacti
     return {"ok": ok, "task_id": task_id, "epochs": sorted(epochs), "conserved": conserved, "expected": expected,
             "actual": actual, "cells": cells, "judge_usage": judge, "judge_calls": len(judge_events),
             "unexpected_judge_count": len(gaps["unexpected_judge_rows"]), "births": births,
-            "missing_births": missing_births, "gaps": gaps}
+            "missing_births": missing_births, "gaps": gaps, "vanished": vanished}
 
 
 def _attempt_problem(path: Path, offset) -> "str | None":
@@ -572,38 +577,55 @@ def _attempt_problem(path: Path, offset) -> "str | None":
     return None
 
 
+def _transcript_coverage(conn, path: Path, session: str):
+    """None when `path` has no usage lines; else (reason, None) when it is uncovered, or
+    (None, bytes appended since the last read) when it is covered."""
+    offset = _offset_row(conn, path)
+    size = path.stat().st_size
+    reach = offset["read_size"] if offset and offset["read_size"] is not None else size
+    ids = {message_id for message_id, _, _, _ in _usage_lines(path, session, reach)}
+    if not ids:
+        return None
+    problem = _attempt_problem(path, offset)
+    if problem is None:
+        read = {m for m, _, _, _ in _usage_lines(path, session, offset["byte_offset"])}
+        marks = ",".join("?" for _ in read)
+        present = {r[0] for r in conn.execute(
+            f"SELECT message_id FROM token_usage WHERE message_id IN ({marks})", sorted(read))} if read else set()
+        if read - present:
+            problem = "missing_token_rows"
+    if problem is not None:
+        return problem, None
+    return None, size - offset["read_size"]
+
+
 def check_imported_coverage(conn, bound=None, known=frozenset()) -> dict:
     """Every transcript with usage fields has token rows and a last collector read that committed
     up to the last complete line it attempted (an attempt left open within the committed range
-    attempted nothing new); bytes appended since are listed, not counted."""
-    uncovered, grown, covered, no_open_epoch = [], [], 0, 0
+    attempted nothing new); bytes appended since are listed, not counted. A transcript deleted
+    after it was listed is listed under `vanished`, neither covered nor uncovered."""
+    uncovered, grown, covered, no_open_epoch, vanished = [], [], 0, 0, []
     for path, session, _ in transcripts():
-        offset = _offset_row(conn, path)
-        size = path.stat().st_size
-        reach = offset["read_size"] if offset and offset["read_size"] is not None else size
-        ids = {message_id for message_id, _, _, _ in _usage_lines(path, session, reach)}
-        if not ids:
+        try:
+            verdict = _transcript_coverage(conn, path, session)
+        except FileNotFoundError:
+            vanished.append(str(path))
             continue
-        problem = _attempt_problem(path, offset)
-        if problem is None:
-            read = {m for m, _, _, _ in _usage_lines(path, session, offset["byte_offset"])}
-            marks = ",".join("?" for _ in read)
-            present = {r[0] for r in conn.execute(
-                f"SELECT message_id FROM token_usage WHERE message_id IN ({marks})", sorted(read))} if read else set()
-            if read - present:
-                problem = "missing_token_rows"
+        if verdict is None:
+            continue
+        problem, appended = verdict
         if problem is not None:
             uncovered.append({"transcript": str(path), "reason": problem})
             continue
         covered += 1
-        if size > offset["read_size"]:
-            grown.append({"transcript": str(path), "bytes": size - offset["read_size"]})
+        if appended > 0:
+            grown.append({"transcript": str(path), "bytes": appended})
         no_open_epoch += conn.execute("SELECT COUNT(*) FROM token_usage WHERE transcript = ? AND task_id IS NULL",
                                       (str(path),)).fetchone()[0]
     judge = judge_ledger_coverage(conn, bound, known)
     return {"ok": not uncovered and not judge["failures"], "covered": covered, "uncovered": uncovered,
             "judge": judge, "failures": judge["failures"], "excused": judge["excused"],
-            "gaps": {"grown_since_read": grown, "no_open_epoch": no_open_epoch}}
+            "gaps": {"grown_since_read": grown, "no_open_epoch": no_open_epoch}, "vanished": vanished}
 
 
 def _judge_call_lines(path: Path, limit: int):

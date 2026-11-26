@@ -77,11 +77,13 @@ def take(out_dir, since_s: "float | None" = None, check_space: bool = False) -> 
     out = Path(out_dir)
     if out.exists():
         raise SnapshotError(f"{out} already exists")
-    measured, skipped = [], []
+    measured, skipped, vanished = [], [], []
     for kind, path in _sources():
         try:
             stat = path.stat()
         except FileNotFoundError:
+            if kind == TRANSCRIPT:
+                vanished.append(str(path))
             continue
         except OSError as err:
             skipped.append({"live": str(path), "error": repr(err)})
@@ -109,14 +111,21 @@ def take(out_dir, since_s: "float | None" = None, check_space: bool = False) -> 
             else:
                 _copy_prefix(path, out / copy, size)
             size = (out / copy).stat().st_size
+        except FileNotFoundError as err:
+            if path.exists():
+                skipped.append({"live": str(path), "error": repr(err)})
+            else:
+                vanished.append(str(path))
+            continue
         except OSError as err:
             skipped.append({"live": str(path), "error": repr(err)})
             continue
         files.append({"kind": kind, "live": str(path), "copy": str(copy), "size": size})
     manifest = {"taken_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "files": files,
-                "skipped": skipped}
+                "skipped": skipped, "vanished": vanished}
     (out / MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
-    return {"out": str(out), "files": len(files), "bytes": sum(f["size"] for f in files), "skipped": skipped}
+    return {"out": str(out), "files": len(files), "bytes": sum(f["size"] for f in files), "skipped": skipped,
+            "vanished": vanished}
 
 
 class Snapshot:
