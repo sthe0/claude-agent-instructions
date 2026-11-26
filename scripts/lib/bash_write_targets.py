@@ -151,6 +151,25 @@ def _copy_targets(rest: list[str], eff_cwd: str) -> list[str]:
     return targets
 
 
+def single_content_source(seg: list[str], eff_cwd: str) -> str | None:
+    """The one file whose bytes a `cp`/`mv`/`install SRC DEST` segment or a
+    `cat SRC > DEST` segment writes, as an absolute path; None for every
+    other shape (several sources, flags-only, any other verb). A consumer
+    that wants to know WHAT a copy writes, not only where, reads this file."""
+    if not seg:
+        return None
+    verb = os.path.basename(seg[0]) if seg[0] else ""
+    rest = _operands_until_redirect(seg[1:])
+    if verb in _COPY_VERBS:
+        positionals, dest_opt = _copy_operands(rest)
+        sources = positionals if dest_opt is not None else positionals[:-1]
+    elif verb == "cat" and redirect_targets(seg, "/"):
+        sources = [tok for tok in rest if not tok.startswith("-")]
+    else:
+        return None
+    return _abs(sources[0], eff_cwd) if len(sources) == 1 else None
+
+
 def _abs(candidate: str, eff_cwd: str) -> str:
     """`candidate` as an absolute path: a leading `~` expanded, then the cwd join.
 

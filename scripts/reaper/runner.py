@@ -66,6 +66,11 @@ A missing or invalid row disarms it. It exits 0 on every path except invalid arg
 with ``--dry-run`` (which prints a status line per reaper and takes no lock), a runner error.
 Each pressure row also carries ``threshold_source`` (``config`` or ``flag``) and the pass's
 provenance (``trigger``, and ``invocation_id`` under a reaper unit).
+A reaper module that sets ``LAST_RESORT = True`` is a last resort in a pressure pass: the other
+due reapers run first, free space is then read again, and the last resort runs only if it is
+still below the threshold. A skipped last resort gets no cooldown stamp, and the row gains
+``last_resort_skipped`` and ``free_after``. A dry run removes nothing, so it cannot read again: it
+prints ``order:`` lines with the last resort marked conditional. A scheduled pass ignores the flag.
 
 Explicit-invocation controls, reachable only from a command line a person types, never from a hook,
 unit or config file: ``--pressure-threshold PCT`` (with ``--on-pressure``: replaces the config row for
@@ -607,6 +612,12 @@ def execute_pass(
     return removed
 
 
+def _last_resort(reaper: "registry.Reaper") -> bool:
+    """A reaper whose module sets ``LAST_RESORT = True`` (exactly True) runs in a pressure pass
+    only after the others, and only while free space is still short."""
+    return getattr(reaper.module, "LAST_RESORT", False) is True
+
+
 def execute_pressure(
     reapers: "list[registry.Reaper]",
     ctx: ReapContext,
@@ -641,22 +652,54 @@ def execute_pressure(
     due = frozenset(r.name for r in readings if r.status == "due" and only in (None, r.name))
     if not due:
         return
-    removed = execute_pass(
-        reapers, ctx,
-        dry_run=ctx.dry_run, force_run=False, only=None,
-        stamps=stamps, log_path=log_path, out=out, err=err,
-        skipped_modules=skipped_modules, pressured=due, kept_dir=kept_dir, observe=observe,
-    )
+    last = frozenset(r.name for r in reapers if r.name in due and _last_resort(r))
+    first = due - last
+
+    def run(pressured: "frozenset[str]") -> int:
+        return execute_pass(
+            reapers, ctx,
+            dry_run=ctx.dry_run, force_run=False, only=None,
+            stamps=stamps, log_path=log_path, out=out, err=err,
+            skipped_modules=skipped_modules, pressured=pressured, kept_dir=kept_dir, observe=observe,
+        )
+
     if ctx.dry_run:
+        if last:
+            for name in sorted(first):
+                print(f"order: {name}", file=out)
+            for name in sorted(last):
+                print(f"order: {name} (last resort: only if free space is still below {threshold:.1f}% after the others)", file=out)
+        run(due)
         return
+    removed = run(first) if first else 0
+    skipped: "frozenset[str]" = frozenset()
+    free_after: "dict[str, float | None]" = {}
+    if last:
+        run_last = last
+        if first:
+            after = {
+                r.name: r for r in pressure_readings(
+                    [r for r in reapers if r.name in last], ctx, threshold, stamps, free_percent, ignore_cooldown=True,
+                )
+            }
+            free_after = {name: round(after[name].free, 2) if name in after else None for name in sorted(last)}
+            run_last = frozenset(name for name in last if name in after and after[name].status == "due")
+            skipped = last - run_last
+            for name in sorted(skipped):
+                print(f"{name} last resort skipped: free {free_after[name]}% after the others", file=err)
+        if run_last:
+            removed += run(run_last)
     if not force:
-        for name in due:
+        for name in due - skipped:
             _write_stamp(stamps, f"{name}.pressure", ctx.now)
     record = {
         "ts": _iso(ctx.now), "threshold": threshold, "threshold_source": threshold_source,
         "free": {r.name: round(r.free, 2) for r in readings}, "due": sorted(due), "removed": removed,
         **_provenance(pressured=True, manual=False),
     }
+    if last:
+        record["last_resort_skipped"] = sorted(skipped)
+        record["free_after"] = free_after
     try:
         pressure_log.parent.mkdir(parents=True, exist_ok=True)
         with pressure_log.open("a", encoding="utf-8") as handle:

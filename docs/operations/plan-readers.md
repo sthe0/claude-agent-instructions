@@ -154,6 +154,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/cli_review.py`:`_record_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
 | `scripts/agentctl/cli_dispatch.py`:`_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
 | `scripts/agentctl/cli_dispatch.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |
+| `scripts/agentctl/dispatch.py`:`venue_settings_digests` | not a binding | Hashes the venue's project settings documents, not a plan, to compare with the digests recorded at approve. |
 | `scripts/agentctl/gates.py`:`_file_sha256` | not a binding | The hashing helper itself. |
 | `scripts/agentctl/gates.py`:`file_norm_digest` | not a binding | Hashes a norm file, not a plan. |
 | `scripts/agentctl/delivery.py`:`has_answered_channel_delivery` | not a binding | Compares the plan digest a channel stamp was written for with the one in the engine's own recorded channel-delivery event; both are recorded, neither is a plan file's current digest. |
@@ -161,6 +162,10 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/plan_convert.py`:`cmd_plan_convert_live` | not a binding | Requires the plan file's digest to equal the accepted digest exactly before converting; after a conversion the two are different forms, and this check runs against the form on disk. |
 | `scripts/agentctl/plan_store.py`:`_intact` | not a binding | Re-hashes a stored object against its own name. |
 | `scripts/lib/disk_report.py`:`sha256_file` | not a binding | Hashes the report tool's own files and naming tables to record them in the report; it binds no record to a plan version. |
+| `scripts/opencode_probe/record.py`:`file_sha256` | not a binding | Hashes a probe record file so the pin of a passing run can be checked against its bytes; it binds no record to a plan version. |
+| `scripts/opencode_probe/isolated.py`:`home_stand_in_digests` | not a binding | Hashes the files of the probe's stand-in home directory before and after a run to show the run left them unchanged; no plan is involved. |
+| `scripts/opencode_probe/mechanisms/c_p8.py`:`_digest` | not a binding | Hashes a file of the probe's own sandbox to show a mechanism left it untouched; no plan is involved. |
+| `scripts/opencode_probe/userconfig.py`:`digest_tree` | not a binding | Hashes the user's OpenCode config files to show the probe did not modify them; no plan is involved. |
 | `scripts/hook-plan-delivery-gate.py`:`_already_stamped` | not a binding | Compares a stamp's receipt digest with the receipt, both recorded. |
 | `scripts/plan-review-topological.py`:`Driver.launch` | not a binding | Recomputes the root digest the reviewer attests: the sha256 of the index bytes. A positive control of the enumerator. |
 | `scripts/spawn-specialist.py`:`load_review_doc` | not a binding | Computes the digest a `--review-topo` reviewer attests: the loader's index digest for a plan, the sha256 of the file's bytes for an order draft; it compares nothing. |

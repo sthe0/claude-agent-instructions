@@ -241,6 +241,7 @@ def test_given_source_symlink_out_of_repo_refused(tree, tmp_path):
 def test_project_tier_given_source_resolved_against_repo(tree, memory):
     project = tree.repo / memory
     (tree.repo / ".git").mkdir()
+    (tree.repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (project / "regularities").mkdir(parents=True)
     sound = project / "regularities" / "sound-regularity.md"
     sound.write_text(_given(), encoding="utf-8")
@@ -291,6 +292,7 @@ def _project_corpus(tree, source):
     project = tree.repo.parent / "product"
     memory = project / ".claude" / "agent-memory"
     (project / ".git").mkdir(parents=True, exist_ok=True)
+    (project / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (project / "docs").mkdir(exist_ok=True)
     (project / "docs" / "spec.md").write_text("spec\n", encoding="utf-8")
     leaf = memory / "regularities" / "spec-regularity.md"
@@ -305,6 +307,16 @@ def test_given_source_project_relative_checked(tree):
     assert (pp.GIVEN_SOURCE, leaf) not in {(f.kind, f.path) for f in pp.unaccounted(corpus)}
     leaf, corpus = _project_corpus(tree, "docs/none.md")
     assert (pp.GIVEN_SOURCE, leaf) in {(f.kind, f.path) for f in pp.unaccounted(corpus)}
+
+
+def test_given_source_root_skips_an_empty_dot_git_ancestor(tmp_path):
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    (outer / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    inner = outer / "inner"
+    (inner / ".git").mkdir(parents=True)
+    leaf = inner / ".claude" / "agent-memory" / "regularities" / "x.md"
+    assert leaf_forms.given_source_root("project", leaf) == outer
 
 
 def test_given_source_root_global_is_core_repo(tree):

@@ -121,6 +121,26 @@ from .cli_common import (
 )
 
 
+def _reattest_prior_outcome(outcome: Outcome) -> Outcome:
+    """The part of a PASSED stage's outcome a re-attest restores: the result and its whole
+    cost record (an unpriced spawn stays counted, so the cost is never read as complete),
+    without the green-check cache, which belongs to the tree the stage was checked on."""
+    return Outcome(
+        status=outcome.status,
+        actual=outcome.actual,
+        fail_digests=list(outcome.fail_digests),
+        cost_usd=outcome.cost_usd,
+        duration_ms=outcome.duration_ms,
+        spawn_count=outcome.spawn_count,
+        unpriced_spawns=outcome.unpriced_spawns,
+        delivered_head=outcome.delivered_head,
+        delivered_base=outcome.delivered_base,
+        landed_head=outcome.landed_head,
+        landed_base=outcome.landed_base,
+        landed_content_waiver=outcome.landed_content_waiver,
+    )
+
+
 def _snapshot_plan_version(store: StateStore, state: SessionState, plan_path: str) -> str | None:
     """Read `plan_path`'s current bytes, content-address them via
     `_write_plan_version_snapshot`, and return the sha256 digest -- the read+write pair
@@ -1685,19 +1705,7 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
         reattest_stash.append(ReattestStash(
             stage_index=ns.index,
             operative_surface_matched=matched,
-            prior_outcome=Outcome(
-                status=prev.outcome.status,
-                actual=prev.outcome.actual,
-                fail_digests=list(prev.outcome.fail_digests),
-                cost_usd=prev.outcome.cost_usd,
-                duration_ms=prev.outcome.duration_ms,
-                spawn_count=prev.outcome.spawn_count,
-                delivered_head=prev.outcome.delivered_head,
-                delivered_base=prev.outcome.delivered_base,
-                landed_head=prev.outcome.landed_head,
-                landed_base=prev.outcome.landed_base,
-                landed_content_waiver=prev.outcome.landed_content_waiver,
-            ),
+            prior_outcome=_reattest_prior_outcome(prev.outcome),
             prior_control=prev.control,
             reattest_digest=stage_reattest_digest(ns),
         ))

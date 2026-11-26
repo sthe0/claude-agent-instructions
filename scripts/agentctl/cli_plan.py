@@ -8,7 +8,7 @@ import hashlib
 import os
 import time
 from pathlib import Path
-from lib import config_root, writer_pass
+from lib import config_root, engine_session_binding, writer_pass
 from . import (
     advisor,
     carry_forward,
@@ -508,7 +508,9 @@ def _arm_order_agreement(state: SessionState) -> str:
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     try:
-        runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=True)
+        runtime_host.bind_runtime_host(
+            state, getattr(args, "host", None), require=True,
+            root_session_id=engine_session_binding.harness_session_id())
     except (runtime_host.HostAmbiguousError, runtime_host.HostConflictError) as exc:
         return Directive(False, state.node, "noop", str(exc))
     _adopt_parent_difficulty(state)

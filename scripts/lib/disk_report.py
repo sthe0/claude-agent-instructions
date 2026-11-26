@@ -534,10 +534,13 @@ def build_report(
     gap = used - walk_total
     bound_pct = (max(gap, 0) + c_bytes) / used * 100.0 if used else 0.0
 
-    a_paths = sorted(set(plan["unreadable"] + du_errors + unreached))
     temp = temp_section(
         temp_roots if temp_roots is not None else [SANDBOX_TEMP_ROOT, session_temp_dir()],
         run, deadline_at, plan["skip"])
+    # A temp root du gave no total for was not measured: its 0 bytes must not read as an empty root,
+    # so it marks the run as incomplete and joins the paths of unknown size.
+    temp_unreached = [r["realpath"] for r in temp["roots"] if r.get("unreached")]
+    a_paths = sorted(set(plan["unreadable"] + du_errors + unreached + temp_unreached))
     return {
         "schema": SCHEMA,
         "date": datetime.date.today().isoformat(),
@@ -557,7 +560,7 @@ def build_report(
             "names_sources": sources,
         },
         "elapsed_seconds": round(time.monotonic() - started, 3),
-        "deadline_exceeded": timed_out,
+        "deadline_exceeded": timed_out or bool(temp_unreached),
         "du_roots": plan["roots"],
         "excluded": plan["excluded"],
         "fuse_mounts": plan["fuse_mounts"],

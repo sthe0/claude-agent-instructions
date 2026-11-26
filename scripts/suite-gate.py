@@ -75,6 +75,8 @@ def _print_record(record: dict) -> None:
         print(f"  UNCONFIRMED (passed both reruns, journaled as flaky) {gate.one_line(node, 300)}")
     if record.get("unfinished"):
         print(f"  unfinished in the full run: {len(record['unfinished'])}")
+    if (record.get("results") or {}).get("warning"):
+        print(f"  {gate.one_line(record['results']['warning'], 400)}")
     if record["unavailable_reason"]:
         print(f"  unavailable: {gate.one_line(record['unavailable_reason'], 400)}")
     print(f"  log: {record['log']}")

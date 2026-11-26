@@ -362,14 +362,36 @@ def test_tr_flag_overrides_env(env_tr):
 # ── is_git_repo ────────────────────────────────────────────────────────────
 
 
-def test_is_git_repo_true_when_dot_git_exists(tmp_path):
-    (tmp_path / ".git").mkdir()
+def _make_git_dir(root: Path) -> None:
+    (root / ".git").mkdir()
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+
+def test_is_git_repo_true_when_dot_git_has_head(tmp_path):
+    _make_git_dir(tmp_path)
     assert is_git_repo(tmp_path) is True
+
+
+def test_is_git_repo_true_when_dot_git_is_a_gitlink_file(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".git").write_text(f"gitdir: {real}\n", encoding="utf-8")
+    assert is_git_repo(work) is True
+
+
+def test_is_git_repo_false_when_dot_git_is_an_empty_directory(tmp_path):
+    (tmp_path / ".git").mkdir()
+    sub = tmp_path / "a"
+    sub.mkdir()
+    assert is_git_repo(sub) is False
 
 
 def test_is_git_repo_true_for_subdirectory(tmp_path):
     """Ancestor walk: a nested subdirectory is also inside the repo."""
-    (tmp_path / ".git").mkdir()
+    _make_git_dir(tmp_path)
     sub = tmp_path / "a" / "b"
     sub.mkdir(parents=True)
     assert is_git_repo(sub) is True
@@ -398,7 +420,7 @@ def test_detect_this_machine_overrides_non_git_hook_for_git_target(tmp_path, mon
     detect_this_machine overrides the workspace backend to git."""
     git_repo = tmp_path / "repo"
     git_repo.mkdir()
-    (git_repo / ".git").mkdir()
+    _make_git_dir(git_repo)
 
     monkeypatch.setenv("CLAUDE_PROJECT_PLUGIN_DIR", str(_make_non_git_plugin(tmp_path)))
 
@@ -442,7 +464,7 @@ def test_main_returns_git_when_detect_dir_is_git_repo(tmp_path, monkeypatch):
     """CLAUDE_BACKEND_DETECT_DIR pointing to a git repo overrides a non-git hook."""
     git_repo = tmp_path / "repo"
     git_repo.mkdir()
-    (git_repo / ".git").mkdir()
+    _make_git_dir(git_repo)
 
     plugin = _make_non_git_plugin(tmp_path)
     env = {

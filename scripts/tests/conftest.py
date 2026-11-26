@@ -39,6 +39,10 @@ if LAUNCH_LOG_ENV not in os.environ:
 if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
     os.environ["PATH"] = path_with_arc_stub(system=os.environ.get("PATH", ""))
 
+import spawner_launcher  # noqa: E402
+
+spawner_launcher.install()
+
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 import _core_shuffle  # noqa: E402
@@ -249,7 +253,14 @@ def _isolate_telemetry(tmp_path_factory, monkeypatch):
     """The telemetry record and its spool (lib/telemetry) live under the config root; no
     test may open the live record or append to a live spool. The env vars reach the hook
     and CLI subprocesses a test spawns. The directory sits outside the test's own tmp_path,
-    which some tests snapshot to prove a command wrote nothing there."""
+    which some tests snapshot to prove a command wrote nothing there.
+
+    An in-process store call gets a 30 s deadline instead of the production 0.25 s, so a
+    test on a loaded machine does not lose its write to the fail-open timeout. Subprocesses
+    a test spawns keep the production deadline."""
+    from lib.telemetry import store
+
+    monkeypatch.setattr(store, "DEADLINE_S", 30.0)
     record_dir = tmp_path_factory.mktemp("telemetry-record")
     monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(record_dir / "telemetry.sqlite"))
     monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(record_dir / "spool"))
@@ -299,6 +310,13 @@ def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
     to the real session's transcript: `_default_claude_runtime_host` replaces the session
     id with one that names no transcript."""
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path_factory.mktemp("parent-outside-any-project")))
+
+
+@pytest.fixture
+def config_root_check_armed(monkeypatch):
+    """Run spawn-specialist's real config-root check in this test's in-process spawners
+    (the suite guards it off: spawner_launcher.install())."""
+    monkeypatch.setattr(spawner_launcher, "ARMED", True)
 
 
 @pytest.fixture(autouse=True)

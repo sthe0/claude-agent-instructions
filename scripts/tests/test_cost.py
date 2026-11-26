@@ -141,6 +141,41 @@ def test_attribute_stage_empty_rows():
     assert attr["cost_usd"] is None
     assert attr["duration_ms"] is None
     assert attr["spawn_count"] == 0
+    assert attr["unpriced_spawns"] == 0
+
+
+def _stamped(cost_usd, ts, **extra):
+    return {"plan_path": "/p.toml", "stage_index": 1, "cost_usd": cost_usd, "duration_ms": 1, "ts": ts, **extra}
+
+
+def test_attribute_stage_counts_the_unpriced_rows():
+    rows = [_stamped(1.0, "2026-11-10T10:00:00+00:00"), _stamped(None, "2026-11-10T10:05:00+00:00")]
+    attr = cost.attribute_stage(rows, "/p.toml", 1)
+    assert (attr["cost_usd"], attr["spawn_count"], attr["unpriced_spawns"]) == (1.0, 2, 1)
+
+
+def test_attribute_stage_since_drops_rows_of_an_earlier_cycle():
+    rows = [_stamped(1.0, "2026-11-10T10:00:00+00:00"), _stamped(2.0, "2026-11-10T12:00:00+00:00"),
+            _stamped(4.0, "unreadable")]
+    since = cost._row_epoch(rows[1])
+    attr = cost.attribute_stage(rows, "/p.toml", 1, since=since + 0.5)
+    assert (attr["cost_usd"], attr["spawn_count"]) == (6.0, 2)
+
+
+def test_attribute_stage_drops_rows_of_another_task_or_session_on_the_same_plan_path():
+    rows = [_stamped(1.0, "2026-11-10T10:00:00+00:00", task_id="mine", spawner_session="s-1"),
+            _stamped(2.0, "2026-11-10T10:00:00+00:00", task_id="other", spawner_session="s-1"),
+            _stamped(4.0, "2026-11-10T10:00:00+00:00", task_id="mine", spawner_session="s-2"),
+            _stamped(8.0, "2026-11-10T10:00:00+00:00")]
+    attr = cost.attribute_stage(rows, "/p.toml", 1, task_id="mine", session="s-1")
+    assert (attr["cost_usd"], attr["spawn_count"]) == (9.0, 2)
+
+
+def test_rollup_plan_sums_the_unpriced_spawns():
+    stages = [_make_spawn_stage(1, cost_usd=1.0, spawn_count=2), _make_spawn_stage(2, spawn_count=1)]
+    stages[0].outcome.unpriced_spawns = 1
+    stages[1].outcome.unpriced_spawns = 1
+    assert cost.rollup_plan([], "/p.toml", stages).unpriced_spawns == 2
 
 
 # ---------------------------------------------------------------------------

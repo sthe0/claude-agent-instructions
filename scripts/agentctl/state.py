@@ -28,7 +28,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 62  # 62: stage_uids, effort_segments, effort_migrated (per-segment effort)
+SCHEMA_VERSION = 63  # 63: host_binds, harness_version (root-session host stamps); 62: stage_uids, effort_segments, effort_migrated (per-segment effort)
                      # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
@@ -2255,6 +2255,7 @@ class PlanFrame:
     plan_snapshot_hash: str | None = None
     approved_grants_sha256: str | None = None
     approved_grant_entries: dict[str, dict] | None = None
+    venue_settings_at_approve: dict[str, str] | None = None
     accepted_plan_digest: str | None = None
     plan_binding_captured: bool = False
     # Runtime grants are keyed by stage index of the live plan, so they belong to it: the child
@@ -2326,6 +2327,9 @@ class Outcome:
     # `approve --by agent` can tell "never offered" from "offered, declined, since changed"
     # and leaves the second to the customer; cleared by the next customer approval.
     declined: bool = False
+    # Spawn rows attributed to this stage whose cost_usd is null: the stage's cost_usd is a
+    # sum over the priced rows only, so a non-zero count marks it a partial figure.
+    unpriced_spawns: int = 0
 
 
 @dataclass
@@ -2336,6 +2340,7 @@ class CostRollup:
     spawn_count: int = 0
     attributed_stages: int = 0
     note: str = ""
+    unpriced_spawns: int = 0
 
 
 @dataclass
@@ -2899,6 +2904,17 @@ class SessionState:
     renegotiations: list[dict] = field(default_factory=list)
     # coordination host (schema 31): claude|cursor, None until bound.
     runtime_host: str | None = None
+    # Harness version seen when the host was bound (AGENTCTL_RUNTIME_HOST_VERSION), or None.
+    harness_version: str | None = None
+    # One entry per distinct root session that bound this task, in order:
+    # {root_session_id, host, harness_version, bound_at}. A state bound before this field
+    # existed holds a leading all-null entry, so the host of that stretch reads as unknown.
+    host_binds: list[dict] = field(default_factory=list)
+    # Epoch seconds at which this state was built by `start` or `reset`: the lower bound of the
+    # spawn-cost rows this cycle may attribute to its stages (a reopened task reuses the plan
+    # path, so the plan path alone cannot tell its cycles apart). None on a state built before
+    # the field existed: no lower bound.
+    cycle_started_at: float | None = None
     # Stage-6 re-attest carry-forward records (schema 32): rebuilt FROM SCRATCH by
     # every substantive replan (never accumulated across replans — the only cost
     # of a gap is an unnecessary full re-dispatch, never an incorrect PASS), one
@@ -2972,6 +2988,11 @@ class SessionState:
     # "declared" is kept so the hash can be recomputed, but dispatch takes the declared
     # half from the hash-verified plan snapshot, never from here.
     approved_grant_entries: dict[str, dict] | None = None
+    # The delivery venue's project settings digests at the last approve
+    # (dispatch.venue_settings_digests); spawn-specialist loads project settings in the
+    # venue only while they still match. None before the first approve, and on a state
+    # approved before the field existed: such a venue's child loads user settings only.
+    venue_settings_at_approve: dict[str, str] | None = None
     planning_misses: list[dict] = field(default_factory=list)
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)
@@ -3404,6 +3425,7 @@ class SessionState:
                 plan_snapshot_hash=f.get("plan_snapshot_hash"),
                 approved_grants_sha256=f.get("approved_grants_sha256"),
                 approved_grant_entries=f.get("approved_grant_entries"),
+                venue_settings_at_approve=f.get("venue_settings_at_approve"),
                 accepted_plan_digest=f.get("accepted_plan_digest"),
                 plan_binding_captured=bool(f.get("plan_binding_captured", False)),
                 runtime_grants=f.get("runtime_grants"),
@@ -3421,6 +3443,10 @@ class SessionState:
         ]
         pre_segments = (int(data.get("schema_version") or 0) < EFFORT_SEGMENTS_SCHEMA
                         and not data.get("effort_migrated"))
+        if int(data.get("schema_version") or 0) < HOST_BINDS_SCHEMA:
+            if data.get("runtime_host") and not data.get("host_binds"):
+                data["host_binds"] = [dict(UNSTAMPED_HOST_BIND)]
+            data["schema_version"] = HOST_BINDS_SCHEMA
         state = cls(**data)
         if pre_segments:
             _migrate_to_effort_segments(state)
@@ -3441,6 +3467,10 @@ class SessionState:
 
 
 EFFORT_SEGMENTS_SCHEMA = 62
+# A state loaded below this version was bound before root-session host stamps existed: its
+# earlier stretch is an unstamped root session, kept as a leading all-null host_binds entry.
+HOST_BINDS_SCHEMA = 63
+UNSTAMPED_HOST_BIND = {"root_session_id": None, "host": None, "harness_version": None, "bound_at": None}
 
 
 def frame_path(stack) -> str:
@@ -3511,7 +3541,7 @@ PLAN_BOUND_FIELDS = frozenset({
     "code_review_rounds", "approval", "resolution", "stages", "current_stage", "plugins",
     "plugins_archive", "plan_snapshot_path", "plan_snapshot_hash", "accepted_plan_digest",
     "effort_estimate", "effort_baseline", "effort_actuals", "effort_fires", "effort_spend_seen",
-    "approved_grants_sha256", "approved_grant_entries", "runtime_grants",
+    "approved_grants_sha256", "approved_grant_entries", "venue_settings_at_approve", "runtime_grants",
     "order_agreement", "order_agreement_history", "order_challenges",
 })
 # SESSION_SCOPED_FIELDS belong to the session (or to the engine's bookkeeping of it): push and
@@ -3530,7 +3560,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
     "review_release_difficulty_id", "review_cycle_sha", "review_cycle_open", "review_cycle_acts",
     "review_cycle_minutes_anchor", "review_stage_streaks", "review_trigger_fire",
-    "review_trigger_spent", "renegotiations", "runtime_host", "reattest_stash",
+    "review_trigger_spent", "renegotiations", "runtime_host", "harness_version", "host_binds", "cycle_started_at", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",

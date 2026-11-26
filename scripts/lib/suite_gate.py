@@ -236,6 +236,7 @@ class SuiteRun:
     always_rerun_reasons: Mapping[str, int] = dataclasses.field(default_factory=dict)
     ran_tests: tuple[str, ...] = ()  # read from the report while the sandbox still exists
     store_note: str = ""
+    reuse_warning: str = ""
     catalogue_reused_s: Mapping[str, float] = dataclasses.field(default_factory=dict)  # reused catalogue id -> test-seconds it took
     catalogue_ran: tuple[str, ...] = ()  # registered catalogue tests this run ran
 
@@ -947,6 +948,41 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
     return ReusePlan(path, environment, tracer_dir, out_prefix, hits, registry, root / "core", digests), ""
 
 
+TREE_TAG_SUFFIX = ".tree"
+ALWAYS_RERUN_HISTORY_META = "always_rerun_history"  # always-rerun counts of the last five settled runs
+
+
+def core_tree(core: Path) -> str:
+    """HEAD^{tree} of the checkout at ``core``; empty when it cannot be read (the meta is then left untagged)."""
+    proc = subprocess.run(["git", "-C", str(core), "rev-parse", "HEAD^{tree}"], capture_output=True, text=True)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def set_tagged_meta(store: result_store.ResultStore, name: str, value: str, tree: str) -> None:
+    """Store a meta value with the git tree it was computed on; an empty ``tree`` reads as stale."""
+    store.set_meta(name, value)
+    store.set_meta(name + TREE_TAG_SUFFIX, tree)
+
+
+def get_tagged_meta(store: result_store.ResultStore, name: str, tree: str) -> str | None:
+    """The value only when it was stored for ``tree``; one of another tree, or without a tag, is stale (None)."""
+    if tree and store.get_meta(name + TREE_TAG_SUFFIX) == tree:
+        return store.get_meta(name)
+    return None
+
+
+def reuse_share_warning(always_rerun: int, collected: int, history: list[int]) -> str:
+    """A warning when a run's always-rerun count is more than twice the lowest of the last five settled runs
+    and above a quarter of the collected tests; empty otherwise. A signal only, never a verdict change."""
+    recent = history[-5:]
+    if not recent or collected <= 0:
+        return ""
+    if always_rerun > 2 * min(recent) and always_rerun * 4 > collected:
+        return (f"warning: {always_rerun} of {collected} collected tests are always-rerun "
+                f"(lowest of the last {len(recent)} settled runs: {min(recent)}); result reuse is probably defeated")
+    return ""
+
+
 def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
     """After a full run: name the tests that were left out, and store the passes that were traced completely.
 
@@ -958,7 +994,7 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
     left_out = {i for part in plan.out_prefix.parent.glob(f"{plan.out_prefix.name}.*")
                 for i in part.read_text(encoding="utf-8").splitlines() if i}
     reused = {i: plan.hits[i].candidate_sha for i in sorted(left_out) if i in plan.hits}
-    stored, always, note, reasons = 0, 0, "", collections.Counter()
+    stored, always, note, warning, reasons = 0, 0, "", "", collections.Counter()
     if run.hermetic and not run.timed_out and run.pytest_exit in (0, 1) and run.sandbox_core_sha == sha and run.report_path:
         try:
             records = _dep_tracer_records(plan.tracer_dir)
@@ -988,9 +1024,13 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
                 stored = store.put(sha, plan.environment, passing, registry=plan.registry,
                                    durations=junit_durations(run.junit_path, passing),
                                    clean_tree=lambda kind, file: plan.digests[(kind, file)])
-                store.set_meta(result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)))
-                store.set_meta(result_store.FAILED_META, json.dumps(
-                    sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)))
+                history = json.loads(store.get_meta(ALWAYS_RERUN_HISTORY_META) or "[]")
+                warning = reuse_share_warning(always, len(ran) + len(reused), history)
+                store.set_meta(ALWAYS_RERUN_HISTORY_META, json.dumps((history + [always])[-5:]))
+                tree = core_tree(plan.core)
+                set_tagged_meta(store, result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)), tree)
+                set_tagged_meta(store, result_store.FAILED_META, json.dumps(
+                    sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)), tree)
                 store.trim()
         except Exception as exc:
             note = f"results of the run were not stored: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
@@ -1016,6 +1056,7 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
     return dataclasses.replace(run, pytest_exit=exit_code, reuse_active=True, reused=reused,
                                stored_results=stored, always_rerun_tests=always,
                                always_rerun_reasons=dict(reasons), ran_tests=ran_tests, store_note=note,
+                               reuse_warning=warning,
                                catalogue_reused_s={i: plan.hits[i].duration_s for i in reused
                                                    if plan.registry.find(i) is not None},
                                catalogue_ran=tuple(i for i in ran_tests if plan.registry.find(i) is not None))
@@ -1063,6 +1104,7 @@ def reuse_fields(run: SuiteRun) -> dict:
         "results": {"reuse": run.reuse_active, "ran": len(ran), "reused": len(run.reused),
                     "stored": run.stored_results, "always_rerun": run.always_rerun_tests,
                     "always_rerun_reasons": dict(run.always_rerun_reasons), "note": run.store_note,
+                    "warning": run.reuse_warning,
                     "catalogue_reused_s": dict(run.catalogue_reused_s), "catalogue_ran": list(run.catalogue_ran)},
         "test_sources": {**{i: "ran" for i in ran}, **{i: "reused" for i in run.reused}},
         "reused_from": dict(run.reused),

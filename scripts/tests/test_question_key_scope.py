@@ -104,6 +104,7 @@ _UNCLAIMED_STAGE_LEAVES = {
     "outcome.cost_usd": "the mutable execution record, not the declaration",
     "outcome.duration_ms": "the mutable execution record, not the declaration",
     "outcome.spawn_count": "the mutable execution record, not the declaration",
+    "outcome.unpriced_spawns": "the mutable execution record, not the declaration",
     "outcome.delivered_head": "the mutable execution record, not the declaration",
     "outcome.delivered_base": "the mutable execution record, not the declaration",
     "outcome.landed_head": "the mutable execution record, not the declaration",

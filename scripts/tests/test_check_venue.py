@@ -251,3 +251,29 @@ def test_approve_rederives_venue_from_edited_plan(store, tmp_path, fixtures_dir)
     state = store.load(sid)
     assert state.delivery_worktree == str(worktree)
     assert state.resolve_check_venue("delivery") == str(worktree)
+
+
+def test_approve_records_the_venue_settings_digests(store, tmp_path, fixtures_dir):
+    worktree = tmp_path / "wt"
+    (worktree / ".claude").mkdir(parents=True)
+    (worktree / ".claude" / "settings.json").write_text("{}")
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage.toml").read_text().replace(
+        "[meta]\n", f'[meta]\ndelivery_worktree = "{worktree}"\n', 1
+    ))
+    sid = "av2"
+    cli.cmd_start(ns(session=sid, task="venue", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan_path)), store=store)
+
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok
+
+    assert store.load(sid).venue_settings_at_approve == {
+        ".claude/settings.json": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        ".claude/settings.local.json": "absent",
+    }

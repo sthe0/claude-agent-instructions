@@ -41,6 +41,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parents[1])
 if _SCRIPTS_DIR not in sys.path:  # scripts/ for lib.plugin_dir
     sys.path.insert(0, _SCRIPTS_DIR)
 from lib.plugin_dir import load_plugin_module, resolve_plugin_dir  # noqa: E402
+from lib.project_root import git_root_marker  # noqa: E402
 
 DEFAULT_BACKENDS = ("git", "none")
 
@@ -94,7 +95,7 @@ def is_git_repo(path: Path) -> bool:
     """
     p = path.resolve()
     while True:
-        if (p / ".git").exists():
+        if git_root_marker(str(p)):
             return True
         parent = p.parent
         if parent == p:  # filesystem root

@@ -66,6 +66,7 @@ from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from lib import widening_targets
+from lib.project_root import git_root_marker
 
 from . import resources, tool_contracts
 
@@ -521,7 +522,7 @@ def _redirect_resources(redirects: list[_Redirect], cwd: str | None) -> tuple[li
 def _worktree_root(start: str) -> str | None:
     cur = start
     while True:
-        if os.path.exists(os.path.join(cur, ".git")):
+        if git_root_marker(cur):
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:

@@ -515,6 +515,7 @@ def test_spawn_specialist_writes_spawner_session(monkeypatch, tmp_path):
 
     def spawn_row(extra_argv=(), **env):
         monkeypatch.delenv(SPAWN_MOD.OWN_SESSION_ENV, raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         for name, value in env.items():
             monkeypatch.setenv(name, value)
         cost_log.unlink(missing_ok=True)
@@ -535,10 +536,11 @@ def test_spawn_specialist_writes_spawner_session(monkeypatch, tmp_path):
     assert "spawner_session" not in bare
     base_fields = {
         "ts", "event", "kind", "budget_tier", "budget_usd_cap", "effort", "depth", "cost_usd",
-        "duration_ms", "return_marker", "return_marker_source", "exit_code", "malformed",
+        "session_total_usd", "duration_ms", "return_marker", "return_marker_source", "exit_code", "malformed",
         "stage_index", "plan_path", "extractor_invoked", "extractor_model", "extractor_degraded",
         "extraction_reason", "outcome_class", "child_session_id", "transcript_path", "review_pair",
         "plan_sha256", "session_id", "ticket",
+        "host", "harness_version", "models", "root_session_id",
     }
     assert set(own) - {"spawner_session"} == base_fields == set(bare)
 

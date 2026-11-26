@@ -340,6 +340,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         plan_snapshot_hash=state.plan_snapshot_hash,
         approved_grants_sha256=state.approved_grants_sha256,
         approved_grant_entries=copy.deepcopy(state.approved_grant_entries),
+        venue_settings_at_approve=copy.deepcopy(state.venue_settings_at_approve),
         accepted_plan_digest=state.accepted_plan_digest,
         plan_binding_captured=True,
         runtime_grants=copy.deepcopy(state.runtime_grants),
@@ -483,6 +484,7 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
         state.plan_snapshot_hash = frame.plan_snapshot_hash
         state.approved_grants_sha256 = frame.approved_grants_sha256
         state.approved_grant_entries = frame.approved_grant_entries
+        state.venue_settings_at_approve = frame.venue_settings_at_approve
         state.accepted_plan_digest = frame.accepted_plan_digest
         if frame.runtime_grants is not None:
             state.runtime_grants = frame.runtime_grants

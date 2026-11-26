@@ -3,8 +3,9 @@
 Moved verbatim from cli.py; see cli.py for the command table."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
-from lib import config_root
+from lib import config_root, engine_session_binding
 from . import (
     advisor,
     delivery,
@@ -49,8 +50,11 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_done_criterion=getattr(args, "done_criterion", "") or "",
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
+        cycle_started_at=time.time(),
     )
-    runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=False)
+    runtime_host.bind_runtime_host(
+        state, getattr(args, "host", None), require=False,
+        root_session_id=engine_session_binding.harness_session_id())
     _adopt_parent_difficulty(state)
     _adopt_norm_handoff(state, store)
     state.log("start", task=state.task_id)
@@ -113,8 +117,11 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_done_criterion=getattr(args, "done_criterion", "") or "",
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
+        cycle_started_at=time.time(),
     )
-    runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)
+    runtime_host.bind_runtime_host(
+        new, getattr(args, "host", None), require=False,
+        root_session_id=engine_session_binding.harness_session_id())
     _adopt_parent_difficulty(new)
     if (
         new.parent_difficulty is None and prior is not None and prior.parent_difficulty

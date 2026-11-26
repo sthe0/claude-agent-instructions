@@ -478,7 +478,8 @@ def test_children_is_a_registered_session_command():
 
 def test_state_at_the_previous_version_loads_unlinked(store):
     """A state file written before `parent_link` existed loads with no link and keeps
-    its recursion_depth; its schema version stays the one the file declared."""
+    its recursion_depth. Its schema version reads as the current one: a load from before
+    the host binds records that migration once, so a second load does not repeat it."""
     _start(store, "m1", recursion_depth=2)
     path = store.path("m1")
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -490,6 +491,6 @@ def test_state_at_the_previous_version_loads_unlinked(store):
 
     assert loaded.parent_link is None
     assert loaded.recursion_depth == 2
-    assert loaded.schema_version == state_module.SCHEMA_VERSION - 1
+    assert loaded.schema_version == state_module.SCHEMA_VERSION
     _start(store, "m2")
     assert store.load("m2").schema_version == state_module.SCHEMA_VERSION

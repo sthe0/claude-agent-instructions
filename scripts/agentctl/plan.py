@@ -4670,6 +4670,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "outcome.cost_usd": "I",
     "outcome.duration_ms": "I",
     "outcome.spawn_count": "I",
+    "outcome.unpriced_spawns": "I",
     "outcome.delivered_head": "I",
     "outcome.delivered_base": "I",
     "outcome.landed_head": "I",

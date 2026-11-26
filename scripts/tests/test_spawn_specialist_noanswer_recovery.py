@@ -46,7 +46,7 @@ def _firings(path: Path):
 
 
 def _run(monkeypatch, tmp_path, capsys, child_result: str, resume_result: "str | None" = None,
-         child_is_error: bool = False, child_raw: "str | None" = None):
+         child_is_error: bool = False, child_raw: "str | None" = None, prior_rows: tuple = ()):
     """``child_raw`` replaces the child's JSON payload with raw stdout; its transcript is then
     discovered under CHILD_SID's stem, the id a stem fallback would resume."""
     mod = _load()
@@ -55,7 +55,8 @@ def _run(monkeypatch, tmp_path, capsys, child_result: str, resume_result: "str |
     def fake_launch(cmd, **kwargs):
         captured["launches"].append(list(cmd))
         if "--resume" in cmd:
-            return _FakeProc({"result": resume_result or "", "total_cost_usd": 0.12, "session_id": CHILD_SID})
+            # A resumed run reports the running total of its session, the first run included.
+            return _FakeProc({"result": resume_result or "", "total_cost_usd": 0.62, "session_id": CHILD_SID})
         if child_raw is not None:
             return _FakeProc(child_raw)
         return _FakeProc({"result": child_result, "cost_usd": 0.5, "session_id": CHILD_SID,
@@ -72,6 +73,9 @@ def _run(monkeypatch, tmp_path, capsys, child_result: str, resume_result: "str |
     monkeypatch.setattr(mod, "_discover_transcript_path", lambda *a, **k: transcript)
     monkeypatch.setattr(mod, "permissions_digest", lambda *a, **k: "")
     monkeypatch.setattr(mod, "log_cost_entry", captured["ledger"].append)
+    cost_log = tmp_path / "spawn-costs.jsonl"
+    cost_log.write_text("".join(json.dumps(row) + "\n" for row in prior_rows), encoding="utf-8")
+    monkeypatch.setattr(mod, "COST_LOG", cost_log)
     monkeypatch.setattr(mod, "deregister_child_scope", lambda *a, **k: None)
     monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/claude")
     sysprompt = tmp_path / "sysprompt.md"
@@ -130,13 +134,46 @@ def test_resume_recovers_marker(monkeypatch, tmp_path, capsys):
     assert captured["row"]["return_marker_source"] == "resume"
     assert captured["row"]["resume"]["marker"] == "COMPLETED"
     assert abs(captured["row"]["cost_usd"] - 0.62) < 1e-9
-    assert captured["row"]["resume"]["cost_usd"] == 0.12
+    assert abs(captured["row"]["session_total_usd"] - 0.62) < 1e-9
+    assert abs(captured["row"]["resume"]["cost_usd"] - 0.12) < 1e-9
     resume_cmd = next(c for c in captured["launches"] if "--resume" in c)
     assert resume_cmd[resume_cmd.index("--resume") + 1] == CHILD_SID
     assert len(captured["firings"]) == 1
     firing = captured["firings"][0]
-    assert (firing["fix"], firing["event"], firing["cost_usd"]) == ("A", "resume", 0.12)
+    assert (firing["fix"], firing["event"]) == ("A", "resume")
+    assert abs(firing["cost_usd"] - 0.12) < 1e-9
     assert firing["observables"]["resume_marker"] == "COMPLETED"
+
+
+def test_dispatch_into_a_logged_session_books_only_what_it_spent(monkeypatch, tmp_path, capsys):
+    """The child reports its session's running total (0.5); the log already holds 0.3 of it."""
+    monkeypatch.setenv(FLAG_ENV, "1")
+    prior = ({"event": "spawn", "child_session_id": CHILD_SID, "cost_usd": 0.1, "session_total_usd": 0.3},)
+    captured = _run(monkeypatch, tmp_path, capsys, "COMPLETED: done.\n", prior_rows=prior)
+
+    assert abs(captured["row"]["cost_usd"] - 0.2) < 1e-9
+    assert abs(captured["row"]["session_total_usd"] - 0.5) < 1e-9
+
+
+def test_session_total_already_logged_reads_both_row_forms(tmp_path):
+    mod = _load()
+    log = tmp_path / "costs.jsonl"
+    rows = [
+        {"child_session_id": "other", "cost_usd": 9.0},
+        {"child_session_id": CHILD_SID, "cost_usd": 3.5},
+        {"child_session_id": CHILD_SID, "cost_usd": 8.4},
+        {"child_session_id": CHILD_SID, "cost_usd": 1.0, "resume": {"cost_usd": 9.1}},
+        {"child_session_id": CHILD_SID, "cost_usd": None},
+    ]
+    log.write_text("not json " + CHILD_SID + "\n" + "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    # Rows written before the log carried the total hold the reported running total.
+    assert mod.session_total_already_logged(CHILD_SID, log) == 9.1
+    with log.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"child_session_id": CHILD_SID, "cost_usd": 0.4, "session_total_usd": 9.5}) + "\n")
+    assert mod.session_total_already_logged(CHILD_SID, log) == 9.5
+    assert mod.session_total_already_logged("never-seen", log) == 0.0
+    assert mod.session_total_already_logged(None, log) == 0.0
+    assert mod.session_total_already_logged(CHILD_SID, tmp_path / "absent.jsonl") == 0.0
 
 
 def test_resume_carries_the_child_surface(monkeypatch, tmp_path, capsys):

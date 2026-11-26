@@ -507,6 +507,31 @@ def test_venue_that_is_not_a_repository_resolves_no_git_write(tmp_path):
     assert _statuses(_seg("touch f", plain)) == ["resolved"]
 
 
+def test_venue_under_an_empty_dot_git_directory_resolves_no_git_write(tmp_path):
+    (tmp_path / ".git").mkdir()
+    venue = tmp_path / "sub"
+    venue.mkdir()
+    assert _statuses(_seg("git add -A", venue)) == ["unresolved"]
+
+
+def test_worktree_root_resolves_a_dot_git_directory_with_head(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    assert segment_resolver._worktree_root(str(sub)) == str(tmp_path)
+
+
+def test_worktree_root_resolves_a_gitlink_file(tmp_path):
+    gitdir = tmp_path / "meta"
+    gitdir.mkdir()
+    (gitdir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    assert segment_resolver._worktree_root(str(checkout)) == str(checkout)
+
+
 class TestGitAllowList:
     """Only the listed (subcommand, flag-shape) pairs resolve; the pin stops a widening from going unnoticed."""
 

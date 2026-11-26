@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+import spawner_launcher
 from session_scope import registry
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -178,7 +179,7 @@ def _run_wrapper(tmp_path: Path, home: Path, bin_dir: Path) -> subprocess.Comple
     env.pop("CLAUDE_AGENT_HOME", None)
     cmd = [
         "python3",
-        str(SCRIPT),
+        spawner_launcher.launcher(),
         "--kind",
         "developer",
         "--plan",

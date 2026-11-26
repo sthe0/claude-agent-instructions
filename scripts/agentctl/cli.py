@@ -20,6 +20,7 @@ import threading
 from pathlib import Path
 # Re-exported: read as agentctl.cli.<name> by tests.
 from lib import hook_telemetry
+from lib.engine_session_binding import harness_session_id
 from lib.telemetry import recorder
 from . import (
     gates,
@@ -425,7 +426,7 @@ def _track_saves(store) -> dict:
 
 
 def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
-    harness = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    harness = harness_session_id()
     raw = _inject_default_session(
         list(sys.argv[1:] if argv is None else argv), harness
     )
