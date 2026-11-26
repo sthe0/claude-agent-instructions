@@ -242,7 +242,8 @@ def _fixed_views(rig, tmp_path, pairs, monkeypatch):
     plan, so each gets a fixed view directory the transcripts can name."""
     view = {p: tmp_path / "views" / f"view-{p}" for p in pairs}
     monkeypatch.setattr(rig.drv, "view_dir_for",
-                        lambda plan_path, pair, view_root=None: str(view[pair]) if pair in view else None)
+                        lambda plan_path, pair, view_root=None, condition_decisions=():
+                        str(view[pair]) if pair in view else None)
     return view
 
 
@@ -558,7 +559,7 @@ def test_td8_pulls_are_counted_against_the_view_directory_known_at_launch(make_r
     current = {"a": launch_view}
     calls: list[str] = []
 
-    def view_dir_for(plan_path, pair, view_root=None):
+    def view_dir_for(plan_path, pair, view_root=None, condition_decisions=()):
         calls.append(pair)
         return str(current[pair])
 
