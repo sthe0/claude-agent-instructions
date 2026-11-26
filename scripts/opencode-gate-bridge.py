@@ -49,18 +49,19 @@ def _read_json(source) -> dict:
 
 
 def _decide_call(event: str, data: dict, rows: list[oe.Row], plugin: frozenset[str], transcript: Path | None,
-                 environ=None) -> oe.Decision:
+                 environ=None, declared: dict | None = None) -> oe.Decision:
     directory = data.get("cwd") or ""
+    declared = oe.declared_config(environ) if declared is None else declared
+    servers = frozenset(declared["mcp_servers"])
     if not directory:
         if event == "tool.execute.before":
-            oe.classify_tool(str(data.get("tool") or ""), plugin, oe.declared_mcp_servers(environ))
+            oe.classify_tool(str(data.get("tool") or ""), plugin, servers)
             raise oe.UnknownDirectory("the directory the session runs in is unknown, so no path or command "
                                       "can be placed")
         if event == "tool.execute.after":
             return oe.Decision()
-    servers = oe.declared_mcp_servers(environ)
     payload = oe.build_payload(event, data, transcript_path=transcript or Path("/dev/null"), plugin=plugin,
-                               environ=environ, servers=servers, directory=directory)
+                               environ=environ, servers=servers, directory=directory, declared=declared)
     if transcript is not None:
         oe.append_transcript(transcript, oe.transcript_records(event, {**data, "cwd": directory},
                                                                 payload["session_id"], plugin=plugin,
@@ -72,11 +73,11 @@ def _decide_call(event: str, data: dict, rows: list[oe.Row], plugin: frozenset[s
 
 
 def _decide(event: str, data: dict, rows: list[oe.Row], plugin: frozenset[str], roots: list[Path],
-            transcript: Path | None, environ=None) -> oe.Decision:
+            transcript: Path | None, environ=None, declared: dict | None = None) -> oe.Decision:
     if event == "tool.execute.before":
         oe.require_pretool_rows(rows)
     try:
-        decision = _decide_call(event, data, rows, plugin, transcript, environ)
+        decision = _decide_call(event, data, rows, plugin, transcript, environ, declared)
     except oe.UnshowableCall as error:
         if event in REFUSING_EVENTS:
             return oe.refusal(error.cls, str(error))
@@ -106,13 +107,14 @@ def bridge_event(name: str, data: dict, roots: list[Path], *, environ=None) -> d
     try:
         if name in REFUSING_EVENTS:
             oe.require_project_config_off(env)
-        rows, plugin, digest = oe.rows_snapshot(oe.integration_dir(), session, digest, lambda: roots,
-                                                env.get(oe.EXTRA_ROWS_ENV))
+        snapshot = oe.rows_snapshot(oe.integration_dir(), data.get("sessionID") or session, digest, lambda: roots,
+                                    env.get(oe.EXTRA_ROWS_ENV), env)
     except oe.UnshowableCall as error:
         if name in REFUSING_EVENTS:
             return _output(oe.refusal(error.cls, str(error)), digest)
         return _output(oe.Decision(), digest)
-    return _output(_decide(name, data, rows, plugin, roots, transcript, env), digest)
+    return _output(_decide(name, data, snapshot.rows, snapshot.plugin_tools, roots, transcript, env,
+                           snapshot.declared), snapshot.digest)
 
 
 def cmd_event(args) -> int:

@@ -1613,6 +1613,107 @@ def test_config_dir_write_refused(tmp_path):
         assert verdict["decision"] == "allow", (tool, verdict)
 
 
+class _ScopeWorld:
+    """A real directory tree for the shell write-scope table: ``real/cfg`` is the protected config directory,
+    ``work`` the session directory, ``work/cfglink`` a link to the config directory, ``work/deep`` a link to
+    ``real/deep`` (so ``deep/../cfg`` is the config directory by the shell and ``work/cfg`` by a lexical
+    reading), and ``real/cfg/home`` the HOME of the table's ``~`` rows."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        for name in ("real/cfg/home", "real/deep", "work"):
+            (tmp_path / name).mkdir(parents=True, exist_ok=True)
+        self.real = (tmp_path / "real").resolve()
+        self.cfg = self.real / "cfg"
+        self.work = (tmp_path / "work").resolve()
+        (self.work / "cfglink").symlink_to(self.cfg)
+        (self.work / "deep").symlink_to(self.real / "deep")
+        self.home = self.cfg / "home"
+        monkeypatch.setenv("HOME", str(self.home))
+        self.environ = {oe.OPENCODE_CONFIG_DIR_ENV: str(self.cfg), "HOME": str(self.home),
+                        INTEGRATION_ENV_NAME: str(tmp_path / "integration")}
+
+    def hits(self, command, cwd=None):
+        return oe.config_dir_write_targets("Bash", {"command": command.replace("CFG", str(self.cfg))},
+                                           str(cwd or self.work), self.environ)
+
+
+INTEGRATION_ENV_NAME = "AGENT_OPENCODE_HOME"
+
+# The write forms the shared lexer and the two Claude hooks already read, then the three the reviewer found open.
+BLOCKED_SHELL_FORMS = [
+    "echo x > CFG/a", "echo x &> CFG/a", "echo x 2> CFG/a", "echo x >> CFG/a", "echo x >CFG/a",
+    "sed -i s/a/b/ CFG/a", "echo x | tee CFG/a", "exec 3> CFG/a", "cat <<EOF > CFG/a\nbody\nEOF",
+    "cp x cfglink/", "cp x ../real/cfg/a", "cp x ~/..", "mv x CFG/",
+    "cd CFG && echo x > opencode.json", "cd CFG; echo x > opencode.json", "cd ../real/cfg && echo x > opencode.json",
+    "echo x > \"$OPENCODE_CONFIG_DIR/opencode.json\"", "echo x > ${OPENCODE_CONFIG_DIR}/opencode.json",
+    "cp x deep/../cfg/a",
+    "echo x > $UNSET_VARIABLE/opencode.json", "cd $UNSET_VARIABLE && echo x > opencode.json",
+    "echo x > $(pwd)/../real/cfg/a", "echo x > `pwd`/a", "echo x > CFG/{a,b}", "echo x > CFG/*",
+    "echo 'unclosed > ok.txt",
+]
+ALLOWED_SHELL_FORMS = [
+    "echo x > ok.txt", "cp x cfglink-not/ok", "cp x deep/ok", "echo $HOME", "ls CFG", "cat CFG/a > ok.txt",
+    "cd work && echo x > ok.txt", "echo ${OPENCODE_CONFIG_DIR} > ok.txt", "cd deep && echo x > ok.txt",
+]
+
+
+@pytest.mark.parametrize("command", BLOCKED_SHELL_FORMS)
+def test_shell_write_into_the_protected_set_is_refused_in_every_form_the_hooks_resolve(tmp_path, monkeypatch, command):
+    world = _ScopeWorld(tmp_path, monkeypatch)
+    hits = world.hits(command)
+    assert hits.protected or hits.unreadable, command
+    with pytest.raises(oe.ConfigDirWrite):
+        oe.require_no_config_dir_write("Bash", {"command": command.replace("CFG", str(world.cfg))},
+                                       str(world.work), world.environ)
+
+
+@pytest.mark.parametrize("command", ALLOWED_SHELL_FORMS)
+def test_shell_write_that_stays_outside_the_protected_set_is_not_refused(tmp_path, monkeypatch, command):
+    world = _ScopeWorld(tmp_path, monkeypatch)
+    hits = world.hits(command)
+    assert not hits.protected and not hits.unreadable, (command, hits)
+
+
+def test_unexpanded_variable_is_refused_and_an_expanded_one_names_its_target(tmp_path, monkeypatch):
+    world = _ScopeWorld(tmp_path, monkeypatch)
+    unset = world.hits("echo x > $NOT_SET_ANYWHERE/f")
+    assert not unset.protected and unset.unreadable and "$NOT_SET_ANYWHERE" in unset.unreadable[0]
+    known = world.hits("echo x > $OPENCODE_CONFIG_DIR/opencode.json")
+    assert known.protected == [str(world.cfg / "opencode.json")] and not known.unreadable
+    unsafe = {**world.environ, oe.OPENCODE_CONFIG_DIR_ENV: str(world.cfg) + " x"}
+    hits = oe.config_dir_write_targets("Bash", {"command": "echo x > $OPENCODE_CONFIG_DIR/a"}, str(world.work), unsafe)
+    assert hits.unreadable, "a variable whose value holds a space is not expanded, so the target is unreadable"
+
+
+def test_shell_scope_agrees_with_the_canon_hook_on_every_form_it_resolves(tmp_path, monkeypatch):
+    """The set this gate resolves holds the path the canon-readonly hook resolves for the same command line."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("canon_ro", REPO / "scripts" / "hook-guard-canon-readonly.py")
+    canon = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(canon)
+    world = _ScopeWorld(tmp_path, monkeypatch)
+    from lib import shell_write_scope
+
+    for command in BLOCKED_SHELL_FORMS:
+        text = command.replace("CFG", str(world.cfg))
+        if "$" in text or "`" in text or "{" in text:
+            continue
+        monkeypatch.setattr(canon, "_is_in_canon", lambda parent, path: True)
+        expected = canon._canon_bash_write(text, str(world.work))
+        if expected:
+            assert expected in shell_write_scope.write_scope(text, str(world.work), world.environ).resolved, command
+
+
+def test_write_and_edit_paths_keep_the_lexical_resolution_of_opencodes_own_tools(tmp_path, monkeypatch):
+    world = _ScopeWorld(tmp_path, monkeypatch)
+    inside = oe.config_dir_write_targets("Write", {"file_path": str(world.cfg / "p.ts")}, str(world.work), world.environ)
+    assert inside.protected == [str(world.cfg / "p.ts")]
+    outside = oe.config_dir_write_targets("Write", {"file_path": str(world.work / "p.ts")}, str(world.work),
+                                          world.environ)
+    assert not outside.protected
+
+
 def _rows_session(tmp_path, rows, session="ses_rs", **data):
     """One before-event of ``session`` under the rows file ``rows``; ``data`` may carry ``rowsDigest``."""
     return _verdict(_event(tmp_path, "tool.execute.before", {**_shell(tmp_path), "sessionID": session, **data}, rows))

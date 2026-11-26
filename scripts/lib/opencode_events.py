@@ -29,6 +29,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import NamedTuple
+from urllib.parse import unquote
 
 from lib import config_root
 
@@ -263,24 +265,58 @@ def payload_session_id(opencode_session: str, environ=None) -> str:
     return env.get(OWN_SESSION_ENV) or opencode_session
 
 
-def declared_mcp_servers(environ=None) -> frozenset[str]:
-    """The MCP server names the session's own OpenCode config declares: the keys of ``mcp`` in the file
-    ``OPENCODE_CONFIG`` names and in ``opencode.json`` of ``OPENCODE_CONFIG_DIR`` (probe A5,
-    ``mcp_names_from_config``, records that a server's tools are offered as ``<key>_<tool>``). A config that
-    cannot be read declares none, so the tools of its servers are refused."""
+PLUGIN_SPEC_KEYS = ("plugin", "plugins")
+FILE_SPEC_PREFIX = "file://"
+
+
+def _plugin_spec_path(spec, source: Path) -> str | None:
+    """The file or directory a plugin spec of a config file names, ``None`` for a package name. A spec is a
+    string or ``[string, options]``."""
+    if isinstance(spec, list) and spec:
+        spec = spec[0]
+    if not isinstance(spec, str):
+        return None
+    if spec.startswith(FILE_SPEC_PREFIX):
+        return unquote(spec[len(FILE_SPEC_PREFIX):])
+    if spec.startswith("/"):
+        return spec
+    if spec.startswith("."):
+        return str(source.parent / spec)
+    return None
+
+
+def declared_config(environ=None) -> dict:
+    """What the session's own OpenCode config declares, read from the file ``OPENCODE_CONFIG`` names and from
+    ``opencode.json`` of ``OPENCODE_CONFIG_DIR``: ``mcp_servers``, the keys of ``mcp`` (probe A5,
+    ``mcp_names_from_config``, records that a server's tools are offered as ``<key>_<tool>``), and
+    ``plugin_paths``, the files and directories its plugin specs name, which a session must not write. A config
+    that cannot be read declares none, so the tools of its servers are refused. A session reads it once, into
+    its snapshot (``rows_snapshot``)."""
     env = os.environ if environ is None else environ
     sources = [env.get(OPENCODE_CONFIG_ENV)]
     if env.get(OPENCODE_CONFIG_DIR_ENV):
         sources.append(str(Path(env[OPENCODE_CONFIG_DIR_ENV]) / "opencode.json"))
-    names: set[str] = set()
+    servers: set[str] = set()
+    plugin_paths: set[str] = set()
     for source in filter(None, sources):
         try:
-            table = json.loads(Path(source).read_text(encoding="utf-8")).get("mcp")
+            table = json.loads(Path(source).read_text(encoding="utf-8"))
+            mcp = table.get("mcp")
         except (OSError, ValueError, AttributeError):
             continue
-        if isinstance(table, dict):
-            names.update(str(key) for key in table)
-    return frozenset(names)
+        if isinstance(mcp, dict):
+            servers.update(str(key) for key in mcp)
+        for key in PLUGIN_SPEC_KEYS:
+            specs = table.get(key)
+            for spec in specs if isinstance(specs, list) else []:
+                path = _plugin_spec_path(spec, Path(source))
+                if path:
+                    plugin_paths.add(path)
+    return {"mcp_servers": sorted(servers), "plugin_paths": sorted(plugin_paths)}
+
+
+def declared_mcp_servers(environ=None) -> frozenset[str]:
+    return frozenset(declared_config(environ)["mcp_servers"])
 
 
 def declared_plugin_tools(extra_rows_file: str | None = None) -> frozenset[str]:
@@ -357,45 +393,99 @@ class ConfigDirWrite(UnshowableCall):
     cls = "config-dir"
 
 
-def protected_directories(environ=None) -> tuple[str, ...]:
-    """The directories a gated session must not write into: the config directory OpenCode was started with
-    (``OPENCODE_CONFIG_DIR``) and the integration directory (the shim, the shadow transcripts, the rows
-    snapshots, OpenCode's data). Real paths, so a link to either names it."""
+GLOBAL_PLUGIN_NAMES = ("plugin", "plugins")
+SYSTEM_CONFIG_DIR = "/etc/opencode"
+
+
+def global_config_locations(environ=None) -> tuple[str, ...]:
+    """The directories OpenCode loads plugin code from whatever the project config says (probe A6
+    ``global_plugin_dirs`` derives the list from the binary): the system directory, the user's OpenCode config
+    directory (``$XDG_CONFIG_HOME/opencode``, else ``$HOME/.config/opencode``), and the ``plugin`` and
+    ``plugins`` directories of ``$HOME/.agents`` and ``$HOME/.claude``. Resolved from the environment the
+    session really runs in; the home directory of the user (``~``, the passwd entry) is covered as well as
+    ``$HOME``, which a command can set for itself."""
     env = os.environ if environ is None else environ
-    found = [env.get(OPENCODE_CONFIG_DIR_ENV)]
-    found.append(env.get(INTEGRATION_ENV) or str(config_root.agent_home() / "opencode"))
+    homes = [h for h in dict.fromkeys((env.get("HOME") or "", os.path.expanduser("~"))) if h and os.path.isabs(h)]
+    xdg = env.get("XDG_CONFIG_HOME") or ""
+    found = [SYSTEM_CONFIG_DIR]
+    found += [os.path.join(xdg, "opencode")] if xdg else []
+    for home in homes:
+        found.append(os.path.join(home, ".config", "opencode"))
+        found += [os.path.join(home, base, name) for base in (".agents", ".claude") for name in GLOBAL_PLUGIN_NAMES]
+    return tuple(found)
+
+
+def protected_paths(environ=None, directory: str = "", plugin_paths=()) -> tuple[str, ...]:
+    """The files and directories a gated session must not write: the config directory OpenCode was started
+    with (``OPENCODE_CONFIG_DIR``), the integration directory (the shadow transcripts, the rows snapshots,
+    OpenCode's data), the ``OPENCODE_CONFIG`` file, the ``AGENT_GATE_EXTRA_ROWS`` file, each plugin spec of the
+    declared config (the file, and its directory when it is a file: the shim and the directory that holds it),
+    the global plugin locations (``global_config_locations``), and the settings files of the session
+    directory's own ``.claude``, whose hooks the bridge reads as layer rows. Real paths, so a link to one names
+    it."""
+    env = os.environ if environ is None else environ
+    found = [env.get(OPENCODE_CONFIG_DIR_ENV), env.get(INTEGRATION_ENV) or str(config_root.agent_home() / "opencode"),
+             env.get(OPENCODE_CONFIG_ENV), env.get(EXTRA_ROWS_ENV), *global_config_locations(env)]
+    for path in plugin_paths:
+        found.append(path)
+        if not os.path.isdir(path):
+            found.append(os.path.dirname(path))
+    if directory:
+        found += [os.path.join(directory, ".claude", name) for name in LAYER_SETTINGS_NAMES]
     return tuple(dict.fromkeys(os.path.realpath(p) for p in found if p))
+
+
+LAYER_SETTINGS_NAMES = ("settings.json", "settings.local.json")
 
 
 def _inside(path: str, directory: str) -> bool:
     return path == directory or path.startswith(directory.rstrip(os.sep) + os.sep)
 
 
-def config_dir_write_targets(tool: str, tool_input: dict, cwd: str, environ=None) -> list[str]:
-    """The paths of ``tool_input`` (a Claude-shaped input; ``tool`` is the Claude tool name) that a write or
-    edit, or the write targets of a shell command line, would put into a protected directory."""
-    from lib import bash_write_targets
+class WriteScopeHits(NamedTuple):
+    protected: list[str]
+    unreadable: list[str]
 
+
+def config_dir_write_targets(tool: str, tool_input: dict, cwd: str, environ=None, *, directory: str = "",
+                             plugin_paths=()) -> WriteScopeHits:
+    """The protected paths a call would write (``protected``) and the write targets of a shell command line
+    that cannot be shown to lie outside the protected set (``unreadable``: a ``$`` the environment does not
+    expand, a ``cd`` to an unreadable place, a command line that does not tokenize). ``tool`` is the Claude
+    tool name and ``tool_input`` its input. A ``write`` or ``edit`` path was resolved by OpenCode's own
+    resolver, which removes ``..`` before it follows a link, and is checked as it names; a shell target is
+    resolved as the Claude hooks resolve one, the real path of the raw path, since the shell follows the link
+    first (``lib/shell_write_scope.py``)."""
+    from lib import shell_write_scope
+
+    env = os.environ if environ is None else environ
+    protected = protected_paths(env, directory, plugin_paths)
     if tool in ("Write", "Edit"):
-        candidates = [tool_input.get("file_path")]
+        normal = os.path.normpath(str(tool_input.get("file_path") or ""))
+        candidates = [normal, os.path.realpath(normal)] if tool_input.get("file_path") else []
+        unreadable: list[str] = []
     elif tool == "Bash":
-        candidates = bash_write_targets.command_write_targets(str(tool_input.get("command") or ""), cwd)
+        try:
+            scope = shell_write_scope.write_scope(str(tool_input.get("command") or ""), cwd, env)
+        except shell_write_scope.UnreadableCommand as error:
+            return WriteScopeHits([], [str(error)])
+        candidates, unreadable = list(scope.resolved), list(scope.unreadable)
     else:
-        return []
-    protected = protected_directories(environ)
-    hits = []
-    for candidate in filter(None, candidates):
-        normal = os.path.normpath(str(candidate))
-        if any(_inside(p, d) for p in (normal, os.path.realpath(normal)) for d in protected):
-            hits.append(normal)
-    return hits
+        return WriteScopeHits([], [])
+    hits = [c for c in dict.fromkeys(candidates) if any(_inside(c, d) for d in protected)]
+    return WriteScopeHits(hits, unreadable)
 
 
-def require_no_config_dir_write(tool: str, tool_input: dict, cwd: str, environ=None) -> None:
-    hits = config_dir_write_targets(tool, tool_input, cwd, environ)
-    if hits:
-        raise ConfigDirWrite(f"{tool} would write {hits[0]}, inside the session's config directory or the "
-                             f"integration directory, where the plugin that gates the session lives")
+def require_no_config_dir_write(tool: str, tool_input: dict, cwd: str, environ=None, *, directory: str = "",
+                                plugin_paths=()) -> None:
+    hits = config_dir_write_targets(tool, tool_input, cwd, environ, directory=directory, plugin_paths=plugin_paths)
+    if hits.protected:
+        raise ConfigDirWrite(f"{tool} would write {hits.protected[0]}, a file or directory that loads code into "
+                             f"the session or holds the gates' own state (the session's config directory, the "
+                             f"integration directory, the plugin, the rows files, a global plugin directory)")
+    if hits.unreadable:
+        raise ConfigDirWrite(f"{tool} writes to {hits.unreadable[0]!r}, which cannot be shown to lie outside the "
+                             f"directories that load code into the session or hold the gates' own state")
 
 
 def classify_tool(name: str, plugin: frozenset[str] = frozenset(),
@@ -723,9 +813,17 @@ def snapshot_digest(snapshot: dict) -> str:
     return hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def rows_snapshot(integration: Path, session: str, digest: str | None, make_roots, extra_rows_file: str | None
-                  ) -> tuple[list[Row], frozenset[str], str]:
-    """The rows and the declared plugin tool ids of a session, and the digest of the snapshot they come from.
+class SessionSnapshot(NamedTuple):
+    rows: list
+    plugin_tools: frozenset
+    digest: str
+    declared: dict
+
+
+def rows_snapshot(integration: Path, session: str, digest: str | None, make_roots, extra_rows_file: str | None,
+                  environ=None) -> SessionSnapshot:
+    """The rows, the declared plugin tool ids and the declared config (``declared_config``: MCP server names,
+    plugin paths) of a session, and the digest of the snapshot they come from.
 
     A session's rows are read from the three sources once, into a snapshot file under the integration state
     keyed by the session id. With no ``digest`` (the first event of the session, or a new process of an existing
@@ -745,7 +843,8 @@ def rows_snapshot(integration: Path, session: str, digest: str | None, make_root
             raise RowsSnapshotRefused("the stored rows snapshot of this session is not the one its digest names")
     else:
         snapshot = {"rows": [asdict(r) for r in load_rows(make_roots(), extra_rows_file)],
-                    "plugin_tools": sorted(declared_plugin_tools(extra_rows_file))}
+                    "plugin_tools": sorted(declared_plugin_tools(extra_rows_file)),
+                    "declared": declared_config(environ)}
         digest = snapshot_digest(snapshot)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -753,7 +852,9 @@ def rows_snapshot(integration: Path, session: str, digest: str | None, make_root
         os.replace(temporary, path)
     try:
         rows = [Row(**row) for row in snapshot["rows"]]
-        return rows, frozenset(str(i) for i in snapshot["plugin_tools"]), digest
+        declared = {"mcp_servers": [str(n) for n in snapshot["declared"]["mcp_servers"]],
+                    "plugin_paths": [str(p) for p in snapshot["declared"]["plugin_paths"]]}
+        return SessionSnapshot(rows, frozenset(str(i) for i in snapshot["plugin_tools"]), digest, declared)
     except (KeyError, TypeError):
         raise RowsSnapshotRefused("the stored rows snapshot of this session has a shape no snapshot has") from None
 
@@ -872,7 +973,8 @@ def now() -> str:
 
 
 def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: frozenset[str],
-                  environ=None, servers: frozenset[str] = frozenset(), directory: str = "") -> dict:
+                  environ=None, servers: frozenset[str] = frozenset(), directory: str = "",
+                  declared: dict | None = None) -> dict:
     """The Claude-shaped payload of an OpenCode event ``data`` (the hook input, as the probe recorded it).
     ``cwd`` is the session ``directory``, or for a shell call with a ``workdir`` the directory the command will
     run in; paths of the tool input are resolved by ``resolve_path``. A before-event whose tool is not one the
@@ -891,7 +993,9 @@ def build_payload(event: str, data: dict, *, transcript_path: Path, plugin: froz
         if strict:
             if payload["tool_name"] == "Edit":
                 require_exact_edit(payload["tool_input"]["file_path"], payload["tool_input"]["old_string"])
-            require_no_config_dir_write(payload["tool_name"], payload["tool_input"], payload["cwd"], environ)
+            plugin_paths = (declared if declared is not None else declared_config(environ))["plugin_paths"]
+            require_no_config_dir_write(payload["tool_name"], payload["tool_input"], payload["cwd"], environ,
+                                        directory=directory, plugin_paths=plugin_paths)
         payload["tool_use_id"] = data.get("id")
         if event == "tool.execute.after":
             payload["tool_response"] = claude_response(tool, args, data.get("result") or {})
