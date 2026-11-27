@@ -16,14 +16,15 @@ FILLER_OFFSET_BYTES = Path("/home/the0/.local/state/cgmi/virtual-filler-bytes")
 MIN_FILE = Path("/home/the0/.local/state/cgmi/virtual-filler-min")
 
 _real_statvfs = os.statvfs
-_offset = int(FILLER_OFFSET_BYTES.read_text(encoding="utf-8"))
+_DiskUsage = type(shutil.disk_usage("/"))
+try:
+    _offset = int(FILLER_OFFSET_BYTES.read_text(encoding="utf-8"))
+except OSError as exc:
+    raise RuntimeError(
+        f"virtual_filler fixture: cannot read {FILLER_OFFSET_BYTES} "
+        f"(write the byte offset there before the run): {exc}"
+    ) from exc
 _min_reported = None
-
-
-def _real_free(path) -> int:
-    st = _real_statvfs(os.fspath(path))
-    frsize = st[1] or st[0] or 1  # f_frsize, else f_bsize
-    return st[4] * frsize  # f_bavail
 
 
 def _disk_usage(path):
@@ -38,20 +39,24 @@ def _disk_usage(path):
         if _min_reported is None or free < _min_reported:
             _min_reported = free
         try:
-            # Monotonic across processes: a later child never raises the recorded minimum.
+            # Monotonic across processes: a concurrent child writing the same/larger value
+            # loses the recompare loop, so the file can only move down.
             current = MIN_FILE.read_text(encoding="utf-8").strip()
             if not current or free < int(current):
                 MIN_FILE.write_text(f"{free}\n", encoding="utf-8")
+                after = MIN_FILE.read_text(encoding="utf-8").strip()
+                if after and free < int(after):
+                    MIN_FILE.write_text(f"{free}\n", encoding="utf-8")
         except OSError:
             pass
-    return shutil._ntuple_diskusage(total, used, free)
+    return _DiskUsage(total, used, free)
 
 
 def _statvfs(path):
     st = _real_statvfs(os.fspath(path))
     fields = list(st)
     frsize = fields[1] or 1
-    free = max(_real_free(path) - _offset, 0)
+    free = max(fields[4] * frsize - _offset, 0)
     # statvfs_result: 0 f_bsize, 1 f_frsize, 2 f_blocks, 3 f_bfree, 4 f_bavail, ...
     fields[3] = min(fields[3], free // frsize)
     fields[4] = min(fields[4], free // frsize)

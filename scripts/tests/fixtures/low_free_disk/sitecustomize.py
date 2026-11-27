@@ -13,6 +13,7 @@ LOW_FREE_BYTES = 1 * 2**30
 
 _real_disk_usage = shutil.disk_usage
 _real_statvfs = os.statvfs
+_DiskUsage = type(_real_disk_usage("/"))
 
 
 def _capped_free(free: int) -> int:
@@ -21,7 +22,7 @@ def _capped_free(free: int) -> int:
 
 def _disk_usage(path):
     total, used, free = _real_disk_usage(os.fspath(path))
-    return shutil._ntuple_diskusage(total, used, _capped_free(free))
+    return _DiskUsage(total, used, _capped_free(free))
 
 
 def _statvfs(path):
