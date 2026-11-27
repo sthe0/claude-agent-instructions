@@ -262,11 +262,19 @@ def _precondition(run: SuiteRun, expected_sha: str) -> str:
     return ""
 
 
+def process_cap_reason() -> str:
+    """The reason naming the cap when the run's own task budget stopped thread creation."""
+    return ("process-cap: the run's own task cap refused thread creation (a bound the "
+            "cap-run.sh --own-tasks budget enforced, not a code failure)")
+
+
 def classify(run: SuiteRun, expected_sha: str) -> tuple[tuple[str, ...], str]:
     """(failed node ids, unavailable reason); a non-empty reason means the ids prove nothing."""
     reason = _precondition(run, expected_sha)
     if reason:
         return (), reason
+    if _cap_caused_thread_error(run):
+        return (), process_cap_reason()
     ids = tuple(sorted(set(run.failures)))
     if run.pytest_exit == 0:
         if ids:
@@ -286,6 +294,27 @@ def classify(run: SuiteRun, expected_sha: str) -> tuple[tuple[str, ...], str]:
 
 def _detail(run: SuiteRun) -> str:
     return f": {one_line(run.detail, 200)}" if run.detail else ""
+
+
+THREAD_ERROR_MARKERS = (
+    "can't start new thread",       # Python's RuntimeError when fork/clone hits RLIMIT_NPROC
+    "thread constructor failed",     # the C++ runtime's message for the same refusal (pytest -6)
+    "pthread_create failed",        # glibc's own wording of the same EAGAIN
+)
+
+
+def _cap_caused_thread_error(run: SuiteRun) -> bool:
+    """Thread creation failed inside a capped run: the cap refused, the code did not break.
+
+    cap-run.sh bounds every gate run, so a thread-creation refusal means the run's own
+    tree reached its budget: about the machine, not about the change under test. Such a
+    run proves nothing (UNAVAILABLE naming the cap), never a counted test failure — the
+    failing landing turned ~1179 of these into pytest -6 and a gate refusal.
+    """
+    if run.pytest_exit in (None, 0):
+        return False
+    text = f"{run.log_tail}\n{run.detail}"
+    return any(marker in text for marker in THREAD_ERROR_MARKERS)
 
 
 def subtract(candidate_ids: Iterable[str], baseline_ids: Iterable[str]) -> list[str]:
@@ -323,6 +352,10 @@ def observe(run: SuiteRun, expected_sha: str) -> Observation:
     reason = _precondition(run, expected_sha)
     if reason:
         return Observation(reason=reason)
+    if _cap_caused_thread_error(run):
+        # The cap stopped the run's own threads: its ids (failed or unfinished) say
+        # nothing about the change under test, so they must not enter partial sets.
+        return Observation(reason=process_cap_reason())
     if not run.report_path:
         ids, reason = classify(run, expected_sha)
         return Observation(failed=ids, reason=reason)
@@ -741,7 +774,11 @@ def slot_holder_extra_tasks(limits: test_slots.Limits, per_run_extra: int | None
 def pytest_argv(root: Path, select: Sequence[str], timeout_s: int, extra_tasks: int | None = None,
                 wrapper: Sequence[str] = (), extra_args: Sequence[str] = ()) -> list[str]:
     cap_run = Path(__file__).resolve().parents[1] / "cap-run.sh"
-    headroom = [] if extra_tasks is None else ["--extra-tasks", str(extra_tasks)]
+    # extra_tasks is the run's own headroom twice over: the count-based machine-wide cap
+    # (--extra-tasks, the safety net for a bare cap-run) and the own-tree budget
+    # (--own-tasks, which keeps other sessions' task growth from deciding this run).
+    headroom = [] if extra_tasks is None else [
+        "--extra-tasks", str(extra_tasks), "--own-tasks", str(extra_tasks)]
     return [
         str(cap_run), *headroom, "--timeout", str(timeout_s + KILL_GRACE_S + CAP_RUN_SLACK_S), "--",
         *wrapper, sys.executable, "-m", "pytest", *(select or ["scripts/tests"]),

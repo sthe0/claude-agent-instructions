@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
 # Run a command under a per-user task cap (RLIMIT_NPROC) and a wall-clock timeout.
 #
-#   cap-run.sh [--extra-tasks N] [--timeout S] -- <command...>
+#   cap-run.sh [--extra-tasks N] [--timeout S] [--own-tasks N] -- <command...>
 #
 # For the first trial of anything that spawns processes per invocation (test
 # parallelizers, pools, recursive hooks): a wrong guard then ends as a failed fork
 # (EAGAIN) in the trial, not as an exponential process tree on the host. The cap is
 # the user's task count now plus N, and is never above a limit already in force, so
 # a nested call clamps instead of raising. Not enforced for root.
+# --own-tasks N bounds the run's own process tree instead: the supervisor re-sets the
+# tree's soft RLIMIT_NPROC to (other tasks) + N + 128 every 0.5 s, so other sessions'
+# later growth cannot consume the run's headroom, and kills the tree past N + 128.
+# Away from Linux, or without resource.prlimit, the count-based cap stays.
 # See memory-global/leaves/fanout-trial-under-cap.md.
 set -u
 
 extra=512 # config.md: fanout-cap-extra-tasks
 secs=3600 # config.md: fanout-cap-timeout-s
+own=""
 
 usage() {
-    echo "usage: cap-run.sh [--extra-tasks N] [--timeout S] -- <command...>" >&2
+    echo "usage: cap-run.sh [--extra-tasks N] [--timeout S] [--own-tasks N] -- <command...>" >&2
     exit 2
 }
 
@@ -30,6 +35,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --extra-tasks) [ $# -ge 2 ] || usage; extra=$2; shift 2 ;;
         --timeout) [ $# -ge 2 ] || usage; secs=$2; shift 2 ;;
+        --own-tasks) [ $# -ge 2 ] || usage; own=$2; shift 2 ;;
         --) shift; break ;;
         *) usage ;;
     esac
@@ -37,6 +43,26 @@ done
 [ $# -gt 0 ] || usage
 is_uint "$extra" || usage
 is_uint "$secs" || usage
+[ -z "$own" ] || { is_uint "$own" || usage; [ "$own" -gt 0 ] || usage; }
+
+uid=$(id -u)
+
+# --own-tasks bounds the started tree itself, so the count-based cap below is not set:
+# a per-tree soft limit raised as others grow is the cap (a nested call clamps through
+# the supervisor's own inherited soft limit). The supervisor touches only PIDs in the
+# tree it started and never raises a hard limit.
+if [ -n "$own" ]; then
+    if [ "$(uname -s)" != "Linux" ]; then
+        echo "cap-run.sh: --own-tasks unsupported away from Linux; keeping the count-based cap" >&2
+    elif ! command -v python3 >/dev/null 2>&1; then
+        echo "cap-run.sh: --own-tasks needs python3; keeping the count-based cap" >&2
+    elif ! python3 -c 'import resource; raise SystemExit(0 if hasattr(resource, "prlimit") else 1)' 2>/dev/null; then
+        echo "cap-run.sh: --own-tasks needs resource.prlimit; keeping the count-based cap" >&2
+    else
+        exec python3 "$(dirname -- "$0")/lib/cap_own_tasks.py" \
+            --own-tasks "$own" --timeout "$secs" -- "$@"
+    fi
+fi
 
 uid=$(id -u)
 if [ "$(uname -s)" = "Linux" ]; then
