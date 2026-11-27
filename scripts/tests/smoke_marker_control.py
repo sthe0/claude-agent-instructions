@@ -88,18 +88,47 @@ def write_marker(file: Path, token: str) -> None:
     file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _latest_mtime(path: Path) -> "float | None":
+    """The newest mtime under path, or None when path is absent — a quiescence
+    probe for the sandbox session's telemetry flusher (never raises)."""
+    if not path.exists():
+        return None
+    latest = 0.0
+    try:
+        for item in [path, *path.rglob("*")]:
+            try:
+                latest = max(latest, item.stat().st_mtime)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return latest
+
+
 def remove_tree(parent: Path) -> None:
-    """Remove a throwaway sandbox tree. The sandboxed CLI session flushes
-    telemetry into its HOME after its launch returns; that late write races a
-    single rm -rf (ENOTEMPTY), so the removal retries until the tree is gone
-    and reports a residual (never raises: callers' finally blocks stay quiet)."""
-    for _ in range(10):
+    """Remove a throwaway sandbox tree. The sandboxed session's telemetry
+    flusher keeps writing into its HOME after the launch returns and can
+    recreate its files after an rm that already succeeded, so wait for it to
+    fall quiet first, then remove and verify. Never raises: callers' finally
+    blocks stay quiet; a residual is reported on stderr."""
+    if not parent.exists():
+        return
+    telemetry = parent / "sbx" / "home" / ".claude-agent" / "telemetry"
+    previous = -1.0
+    for _ in range(12):
+        time.sleep(5)
+        stamp = _latest_mtime(telemetry)
+        if stamp == previous:
+            break
+        previous = stamp
+    subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
+    time.sleep(5)
+    if parent.exists():
         subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
-        if not parent.exists():
-            return
-        time.sleep(2)
-    print(f"warning: sandbox tree {parent} still present after removal attempts",
-          file=sys.stderr)
+        time.sleep(5)
+    if parent.exists():
+        print(f"warning: sandbox tree {parent} still present after removal",
+              file=sys.stderr)
 
 
 # ── probe mode ─────────────────────────────────────────────────────────────
