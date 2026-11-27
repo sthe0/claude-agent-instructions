@@ -182,6 +182,7 @@ def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
         "--kind", "thinker", *selector, "--effort", "high",
         "--review-topo", pair, "--plan", plan_path,
         "--done-criterion", done_criterion(pair), "--criterion-type", "acceptance-review",
+        "--declared-size", "0",
     ]
     if history_path is not None:
         argv += ["--review-topo-history", history_path]

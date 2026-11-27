@@ -47,6 +47,18 @@ ground = "SECTION_HEADING_RE.match detects a '## ' markdown heading line to end 
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/brief_order.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the five literal order-part headings with optional Markdown formatting."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/brief_order.py::headed_sections::pattern.match"]
+class = "structural"
+ground = "Matches a heading at the start of a line to delimit a named field; it does not interpret the field's content."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/classify.py::classify::pattern.match"]
 class = "structural"
 ground = "TRACKER_KEY_RE.match checks that the tracker key has the ABC-123 shape."

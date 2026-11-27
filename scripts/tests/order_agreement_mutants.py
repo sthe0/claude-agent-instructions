@@ -678,6 +678,11 @@ def _any_setter_decision_unblocks(mp):
                raising=True)
 
 
+def _brief_order_part_unchecked(mp):
+    """A brief above the size line is never found to lack an order part."""
+    mp.setattr("agentctl.brief_order.order_part_violations", lambda parts: [], raising=True)
+
+
 MUTANTS = {
     "any_setter_decision_unblocks": _any_setter_decision_unblocks,
     "product_replan_unrouted": _product_replan_unrouted,
@@ -751,6 +756,7 @@ MUTANTS = {
     "order_anchor_unchecked": _order_anchor_unchecked,
     "order_receipt_unbound": _order_receipt_unbound,
     "order_stale_draft_presented": _order_stale_draft_presented,
+    "brief_order_part_unchecked": _brief_order_part_unchecked,
 }
 
 

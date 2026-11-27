@@ -1924,7 +1924,7 @@ def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = Non
         levels[row["level"]].append({
             **row,
             "spawn": (f"spawn-specialist.py --kind thinker --plan-brief --review-topo {row['pair']} "
-                      f"--plan {quoted}") if open_pair else None,
+                      f"--plan {quoted} --declared-size 0") if open_pair else None,
             "record": (f"agentctl plan-review --session {state.session_id} --target {quoted} "
                        f"--scope topo:{row['pair']} --reviewer thinker --verdict <pass|revise> "
                        "--plan-digest <sha256 of the plan bytes read> "

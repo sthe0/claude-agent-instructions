@@ -42,9 +42,11 @@ from typing import Mapping, NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
+from agentctl import brief_order  # the size line a brief is judged against and its five order parts
 from agentctl.config import (  # the one definition of the child-contour kill switch
     CHILD_CONTOUR_LINKING_ENV,
     CHILD_CONTOUR_LINKING_KEY,
+    Thresholds,
     child_contour_linking_enabled,
     child_noanswer_recovery_enabled,
     resource_grant_hook_enabled,
@@ -284,13 +286,21 @@ def site_condition_decisions(args: argparse.Namespace) -> list:
     a spawn with no engine session (the plan file as written). A session named by
     `--condition-session` must read (the reviewer is promised the current text); the spawn's own
     session may hold a state this engine cannot read, and a spawn must still launch for it: the
-    plan is then shown as written, with a note on stderr."""
+    plan is then shown as written, with a note on stderr. Raises ValueError, naming the session,
+    for a named session whose state does not read."""
     from agentctl.cli_common import condition_decisions_in_store
 
     named = getattr(args, "condition_session", None)
     state_root = getattr(args, "state_root", None)
     if named:
-        return condition_decisions_in_store(named, state_root)
+        try:
+            return condition_decisions_in_store(named, state_root)
+        except Exception as exc:  # noqa: BLE001 - any unreadable state is named, not a traceback
+            raise ValueError(
+                f"the session named by --condition-session ({named!r}) does not read "
+                f"({type(exc).__name__}); name a session whose state reads, or drop "
+                "--condition-session to show the conditions as the plan file writes them"
+            ) from exc
     try:
         return condition_decisions_in_store(
             getattr(args, "session", None) or os.environ.get(OWN_SESSION_ENV), state_root)
@@ -326,6 +336,87 @@ def plan_site(
         if kind in ("topo-pair", "topo-unit"):
             raise
         return SitePrompt(non_plan_brief_text(args.plan), (), frozenset())
+
+
+def _spawn_session_state(args: argparse.Namespace):
+    """The state of the session the spawn belongs to (`--session`, else its own contour's), or
+    None when there is none or it does not read: the spawn launches either way."""
+    from agentctl.store import FileStateStore
+
+    session_id = getattr(args, "session", None) or os.environ.get(OWN_SESSION_ENV)
+    if not session_id:
+        return None
+    root = getattr(args, "state_root", None)
+    try:
+        return (FileStateStore(root) if root is not None else FileStateStore()).load(session_id)
+    except Exception:  # noqa: BLE001 - an unreadable state only costs the inherited texts
+        return None
+
+
+def order_part_section(
+    args: argparse.Namespace, site: "SitePrompt | None", brief_texts: Sequence[str],
+) -> list[str]:
+    """The size line of this spawn and, above it, the check that its brief carries the five
+    order parts (`brief_order`). Raises ValueError naming the missing parts and the way on; returns
+    the brief section a spawn executing a new-form stage carries (the order as the stage states
+    it), else nothing. A spawn that executes no stage and declares no size is small: today's
+    prompt, with no read of the thresholds or of any session. An unreadable config.md fails open
+    (a note on stderr); an unreadable session state only loses the inherited condition texts."""
+    declared = getattr(args, "declared_size", None)
+    flags = getattr(args, "size_flags", None) or ()
+    doc = None
+    if brief_eligible(args):
+        try:
+            doc = load_plan(args.plan, strict=False)
+        except (PlanError, OSError):
+            doc = None
+    stage = None
+    if doc is not None:
+        stage = next((s for s in doc.stages if s.index == args.stage_index), None)
+        if stage is not None and stage.spawn_kind() != getattr(args, "kind", None):
+            stage = None
+    if stage is None and not brief_order.explicit_declared(declared, flags):
+        return []
+    try:
+        thresholds = Thresholds()
+    except (OSError, UnicodeDecodeError, KeyError, ValueError) as exc:
+        print(f"spawn-specialist: the size thresholds do not read ({type(exc).__name__}); the "
+              "brief is not judged against the size line", file=sys.stderr)
+        return []
+    verdict = brief_order.resolve_size(
+        stage=stage, declared_size=declared, size_flags=flags, thr=thresholds)
+    if not verdict.above:
+        return []
+
+    texts = list(brief_texts)
+    if stage is None and site is not None and getattr(args, "plan", None):
+        try:
+            load_plan(args.plan, strict=False)
+        except PlanError:
+            texts.append(site.text)
+        except OSError:
+            pass
+    headed = {}
+    for text in texts:
+        headed.update(brief_order.headed_sections(text))
+    new_form = stage is not None and stage.place is not None
+    condition_lines: list[str] = []
+    if new_form:
+        how_kept = doc.meta.sub_plan.how_kept if doc.meta.sub_plan is not None else []
+        inherited = None
+        if how_kept:
+            from agentctl.cli_common import inherited_binding_conditions
+
+            state = _spawn_session_state(args)
+            inherited = inherited_binding_conditions(state) if state is not None else None
+        condition_lines = brief_order.binding_condition_lines(
+            stage, how_kept, site_condition_decisions(args), inherited)
+    parts = brief_order.order_parts(headed, stage=stage, condition_lines=condition_lines)
+    violations = brief_order.order_part_violations(parts)
+    if violations:
+        raise ValueError(brief_order.refusal_text(
+            violations, verdict, stage_index=getattr(args, "stage_index", None)))
+    return brief_order.order_section_lines(parts) if new_form else []
 
 
 def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = None) -> list[str]:
@@ -480,6 +571,7 @@ def assemble_prompt(
             )
         plan_body = site.text
     sections += [plan_label, "", plan_body, ""]
+    sections += order_part_section(args, site, [constraints, done_criterion or "", dossier])
     sections += [
         "## Done criterion for this step",
         "",
@@ -1052,6 +1144,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="the engine session whose decisions on binding conditions the plan content prints "
         "the conditions with (a --review-topo reviewer judges a condition as it now stands). "
         "Without it the spawn's --session, else its own contour's session, is read.",
+    )
+
+    def declared_size(value: str) -> int:
+        try:
+            lines = int(value)
+        except ValueError:
+            lines = -1
+        if lines < 0:
+            raise argparse.ArgumentTypeError(f"{value!r} is not a count of hand-written lines (0 or more)")
+        return lines
+
+    def size_flags(value: str) -> list[str]:
+        flags = [f.strip().lower() for f in value.split(",") if f.strip()]
+        unknown = [f for f in flags if f not in brief_order.size_flag_names()]
+        if unknown:
+            raise argparse.ArgumentTypeError(
+                f"{', '.join(unknown)} is not a size flag; the accepted values are "
+                f"{', '.join(brief_order.size_flag_names())} (comma separated)")
+        return flags
+
+    p.add_argument(
+        "--declared-size",
+        type=declared_size,
+        default=None,
+        metavar="<lines>",
+        help="the orderer's declaration of the work's size in hand-written production lines. A "
+        "spawn above the size line (config.md small-change-max-lines and the other signals "
+        "of classify) must carry the five order parts as headed sections ('Place:', 'What is "
+        "missing:', 'Product:', 'Acceptance checks:', 'Binding conditions:') or it is refused. "
+        "Without this flag and --size-flags a spawn that executes no stage is small. Inside a "
+        "stage's own declaration this only raises the class; 0 with no --size-flags lowers "
+        "nothing there.",
+    )
+    p.add_argument(
+        "--size-flags",
+        type=size_flags,
+        default=None,
+        metavar="<flag>[,<flag>...]",
+        help="the non-size signals that make the work substantive on their own, comma separated: "
+        f"{', '.join(brief_order.size_flag_names())}. Judged with --declared-size (absent: zero "
+        "lines) by classify.above_threshold.",
     )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p

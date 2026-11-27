@@ -2770,6 +2770,17 @@ def _linked_norm_conditions(parent_link: dict) -> tuple[dict, ...] | None:
     return tuple({"id": c[0], "text": c[1], "set_by": c[2]} for c in tagged[2])
 
 
+def inherited_binding_conditions(state: SessionState) -> tuple[dict, ...] | None:
+    """The binding conditions of the parent stage the plan `state` runs builds, as {id, text,
+    set_by} rows: from the pushed frame, else from the norm of the child contour's link. None
+    for a session that builds no parent stage, or whose parent stage states none."""
+    if state.plan_stack:
+        return _frame_stage_conditions(state.plan_stack[-1])
+    if state.parent_link:
+        return _linked_norm_conditions(state.parent_link)
+    return None
+
+
 @dataclass(frozen=True)
 class SetterSite:
     """Where the level that set the conditions of a stage keeps its decisions. `owner` is the

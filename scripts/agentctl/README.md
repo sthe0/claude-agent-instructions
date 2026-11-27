@@ -455,6 +455,22 @@ The channel bounds authority by fixing the object (the session) and the verb set
 
 **`LOOP_DETECTED`** is a member of `RETURN_MARKERS` in both `agentctl/dispatch.py` and `lib/planner_plan_check.py` (identical tuples). `cmd_dispatch` routes it exactly like `ESCALATE` — the stage parks `BLOCKED` — with the marker text in `data['loop_detected']`.
 
+### The size line of a spawn and the order part of its brief (`--declared-size`, `--size-flags`)
+
+*Difficulty removed:* a large piece of work was handed to a specialist as a bare instruction, so it never learned the place it serves, what is missing there, the product, the acceptance checks or the conditions that bind it.
+
+`spawn-specialist.py` draws the size line through `classify.above_threshold` / `plan.stage_above_threshold` (`agentctl/brief_order.py`, no constant of its own; the line is `config.md`'s). A brief above it is refused unless it carries five parts, each as a headed section of `--constraints`, `--context-dossier` or `--done-criterion` (or of a plain-brief `--plan`): `Place:`, `What is missing:`, `Product:`, `Acceptance checks:`, `Binding conditions:`. An explicit `Binding conditions: none` is accepted, an absent or blank part is not. The refusal is the `stage-brief-error` refusal (exit 2, also under `--dry-run`; `assembled_prompt` raises `ValueError`) and names the missing parts and the headings to add. All roles are checked alike.
+
+Size sources, in this order of authority (the session source is not built yet):
+
+1. **The executed stage's declaration:** `--stage-index` of a stage whose executor is `spawn:<kind>` for this `--kind`. A new-form stage with no declared size is above the line; an old-form stage never is. The stage supplies place, product (`expected_result_image`), acceptance checks (`done_criterion`) and binding conditions itself (`binding_conditions = []` reads as `none`, the key absent as missing); a part it leaves blank is taken from the brief's headed section. Its prompt then carries `## The order this stage carries`.
+2. **Explicit `--declared-size` / `--size-flags`** (flags: `not cohesive`, `architectural`, `external effect`, `new dependency`, `public api change`, comma-separated). Inside source 1 they can only **raise** the stage's class, never lower it. Outside a stage they decide alone: `--declared-size 0` with no flag is small; any flag classes the work as large on zero lines.
+3. **Nothing declared:** small. The prompt is the one a spawn built before this check, and no threshold or session is read.
+
+Way out of a refusal: add the named sections, or say the work is small with `--declared-size 0` and no flag (which does not lower a stage that declares a larger size). Plan-review spawns carry `--declared-size 0` (`plan-review-topological.py` `build_spawn_argv`), so a review is never refused for lacking an order.
+
+*When a read does not answer:* an unreadable `config.md` (thresholds) fails open with a stderr note and the brief is not judged; an unreadable or absent `--session` state only loses the texts of conditions the plan's `how_kept` inherits (the brief names the condition and how it is kept); a `--condition-session` that does not read stops the spawn with a message naming the session (drop the flag to show the conditions as the plan file writes them), while the spawn's own session that does not read still launches. Pinned by `scripts/tests/test_brief_order_part.py` (mutant `brief_order_part_unchecked`).
+
 ### Norm mismatch: a child's difficulty addressed to its parent stage (`--norm-target parent`, `norm_mismatch`)
 
 *Difficulty removed:* a child session whose work failed because the **parent stage's norm** is wrong (an unreachable criterion, a missing supplier) could only return a bare `REPLAN:` line. The parent had to take the prose on trust or ignore it, and the child's own critique could not close the difficulty, because the norm it names is not the child's to edit.
