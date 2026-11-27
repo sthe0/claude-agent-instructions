@@ -114,6 +114,8 @@ def remove_tree(parent: Path) -> None:
     if not parent.exists():
         return
     telemetry = parent / "sbx" / "home" / ".claude-agent" / "telemetry"
+    if not telemetry.exists():
+        return _remove_once(parent)
     previous = -1.0
     for _ in range(12):
         time.sleep(5)
@@ -121,6 +123,19 @@ def remove_tree(parent: Path) -> None:
         if stamp == previous:
             break
         previous = stamp
+    _remove_once(parent)
+
+
+def _remove_once(parent: Path) -> None:
+    """One removal with a delayed recheck that catches a late flusher write."""
+    subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
+    time.sleep(5)
+    if parent.exists():
+        subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
+        time.sleep(5)
+    if parent.exists():
+        print(f"warning: sandbox tree {parent} still present after removal",
+              file=sys.stderr)
     subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
     time.sleep(5)
     if parent.exists():
