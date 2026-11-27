@@ -28,6 +28,9 @@ TESTS_DIR = SCRIPTS_DIR / "tests"
 CAP_RUN = SCRIPTS_DIR / "cap-run.sh"
 CONTROL = TESTS_DIR / "gate_speedup_control.py"
 
+# A free-space value above the floor, injected so no outcome here reads the machine's real disk.
+ABOVE_FLOOR_GB = control.MIN_FREE_GB + 1.0
+
 CONFTEST = """\
 import _test_report
 
@@ -743,6 +746,7 @@ def _remove_control_dir(path: Path) -> None:
 def test_an_experiment_whose_setup_raises_leaves_no_directory_and_restores_the_environment(small_repo, monkeypatch):
     names = ("CORE_RESULT_STORE", "SUITE_GATE_FLAKY_JOURNAL")
     before = {name: os.environ.get(name) for name in names}
+    monkeypatch.setattr(control, "_free_gb", lambda: ABOVE_FLOOR_GB)
     experiment = control.Experiment(small_repo, "setup-fails")
 
     def failing_commit(*_args, **_kw):
@@ -762,6 +766,7 @@ SIGTERM_RUN = """\
 import sys, time
 sys.path.insert(0, {tests!r})
 import gate_speedup_control as control
+control._free_gb = lambda: {free_gb!r}
 control.exit_on_sigterm()
 from pathlib import Path
 with control.Experiment(Path({repo!r}), "sigterm") as exp:
@@ -772,8 +777,10 @@ with control.Experiment(Path({repo!r}), "sigterm") as exp:
 
 
 def test_a_run_killed_with_sigterm_leaves_no_directory_worktree_or_registration(small_repo):
-    proc = subprocess.Popen([sys.executable, "-c", SIGTERM_RUN.format(tests=str(TESTS_DIR), repo=str(small_repo))],
-                            stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", SIGTERM_RUN.format(tests=str(TESTS_DIR), repo=str(small_repo),
+                                                  free_gb=ABOVE_FLOOR_GB)],
+        stdout=subprocess.PIPE, text=True)
     base = Path(proc.stdout.readline().strip())
     try:
         assert base.is_dir() and str(base / "work") in _worktrees(small_repo)
@@ -791,6 +798,7 @@ SCENARIO_RUN = """\
 import sys, time
 sys.path.insert(0, {tests!r})
 import gate_speedup_control as control
+control._free_gb = lambda: {free_gb!r}
 {hold}
 sys.exit(control.main({argv!r}))
 """
@@ -812,8 +820,10 @@ control.Experiment.prepare = hold"""
 ])
 def test_a_scenario_killed_with_sigterm_leaves_nothing_under_tmp_and_no_worktree(small_repo, tmp_path, command, hold):
     argv = [*command, "--out", str(tmp_path / "out.json"), "-C", str(small_repo)]
-    proc = subprocess.Popen([sys.executable, "-c", SCENARIO_RUN.format(tests=str(TESTS_DIR), hold=hold, argv=argv)],
-                            stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", SCENARIO_RUN.format(tests=str(TESTS_DIR), hold=hold, argv=argv,
+                                                    free_gb=ABOVE_FLOOR_GB)],
+        stdout=subprocess.PIPE, text=True)
     mine = f"cls-control-{proc.pid}-*"
     try:
         deadline = time.monotonic() + 120

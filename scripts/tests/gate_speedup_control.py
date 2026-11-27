@@ -182,6 +182,12 @@ WAIT_TOLERANCE_S = 2.0
 LIMITERS = ("slots", "none")
 
 
+def _free_gb() -> float:
+    """Free space on / in GiB — the one read every floor check goes through, so a test that is
+    not about free disk replaces the value instead of reading the machine's shared disk."""
+    return shutil.disk_usage("/").free / 2**30
+
+
 def _say(line: str) -> None:
     print(line, flush=True)
 
@@ -491,7 +497,7 @@ def gate_env(environ) -> dict[str, str]:
 
 
 def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = None) -> int:
-    free_gb = shutil.disk_usage("/").free / 2**30
+    free_gb = _free_gb()
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
         return 2
@@ -588,7 +594,7 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
     ``probe`` a test asserting that the source work tree reads as empty is planted in the sandbox;
     whether pytest collected it is ``probe_collected``, its outcome ``probe_passed``, and its id is
     not among ``failing``."""
-    free_gb = shutil.disk_usage("/").free / 2**30
+    free_gb = _free_gb()
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
         return 2
@@ -1020,7 +1026,7 @@ def begin_control_run(repo: Path) -> None:
 def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path) -> int:
     """Run one planted-test case through the real gate; 0 every expectation holds, 4 a verdict or
     classification disagrees (or the live journal changed), 1 any other error."""
-    free_gb = shutil.disk_usage("/").free / 2**30
+    free_gb = _free_gb()
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
         return EXIT_VERDICT_ERROR
@@ -1228,7 +1234,7 @@ def disk_series(repo: Path, runs: list[str], keep_max_mb: int, leak: bool, out: 
     directory the inner process bound into it. Exit 0 every run ended as planted, left no kept-store
     growth beyond the bound and left /tmp empty; 3 only a leftover in /tmp; 1 any other mismatch; 2 an
     environment error."""
-    free_gb = shutil.disk_usage("/").free / 2**30
+    free_gb = _free_gb()
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
         return EXIT_SERIES_ENVIRONMENT
@@ -1421,7 +1427,7 @@ def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path,
     ``runs`` limits one launch to the unshuffled run or to the two shuffled ones (each launch must fit
     the caller's own time limit); every run's record is saved beside ``out``, and the verdict comes from
     the launch that finds all three records of this commit, EXIT_PARTIAL from one that does not."""
-    free_gb = shutil.disk_usage("/").free / 2**30
+    free_gb = _free_gb()
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
         return EXIT_ERROR
@@ -1545,7 +1551,7 @@ class Experiment:
         self._worktree = False
 
     def __enter__(self) -> "Experiment":
-        free_gb = shutil.disk_usage("/").free / 2**30
+        free_gb = _free_gb()
         if free_gb < MIN_FREE_GB:
             raise SystemExit(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
         try:

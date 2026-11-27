@@ -210,6 +210,8 @@ def fake_run_tree(tmp_path, *, hermetic=True, staggered=False, bad_outcome=False
 def pair(tmp_path, monkeypatch):
     # shuffle_pair pops the held-slots variable from os.environ; delenv restores it for later tests.
     monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
+    # The floor check reads the injected value, not the machine's real free disk.
+    monkeypatch.setattr(control, "_free_gb", lambda: control.MIN_FREE_GB + 1.0)
     monkeypatch.setattr(control, "_git", lambda repo, *args: "" if args[0] == "status" else "a" * 40)
 
     def run(**fake):
