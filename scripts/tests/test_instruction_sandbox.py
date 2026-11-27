@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -603,6 +604,7 @@ def test_compose_scrub_keeps_caller_overrides_away(tmp_path, fake_home):
 def _load_live():
     spec = importlib.util.spec_from_file_location("isb_live", LIVE)
     module = importlib.util.module_from_spec(spec)
+    sys.modules["isb_live"] = module  # the dataclass needs the module resolvable
     spec.loader.exec_module(module)
     return module
 
@@ -671,16 +673,29 @@ printf '%s\\0' "$@" > "$STUB_LOG.argv"
 { printf '@@LAUNCH@@\\0'; printf '%s\\0' "$@"; } >> "$STUB_LOG.launches"
 printf 'HOME=%s\\nSESSION=%s\\nAGENTCTL=%s\\n' "$HOME" "${CLAUDE_CODE_SESSION_ID:-}" "${AGENTCTL_SAMPLE_VAR:-}" > "$STUB_LOG.env"
 cat > /dev/null
+# The hook seam: the real CLI runs the InstructionsLoaded hook the live script
+# registered in the sandbox settings; the stub plays both parts, appending the
+# same one-JSON-line-per-loaded-file payload the probe observed.
+load_record() {
+  local what="${1:-both}" rec
+  rec="$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s["hooks"]["InstructionsLoaded"][0]["hooks"][0]["command"].partition(">> ")[2])' "$CLAUDE_CONFIG_DIR/settings.json")"
+  [[ "$what" == claude ]] || printf '%s\\n' "{\\"file_path\\":\\"$HOME/.claude-agent/config.md\\",\\"hook_event_name\\":\\"InstructionsLoaded\\",\\"load_reason\\":\\"include\\",\\"parent_file_path\\":\\"$HOME/.claude-agent/CLAUDE.md\\"}" >> "$rec"
+  [[ "$what" == config ]] || printf '%s\\n' "{\\"file_path\\":\\"$HOME/.claude-agent/CLAUDE.md\\",\\"hook_event_name\\":\\"InstructionsLoaded\\",\\"load_reason\\":\\"session_start\\"}" >> "$rec"
+}
+envelope() { printf '%s\\n' "{\\"type\\":\\"result\\",\\"is_error\\":false,\\"result\\":{\\"marker\\":\\"$1\\"}}" ; }
 case "$STUB_MODE" in
   echo) if [[ " $* " == *" stream-json "* ]]; then
           printf '%s\\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"agentctl session is in node=CLASSIFIED"}]}}'
           exit 0
         fi
-        grep -h '^SANDBOX-MARKER: ' "$HOME/.claude-agent/config.md" "$PWD/CLAUDE.md" 2>/dev/null | sed 's/^SANDBOX-MARKER: //'
-        printf 'TOKEN=%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN" > "$STUB_LOG.token" ;;
-  miss) echo "I cannot see any marker" ;;
-  labelled) echo "SANDBOX-MARKER: tok-abc" ;;
-  labelled-wrong) printf '%s\\n' "SANDBOX-MARKER: tok-zzz" "SANDBOX-MARKER:" ;;
+        load_record
+        printf 'TOKEN=%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN" > "$STUB_LOG.token"
+        envelope 'tok-abc' ;;
+  miss) load_record; envelope 'I cannot see any marker' ;;
+  labelled) load_record; envelope 'SANDBOX-MARKER: tok-abc' ;;
+  labelled-wrong) load_record; envelope 'SANDBOX-MARKER: tok-zzz' ;;
+  brokenload) load_record claude; envelope 'tok-abc' ;;
+  norecord) envelope 'tok-abc' ;;
   applied) printf '%s\\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"The file has been updated successfully."}]}}' ;;
   sleep) sleep 30 ;;
   exit7) exit 7 ;;
@@ -734,11 +749,13 @@ def _live(root: Path, env: dict, *extra: str, expect=("tok-abc",)) -> subprocess
 def test_live_exit_0_when_the_reply_carries_every_token(live_root, stub_claude):
     res = _live(live_root, stub_claude("echo"))
     assert res.returncode == 0, res.stdout + res.stderr
-    assert res.stdout.splitlines() == ["found tok-abc"]
+    assert res.stdout.splitlines()[-1] == "verdict PASS"
+    assert "reply tok-abc match" in res.stdout.splitlines()
     assert f"HOME={live_root / 'home'}" in Path(f"{stub_claude.log}.env").read_text()
     assert Path(f"{stub_claude.log}.token").read_text() == "TOKEN=tok-stub\n"
     argv = Path(f"{stub_claude.log}.argv").read_bytes().split(b"\0")
     assert argv[argv.index(b"--tools") + 1] == b""
+    assert argv[argv.index(b"--json-schema") + 1]  # the structured-output contract
 
 
 def test_live_scrubs_caller_session_vars_from_the_launch(live_root, stub_claude):
@@ -749,22 +766,32 @@ def test_live_scrubs_caller_session_vars_from_the_launch(live_root, stub_claude)
     assert "SESSION=\n" in log and "AGENTCTL=\n" in log
 
 
-def test_live_exit_1_names_the_missing_token(live_root, stub_claude):
-    res = _live(live_root, stub_claude("miss"), expect=("tok-abc", "tok-two"))
+def test_live_exit_1_names_the_token_no_loaded_file_carries(live_root, stub_claude):
+    # A load record without the marker file fails whatever the reply says.
+    res = _live(live_root, stub_claude("brokenload"), expect=("tok-abc", "tok-two"))
     assert res.returncode == 1
-    assert res.stdout.splitlines() == ["missing tok-abc", "missing tok-two"]
+    assert "reason marker-missing missing=tok-abc,tok-two" in res.stdout.splitlines()
+    assert "reply tok-abc match" in res.stdout.splitlines()  # the reply matched; it never gates
 
 
-def test_live_reply_repeating_the_marker_label_before_the_right_token_is_found(live_root, stub_claude):
+def test_live_completed_session_without_a_load_record_is_load_record_missing(live_root, stub_claude):
+    res = _live(live_root, stub_claude("norecord"))
+    assert res.returncode == 1
+    assert any(line.startswith("reason load-record-missing") for line in res.stdout.splitlines())
+
+
+def test_live_reply_repeating_the_marker_label_is_a_wrapped_diagnostic(live_root, stub_claude):
     res = _live(live_root, stub_claude("labelled"))
     assert res.returncode == 0, res.stdout + res.stderr
-    assert res.stdout.splitlines() == ["found tok-abc"]
+    assert res.stdout.splitlines()[-1] == "verdict PASS"
+    assert "reply tok-abc wrapped" in res.stdout.splitlines()
 
 
-def test_live_reply_repeating_the_marker_label_before_another_token_is_missing(live_root, stub_claude):
+def test_live_reply_without_the_token_is_a_diagnostic_not_a_verdict(live_root, stub_claude):
     res = _live(live_root, stub_claude("labelled-wrong"))
-    assert res.returncode == 1
-    assert res.stdout.splitlines() == ["missing tok-abc"]
+    assert res.returncode == 0
+    assert res.stdout.splitlines()[-1] == "verdict PASS"
+    assert "reply tok-abc no-token" in res.stdout.splitlines()
 
 
 def test_live_timeout_is_unavailable_not_missing(live_root, stub_claude):
@@ -877,12 +904,16 @@ def test_verify_passes_every_check_on_the_unmodified_candidate(verify_root, veri
     }
 
 
-def test_verify_maps_a_completed_launch_without_the_marker_to_fail(verify_root, verify_world):
+def test_verify_maps_a_loaded_record_without_the_marker_file_to_fail(verify_root, verify_world):
     _, env = verify_world
-    res, checks = _verify(verify_root, env, mode="miss")
+    res, checks = _verify(verify_root, env, mode="brokenload")
     assert res.returncode == 1
     status, detail = checks["live:core-marker"]
-    assert status == "FAIL" and detail.startswith("marker-missing isb-core-")
+    assert status == "FAIL" and detail.startswith("marker-missing reply=")
+    # The check keeps its evidence: the loaded record and the redacted reply.
+    run = json.loads((verify_root / "live-marker-run.json").read_text())
+    assert run["verdict"] == "FAIL" and run["reason_code"] == "marker-missing"
+    assert run["load_record"] and run["reply_excerpt"]
 
 
 def test_verify_maps_timeout_and_launch_exit_to_unavailable(verify_root, verify_world):

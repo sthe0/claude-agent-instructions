@@ -534,9 +534,11 @@ def test_run_smoke_runs_and_records_the_default_model_when_none_is_chosen(world,
 
 def test_the_gate_default_model_is_the_live_scripts_default_and_haiku():
     import importlib.util
+    import sys
     spec = importlib.util.spec_from_file_location(
         "isb_live", Path(__file__).resolve().parents[1] / "instruction-sandbox-live.py")
     live = importlib.util.module_from_spec(spec)
+    sys.modules["isb_live"] = live
     spec.loader.exec_module(live)
     assert gate.DEFAULT_MODEL == live.DEFAULT_MODEL == "haiku"
 

@@ -26,6 +26,8 @@ TOOL_LIST_FLAGS = ("--tools",)
 def _load_live_script():
     spec = importlib.util.spec_from_file_location("instruction_sandbox_live", LIVE_SCRIPT)
     module = importlib.util.module_from_spec(spec)
+    import sys
+    sys.modules["instruction_sandbox_live"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -98,7 +100,7 @@ def _probe(live, monkeypatch, tmp_path, stream: str, edit_file: bool) -> tuple[s
     def fake_launch(argv, env, cwd, timeout, prompt=""):
         if edit_file:
             _prompt_target(prompt).write_text("changed\n")
-        return "ok", stream
+        return "ok", stream, 0
 
     monkeypatch.setattr(live, "run_launch", fake_launch)
     return live.run_hook_probe("haiku", {}, root, 5)
@@ -185,7 +187,7 @@ def test_live_hook_probe_target_is_a_real_file_in_a_removed_private_dir(monkeypa
         path = _prompt_target(prompt)
         seen["is_symlink"] = path.is_symlink()
         seen["parent"] = path.parent.parent
-        return "ok", DENY_EVENT
+        return "ok", DENY_EVENT, 0
 
     monkeypatch.setattr(live, "run_launch", fake_launch)
     live.run_hook_probe("haiku", {}, root, 5)
@@ -201,7 +203,7 @@ def test_live_hook_probe_unavailable_when_probe_dir_cannot_be_created(monkeypatc
     (root / "home").mkdir(parents=True)
     monkeypatch.setattr(live, "PROBE_DIR_PARENT", str(tmp_path / "missing" / "parent"))
     launched = []
-    monkeypatch.setattr(live, "run_launch", lambda *a, **k: launched.append(1) or ("ok", DENY_EVENT))
+    monkeypatch.setattr(live, "run_launch", lambda *a, **k: launched.append(1) or ("ok", DENY_EVENT, 0))
 
     kind, detail = live.run_hook_probe("haiku", {}, root, 5)
 
@@ -217,7 +219,7 @@ def test_live_hook_probe_unavailable_when_the_gate_exempts_the_probe_dir(monkeyp
     (root / "home").mkdir(parents=True)
     monkeypatch.setattr(live, "PROBE_DIR_PARENT", str(tmp_path))
     launched = []
-    monkeypatch.setattr(live, "run_launch", lambda *a, **k: launched.append(1) or ("ok", APPLIED_EVENT))
+    monkeypatch.setattr(live, "run_launch", lambda *a, **k: launched.append(1) or ("ok", APPLIED_EVENT, 0))
 
     kind, detail = live.run_hook_probe("haiku", {"TMPDIR": str(tmp_path)}, root, 5)
 
@@ -231,7 +233,7 @@ def _exempt_probe_report(live, monkeypatch, tmp_path, env):
     root = tmp_path / "root"
     (root / "home").mkdir(parents=True)
     monkeypatch.setattr(live, "PROBE_DIR_PARENT", str(tmp_path))
-    monkeypatch.setattr(live, "run_launch", lambda *a, **k: ("ok", APPLIED_EVENT))
+    monkeypatch.setattr(live, "run_launch", lambda *a, **k: ("ok", APPLIED_EVENT, 0))
     return live.run_hook_probe("haiku", env, root, 5)
 
 
@@ -304,7 +306,7 @@ def test_hook_probe_launch_drops_the_recursion_depth_but_marker_launch_keeps_it(
 
     def fake_launch(argv, env, cwd, timeout, prompt=""):
         seen["depth"] = env.get("AGENT_RECURSION_DEPTH")
-        return "ok", DENY_EVENT
+        return "ok", DENY_EVENT, 0
 
     monkeypatch.setattr(live, "run_launch", fake_launch)
 

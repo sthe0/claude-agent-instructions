@@ -10,22 +10,28 @@
 #   static:lint-prose-length  static:verify-layout-contract
 #   static:verify-instructions-sync  static:lint-hooks-executable
 #   project:structure         only when the sandbox composed a project
-#   live:core-marker          a tool-less launch must echo a marker that is reachable
-#                             only through CLAUDE.md's @~/.claude-agent/config.md import
+#   live:core-marker          a tool-less launch's LOADED instructions must carry the
+#                             marker, reachable only through CLAUDE.md's
+#                             @~/.claude-agent/config.md import; the verdict is the
+#                             CLI's own InstructionsLoaded load record, and the
+#                             structured reply is a recorded diagnostic, never gating
 #   live:hook-gate-deny       a launch with the Edit tool must be refused by the state
 #                             gate's PreToolUse hook, leaving the probe file unchanged
 #   live:project-marker       only with a project; cwd inside the composed project
 #   canon:unchanged           canon snapshot before vs after the whole run
 # and a final `RESULT: PASS|FAIL|UNAVAILABLE`. A live launch that did not complete
-# (auth, timeout, launch error) is UNAVAILABLE, never FAIL: only a completed launch
-# whose reply lacks the marker is `FAIL marker-missing`. Every check runs even after
-# an earlier FAIL.
+# (auth, timeout, launch error) is UNAVAILABLE, never FAIL: a FAIL is decided only
+# by the load record (`marker-missing`: files loaded, none carries the marker) or
+# by a completed session that left no load record (`load-record-missing`) — the
+# reply never gates. Every check runs even after an earlier FAIL.
 # Exit: 0 PASS, 1 FAIL, 3 UNAVAILABLE, 2 usage.
 #
 # The static checks are the sandbox clone's own copies, run under the sandbox
 # environment; the live checks and the canon snapshot are this checkout's tools.
-# Writes: only the markers appended to <root>/core/config.md and, with a project,
-# <root>/project/CLAUDE.md (a previous run's markers are replaced).
+# Writes: the markers appended to <root>/core/config.md and, with a project,
+# <root>/project/CLAUDE.md (a previous run's markers are replaced), plus the
+# live probe's own evidence under the throwaway root: the InstructionsLoaded
+# load record and the per-run verdict JSON the live script writes.
 set -euo pipefail
 
 usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -131,15 +137,19 @@ write_marker() {
 }
 
 live_check() {
-  local name="$1" cwd="$2" out rc=0 missing reason; shift 2
+  local name="$1" cwd="$2" out rc=0 reason excerpt; shift 2
   local expect=()
   for t in "$@"; do expect+=(--expect "$t"); done
   out="$(python3 "$here/instruction-sandbox-live.py" --root "$root" --cwd "$cwd" \
            ${timeout_args[@]+"${timeout_args[@]}"} ${model_args[@]+"${model_args[@]}"} "${expect[@]}" 2>/dev/null)" || rc=$?
   case "$rc" in
     0) report PASS "live:$name" ;;
-    1) missing="$(sed -n 's/^missing //p' <<< "$out" | tr '\n' ' ')"
-       report FAIL "live:$name" "marker-missing ${missing% }" ;;
+    1) reason="$(sed -n 's/^reason //p' <<< "$out" | head -n 1)"
+       reason="${reason%% *}"
+       excerpt="$(sed -n 's/^reply_excerpt //p' <<< "$out" | head -n 1)"
+       # The detail's first word is the reason code the smoke record keys on;
+       # which tokens were missing stays in the run record the live script wrote.
+       report FAIL "live:$name" "${reason:-marker-missing} reply=${excerpt:0:120}" ;;
     3) reason="$(sed -n 's/^UNAVAILABLE //p' <<< "$out" | head -n 1)"
        report UNAVAILABLE "live:$name" "${reason:-unknown}" ;;
     *) report UNAVAILABLE "live:$name" "live-script-exit=$rc" ;;
