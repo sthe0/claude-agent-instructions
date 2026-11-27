@@ -91,12 +91,15 @@ def write_marker(file: Path, token: str) -> None:
 def remove_tree(parent: Path) -> None:
     """Remove a throwaway sandbox tree. The sandboxed CLI session flushes
     telemetry into its HOME after its launch returns; that late write races a
-    single rm -rf (ENOTEMPTY), so the removal retries until the tree is gone."""
-    for attempt in range(4):
+    single rm -rf (ENOTEMPTY), so the removal retries until the tree is gone
+    and reports a residual (never raises: callers' finally blocks stay quiet)."""
+    for _ in range(10):
         subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
         if not parent.exists():
             return
-        time.sleep(0.5 * (attempt + 1))
+        time.sleep(2)
+    print(f"warning: sandbox tree {parent} still present after removal attempts",
+          file=sys.stderr)
 
 
 # ── probe mode ─────────────────────────────────────────────────────────────
