@@ -11,7 +11,10 @@
 # --own-tasks N bounds the run's own process tree instead: the supervisor re-sets the
 # tree's soft RLIMIT_NPROC to (other tasks) + N + 128 every 0.5 s, so other sessions'
 # later growth cannot consume the run's headroom, and kills the tree past N + 128.
-# Away from Linux, or without resource.prlimit, the count-based cap stays.
+# A daemonized child that re-parents to init leaves the tree and so escapes this mode's
+# bound (the count-based cap bounded such daemons machine-wide) — accepted: the budget
+# is for the run's own tree. Away from Linux, or without resource.prlimit, the
+# count-based cap stays.
 # See memory-global/leaves/fanout-trial-under-cap.md.
 set -u
 
@@ -44,8 +47,6 @@ done
 is_uint "$extra" || usage
 is_uint "$secs" || usage
 [ -z "$own" ] || { is_uint "$own" || usage; [ "$own" -gt 0 ] || usage; }
-
-uid=$(id -u)
 
 # --own-tasks bounds the started tree itself, so the count-based cap below is not set:
 # a per-tree soft limit raised as others grow is the cap (a nested call clamps through

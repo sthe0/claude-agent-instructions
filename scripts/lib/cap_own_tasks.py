@@ -14,9 +14,10 @@ RLIMIT_NPROC is checked at fork/clone against the real UID's whole task count, u
 forking process's own soft limit (kernel 5.4 counts per real UID; see
 memory-global/leaves/fanout-trial-under-cap.md), so raising that soft limit as others grow
 keeps the tree's own headroom constant. The supervisor never raises a hard limit, never a
-soft limit already in force above it (a nested cap-run's bound is honored through the
-supervisor's own inherited soft limit, re-read every tick), and touches only PIDs in the
-tree it started.
+soft limit already in force above it, and touches only PIDs in the tree it started. A
+nested --own-tasks cap-run found in the tree is left to bound its own subtree: re-setting
+those PIDs from above would raise the very bound the nested supervisor keeps tightening.
+The nested subtree still counts toward this supervisor's own kill decision.
 
 The soft limit is only re-derived every PERIOD_S: other tasks EXITTING within one tick
 transiently widen the tree's bound by that drop until the next tick re-tightens it (the
@@ -133,6 +134,26 @@ def own_tasks() -> int:
     return int(fields[17]) if fields and len(fields) >= 18 else 1
 
 
+def _is_own_tasks_supervisor(pid: int) -> bool:
+    """True when pid runs this module: a nested --own-tasks cap that bounds its subtree."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return b"cap_own_tasks.py" in fh.read()
+    except OSError:
+        return False
+
+
+def delegated_pids(tree: set[int], procs: dict[int, tuple[int, int]]) -> set[int]:
+    """Tree pids a nested own-tasks supervisor bounds itself; their soft limit must not
+    be re-set from here, or the outer tick would raise the inner bound between the
+    inner supervisor's own re-sets."""
+    delegated: set[int] = set()
+    for pid in tree:
+        if pid in procs and _is_own_tasks_supervisor(pid):
+            delegated |= tree_pids(pid, procs)
+    return delegated
+
+
 def _as_exit_code(returncode: int) -> int:
     """A child killed by a signal reports 128 + signal, not a negative number."""
     return 128 - returncode if returncode < 0 else returncode
@@ -153,12 +174,15 @@ def supervise(child: subprocess.Popen, budget: int) -> int:
         target = others + budget + SLACK
         if soft != resource.RLIM_INFINITY:
             target = min(target, soft)
-        for pid in tree:
+        for pid in tree - delegated_pids(tree, procs):
             set_soft(pid, target)
         if tree_tasks > budget + SLACK:
             print(f"cap-run.sh: own-tasks {budget}: the tree reached {tree_tasks} tasks "
                   f"(budget + slack {budget + SLACK}); killing the tree", file=sys.stderr, flush=True)
-            for pid in tree:
+            # Re-derive the tree at kill time: a PID from the stale scan may have exited
+            # and been reused by an unrelated process between the scan and this kill.
+            procs_now, _ = scan_procs()
+            for pid in tree_pids(child.pid, procs_now):
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
@@ -205,7 +229,12 @@ def main() -> int:
 
     target = initial_soft(budget)
     env = dict(os.environ)
+    # CAP_RUN_NPROC is the start snapshot; the supervisor keeps moving the soft limit
+    # after it. CAP_RUN_OWN_TASKS marks a run capped in --own-tasks mode so a consumer
+    # keying on "my soft limit equals CAP_RUN_NPROC" (the count-mode contract) still
+    # knows it is capped when the two no longer match.
     env["CAP_RUN_NPROC"] = str(target)
+    env["CAP_RUN_OWN_TASKS"] = str(budget)
 
     def child_limits() -> None:
         # target is already clamped to the supervisor's own soft limit, which cannot

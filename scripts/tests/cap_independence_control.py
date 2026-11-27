@@ -39,6 +39,9 @@ import time
 
 OVERSHOOT = 128        # cap-run.sh --own-tasks documents this slack over the budget
 PERIOD_S = 0.5         # the --own-tasks supervisor's tick, allowed to by the norm
+# OVERSHOOT and PERIOD_S mirror cap_own_tasks.SLACK and PERIOD_S; the templates below
+# mirror test_cap_run_own_tasks.py's. Drift in either changes the legs' numbers: keep
+# them in step when the supervisor's contract changes.
 PYTEST_TIMEOUT_S = 120
 SPAWN_TIMEOUT_S = 120
 PROBE_TARGET = 4000

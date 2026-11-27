@@ -1113,9 +1113,14 @@ MUTANT_WORKERS = 6  # each worker is one scratch copy and one serial pytest chil
 
 
 def mutant_workers(environ, soft_nproc_limit: int) -> int:
-    """Six workers only under ``scripts/cap-run.sh``: it exports its cap as ``CAP_RUN_NPROC``, and
-    the process's own RLIMIT_NPROC must equal it, so a stray or inherited variable does not count."""
-    capped = environ.get("CAP_RUN_NPROC") == str(soft_nproc_limit)
+    """Six workers only under ``scripts/cap-run.sh``: in count mode it exports its cap as
+    ``CAP_RUN_NPROC`` and the process's own RLIMIT_NPROC must equal it, so a stray or
+    inherited variable does not count. In --own-tasks mode the supervisor keeps moving
+    the soft limit after that snapshot, so equality stops holding under exactly the
+    co-tenant churn the mode exists for; ``CAP_RUN_OWN_TASKS`` marks it instead (an
+    inherited value still means a cap-run wraps this process)."""
+    capped = (environ.get("CAP_RUN_OWN_TASKS", "").isdigit()
+              or environ.get("CAP_RUN_NPROC") == str(soft_nproc_limit))
     return min(MUTANT_WORKERS, os.cpu_count() or 1) if capped else 1
 
 
@@ -1123,6 +1128,9 @@ def test_mutant_workers_fan_out_only_under_a_matching_cap():
     assert mutant_workers({}, 5000) == 1
     assert mutant_workers({"CAP_RUN_NPROC": "4000"}, 5000) == 1
     assert mutant_workers({"CAP_RUN_NPROC": "5000"}, 5000) == min(MUTANT_WORKERS, os.cpu_count() or 1)
+    assert mutant_workers({"CAP_RUN_OWN_TASKS": "512", "CAP_RUN_NPROC": "4000"}, 5000) \
+        == min(MUTANT_WORKERS, os.cpu_count() or 1)
+    assert mutant_workers({"CAP_RUN_OWN_TASKS": ""}, 5000) == 1
 
 
 def test_cap_run_exports_the_cap_it_set(tmp_path):

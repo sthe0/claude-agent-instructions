@@ -177,16 +177,22 @@ def test_default_contract_unchanged():
     child sees it as its own soft RLIMIT_NPROC, and the hard limit is not touched."""
     with _process_tests_lock():
         hard_before = resource.getrlimit(resource.RLIMIT_NPROC)[1]
-        live = _user_tasks()
+        # One probe reads the live count and the cap at the same moment, so the window
+        # between cap-run's own count and the check is milliseconds, not a second ps run.
         probe = (
-            "import os, resource; "
-            "print(resource.getrlimit(resource.RLIMIT_NPROC)[0], os.environ['CAP_RUN_NPROC'])")
+            "import os, resource, subprocess; "
+            "live = sum(int(x) for x in subprocess.run("
+            "['ps', '-u', str(os.getuid()), '-o', 'nlwp='], capture_output=True, text=True"
+            ").stdout.split()); "
+            "print(resource.getrlimit(resource.RLIMIT_NPROC)[0], os.environ['CAP_RUN_NPROC'], live)")
         done = subprocess.run(
             [str(CAP_RUN), "--extra-tasks", "512", "--",
              sys.executable, "-c", probe],
             capture_output=True, text=True, timeout=60, check=True)
-        soft_seen, cap_run_nproc = (int(v) for v in done.stdout.split())
+        soft_seen, cap_run_nproc, live = (int(v) for v in done.stdout.split())
         assert soft_seen == cap_run_nproc, "CAP_RUN_NPROC and the child's soft limit disagree"
+        # The 64-task slack is other workers' churn in the milliseconds between
+        # cap-run's count and the probe's own.
         assert live <= cap_run_nproc <= live + 512 + 64, (
             f"cap {cap_run_nproc} is not the live task count {live} plus the 512 headroom")
         assert resource.getrlimit(resource.RLIMIT_NPROC)[1] == hard_before, "hard limit moved"
@@ -224,6 +230,69 @@ def test_cap_thread_errors_unavailable_naming_cap():
     exit_zero = gate.SuiteRun(pytest_exit=0, log_tail=log, sandbox_core_sha="sha")
     assert gate.classify(exit_zero, "sha") == ((), "")
     assert gate.derive_status(*gate.classify(exit_zero, "sha")) == gate.PASS
+
+
+def test_own_tasks_mode_exports_its_own_cap_marker():
+    """--own-tasks mode exports CAP_RUN_OWN_TASKS so a consumer keying on "my soft limit
+    equals CAP_RUN_NPROC" (the count-mode contract) still knows it runs capped once the
+    supervisor has moved the soft limit past that snapshot."""
+    probe = ("import os, resource; print(os.environ.get('CAP_RUN_OWN_TASKS', ''), "
+             "os.environ.get('CAP_RUN_NPROC', ''), "
+             "resource.getrlimit(resource.RLIMIT_NPROC)[0])")
+    done = subprocess.run(
+        [str(CAP_RUN), "--own-tasks", "512", "--timeout", "60", "--",
+         sys.executable, "-c", probe],
+        capture_output=True, text=True, timeout=60, check=True)
+    own_var, nproc_var, soft = done.stdout.split()
+    assert own_var == "512", "the own-tasks budget is not exported as CAP_RUN_OWN_TASKS"
+    # The snapshot is the starting soft limit, but the supervisor re-sets the soft from
+    # its first tick on, so by probe time machine churn may have moved it a little;
+    # that movement is exactly why this mode exports its own marker.
+    assert abs(int(nproc_var) - int(soft)) <= 64, (
+        f"CAP_RUN_NPROC {nproc_var} is not around the soft limit {soft} the child sees")
+
+    plain = subprocess.run(
+        [str(CAP_RUN), "--extra-tasks", "512", "--",
+         sys.executable, "-c", "import os; print(os.environ.get('CAP_RUN_OWN_TASKS', ''))"],
+        capture_output=True, text=True, timeout=60, check=True)
+    assert plain.stdout.strip() == "", "count mode must not export CAP_RUN_OWN_TASKS"
+
+
+def test_nested_own_tasks_bound_is_not_raised_from_above(tmp_path):
+    """An outer --own-tasks supervisor must not re-set the soft limit of a nested
+    --own-tasks cap's subtree: between the outer's raise and the inner's next re-set,
+    the inner bound would not be in force. The inner subtree's soft limit moves only
+    as the inner cap moves it."""
+    with _process_tests_lock():
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            "import resource, time\n"
+            "def soft():\n"
+            "    return resource.getrlimit(resource.RLIMIT_NPROC)[0]\n"
+            "before = soft()\n"
+            "time.sleep(1.5)  # three outer supervisor ticks\n"
+            "print(before, soft())\n", encoding="utf-8")
+        argv = [str(CAP_RUN), "--own-tasks", "4096", "--timeout", "120", "--",
+                str(CAP_RUN), "--own-tasks", str(BUDGET), "--timeout", "120", "--",
+                sys.executable, str(probe)]
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=180)
+        assert done.returncode == 0, f"nested cap-run failed: rc={done.returncode}\n{done.stderr[-500:]}"
+        before, after = (int(v) for v in done.stdout.split())
+        # The inner supervisor may itself re-tighten or track machine churn; what must
+        # never happen is a jump toward the outer's bound (others + 4096 + 128, some
+        # 4096 above the inner's). The allowance is churn, not the outer's budget.
+        assert after <= before + 256, (
+            f"the outer raised the nested bound from {before} to {after}")
+
+
+def test_delegated_pids_covers_the_nested_supervisors_subtree(monkeypatch):
+    """delegated_pids finds the whole subtree of every nested own-tasks supervisor in
+    the tree: those pids' bounds belong to the inner supervisor, not this one."""
+    from lib import cap_own_tasks
+    procs = {100: (1, 1), 200: (100, 1), 300: (200, 1), 400: (100, 1)}
+    monkeypatch.setattr(cap_own_tasks, "_is_own_tasks_supervisor", lambda pid: pid == 200)
+    tree = cap_own_tasks.tree_pids(100, procs)
+    assert cap_own_tasks.delegated_pids(tree, procs) == {200, 300}
 
 
 def test_pytest_argv_emits_own_tasks_headroom(tmp_path):

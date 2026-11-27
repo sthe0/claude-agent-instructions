@@ -297,9 +297,9 @@ def _detail(run: SuiteRun) -> str:
 
 
 THREAD_ERROR_MARKERS = (
-    "can't start new thread",       # Python's RuntimeError when fork/clone hits RLIMIT_NPROC
+    "can't start new thread",        # Python's RuntimeError when fork/clone hits RLIMIT_NPROC
     "thread constructor failed",     # the C++ runtime's message for the same refusal (pytest -6)
-    "pthread_create failed",        # glibc's own wording of the same EAGAIN
+    "pthread_create failed",         # glibc's own wording of the same EAGAIN
 )
 
 
