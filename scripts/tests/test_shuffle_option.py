@@ -273,6 +273,7 @@ def test_a_usage_error_is_exit_3_not_2(argv):
 
 def launch(tmp_path, monkeypatch, runs, *, sha="a" * 40, seen=None):
     monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
+    monkeypatch.setattr(control, "_free_gb", lambda: control.MIN_FREE_GB + 1.0)
     monkeypatch.setattr(control, "_git", lambda repo, *args: "" if args[0] == "status" else sha)
     monkeypatch.setattr(gate, "run_tree", fake_run_tree(tmp_path, seen=seen))
     return control.main(["shuffle-pair", "--seeds", "1,2", "--out", str(tmp_path / "pair.json"), "--runs", runs,
