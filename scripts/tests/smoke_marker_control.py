@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tempfile
 from pathlib import Path
 
@@ -87,6 +88,17 @@ def write_marker(file: Path, token: str) -> None:
     file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def remove_tree(parent: Path) -> None:
+    """Remove a throwaway sandbox tree. The sandboxed CLI session flushes
+    telemetry into its HOME after its launch returns; that late write races a
+    single rm -rf (ENOTEMPTY), so the removal retries until the tree is gone."""
+    for attempt in range(4):
+        subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
+        if not parent.exists():
+            return
+        time.sleep(0.5 * (attempt + 1))
+
+
 # ── probe mode ─────────────────────────────────────────────────────────────
 
 def probe(out_path: Path, model: str) -> int:
@@ -113,7 +125,7 @@ def probe(out_path: Path, model: str) -> int:
     except Exception as exc:  # probe only: raw evidence, never retried
         evidence["probe_error"] = f"{type(exc).__name__}: {exc}"
     finally:
-        subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
+        remove_tree(parent)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print(f"probe evidence written to {out_path}")
@@ -168,7 +180,7 @@ def one_run(sha: str, model: str, broken: bool) -> dict:
                          "reply_match", "reply_excerpt")})
         return run
     finally:
-        subprocess.run(["rm", "-rf", "--", str(parent)], check=False)
+        remove_tree(parent)
 
 
 def control(runs: int, broken_runs: int, out_path: Path, model: str) -> int:
