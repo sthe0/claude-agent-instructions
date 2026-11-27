@@ -41,7 +41,10 @@ def _disk_usage(path):
         try:
             # Monotonic across processes: a concurrent child writing the same/larger value
             # loses the recompare loop, so the file can only move down.
-            current = MIN_FILE.read_text(encoding="utf-8").strip()
+            try:
+                current = MIN_FILE.read_text(encoding="utf-8").strip()
+            except FileNotFoundError:
+                current = ""
             if not current or free < int(current):
                 MIN_FILE.write_text(f"{free}\n", encoding="utf-8")
                 after = MIN_FILE.read_text(encoding="utf-8").strip()
