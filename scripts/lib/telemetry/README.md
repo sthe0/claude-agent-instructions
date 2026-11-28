@@ -99,6 +99,18 @@ writers, `hook_telemetry` and `judge_ledger`, import `live` guarded (a failed im
 their event emission off and leaves their own ledger line as it was) and evaluate every
 emit argument inside their `try`.
 
+**What `max_lock_hold_ms` measures.** The in-transaction work only: each BEGIN IMMEDIATE
+is timed from the moment it returns to its COMMIT or ROLLBACK, so the load-dependent wait
+a queued BEGIN spends on another writer's lock stays outside the number, and the 5000 ms
+acceptance bound (`store.max_lock_hold_ms` per sync window, reset at each sync's start,
+reported on its `sync.end`) judges the work a sync does inside the lock, never the queue
+before it. The in-transaction cost the bound is held against is itself bounded: every
+writable connection sets `PRAGMA wal_autocheckpoint` to
+`store.WAL_AUTOCHECKPOINT_PAGES` (200 pages, ~800 KiB at 4 KiB pages) instead of SQLite's
+default 1000, so a COMMIT's checkpoint pass — on the live record the dominant inner cost
+of a sync (fsync of a multi-MiB pass on the 6.2 GB record, amplified by a near-full disk)
+— cannot stretch a hold past the bound by size alone.
+
 **Export, merge and round trip** (`portability.py`). `telemetry.py export --out F [--with-text]`
 writes a gzip JSON-lines file, created 0600, from the record opened read-only: a header (origin,
 `taken_at`, every enumeration table's version, the fixture revision, per-table counts), then one

@@ -965,7 +965,11 @@ def _commit_due(stem: str, inserted: int, begun: datetime, session: "str | None"
 def _write_sync_end(begun: datetime, kind: str, **counts) -> None:
     """The sync's last act: one sync.end row carrying the trigger start it answers and the longest
     write transaction this sync held (store.reset_lock_hold() at its start), measured before this
-    row's own write."""
+    row's own write. The hold names this sync's own in-transaction work only: each BEGIN IMMEDIATE
+    is timed from the moment it returns, so the wait a queued BEGIN spends on another writer's lock
+    stays outside it. The acceptance bound (5000 ms) judges that work, and
+    store.WAL_AUTOCHECKPOINT_PAGES bounds a COMMIT's checkpoint pass — on the live record the
+    dominant such work — so it cannot stretch a hold past the bound by size alone."""
     fields = {"kind": kind, "trigger_start": _iso(begun), "max_lock_hold_ms": store.max_lock_hold_ms(), **counts}
     _write_own(SYNC_END, fields)
 

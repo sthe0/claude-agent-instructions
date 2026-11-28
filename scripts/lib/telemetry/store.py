@@ -65,6 +65,15 @@ MERGE_BUSY_MS = 2 ** 31 - 1
 # Rows per merge transaction: a merge into the live record releases the write lock between
 # chunks, so hook writers on the command-path deadline get it, and the WAL stays bounded.
 MERGE_CHUNK_ROWS = 50_000
+# Once the WAL holds this many pages, a COMMIT runs the checkpoint pass inside the transaction.
+# SQLite's default (1000 pages) made that pass the dominant in-transaction cost of a sync on the
+# live record (2026-11-27 diagnosis: isolated 5.5-6.6 s holds, max 18265.184 ms, no committed-row
+# scaling, on the 6.2 GB record with FTS5 and 16 secondary indexes — the fsync of a ~4 MiB pass,
+# amplified by the near-full disk). 200 pages bounds a pass to ~800 KiB at 4 KiB pages, keeping
+# the longest hold inside the 5000 ms acceptance bound; the hold itself stays defined by _begin
+# and _commit (BEGIN IMMEDIATE's return to COMMIT), so a queued BEGIN's wait on the writer
+# lock stays outside it.
+WAL_AUTOCHECKPOINT_PAGES = 200
 
 _clock = time.monotonic
 _sleep = time.sleep
@@ -281,6 +290,7 @@ def _connect_writable(record: Path, deadline: _Deadline) -> sqlite3.Connection:
     try:
         _set_busy(conn, deadline.busy_ms())
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA wal_autocheckpoint={WAL_AUTOCHECKPOINT_PAGES}")
         conn.execute("PRAGMA synchronous=NORMAL")
         _bootstrap(conn, record, deadline)
     except BaseException:

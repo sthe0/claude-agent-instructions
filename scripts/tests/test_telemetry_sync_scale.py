@@ -23,6 +23,13 @@ succeed while the read runs. A waiting session is passed over while its mark is 
 sync ends with a sync.end row carrying the longest write transaction; a spool still deferred when
 the budget runs out is retried by one detached process per stem. The retry tests inject the clock
 and the sleep, so none asserts a wall-clock duration.
+
+Since PR 11 the hold's own semantics are under test: a sync whose BEGIN IMMEDIATE waited on
+a second writer reports a max_lock_hold_ms that excludes that wait (store._begin reads the
+clock after BEGIN returns), and every writable connection bounds the checkpoint pass a COMMIT
+runs inside the transaction (store.WAL_AUTOCHECKPOINT_PAGES, not SQLite's default 1000 pages —
+on the live record that pass was the dominant in-transaction cost of a sync). The wait is
+simulated on the fake clock, so still none asserts a wall-clock duration.
 """
 from __future__ import annotations
 
@@ -447,6 +454,60 @@ def test_sync_end_hold_is_this_syncs_not_an_earlier_syncs_in_the_same_process(li
 
     first, second = (e["fields"]["max_lock_hold_ms"] for e in _own(sync.SYNC_END))
     assert first == 7000.0 and second < first, (first, second)
+
+
+def test_sync_end_max_lock_hold_excludes_the_wait_on_the_writer_lock(live_env, monkeypatch):
+    """A queued BEGIN spends its busy wait inside sqlite3, before BEGIN IMMEDIATE returns;
+    store._begin reads the clock only after that return, so a sync that waited on a second
+    writer reports the wait outside its max_lock_hold_ms. The wait is simulated on the fake
+    clock inside the BEGIN statement itself, where SQLite's busy handler lives: a sync whose
+    every transaction waited reports no in-transaction work at all."""
+    clock = [0.0]
+
+    class SecondWriterAhead:
+        """Every connection whose BEGIN IMMEDIATE waits 4 s on the fake clock, as it would
+        while a second writer holds the write lock."""
+
+        def __init__(self, conn):
+            object.__setattr__(self, "_conn", conn)
+
+        def __getattr__(self, name):
+            return getattr(object.__getattribute__(self, "_conn"), name)
+
+        def __setattr__(self, name, value):
+            setattr(object.__getattribute__(self, "_conn"), name, value)
+
+        def execute(self, sql, *args):
+            if sql.strip().upper().startswith("BEGIN"):
+                clock[0] += 4.0
+            return object.__getattribute__(self, "_conn").execute(sql, *args)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_hold_clock", lambda: clock[0])
+        patch.setattr(store, "_hold", {"began": None, "max_ms": 0.0})
+        real_connect = sqlite3.connect
+        patch.setattr(sqlite3, "connect",
+                      lambda *a, **k: SecondWriterAhead(real_connect(*a, **k)))
+        _emit("s-waited")
+        sync.run("s-waited")
+
+    [end] = _own(sync.SYNC_END)
+    assert end["fields"]["max_lock_hold_ms"] == 0.0
+
+
+def test_writable_connections_bound_the_checkpoint_pass():
+    """Every writable connection (the command path, the merge, a scratch record) opens
+    through store._connect_writable, which bounds a COMMIT's checkpoint pass to
+    WAL_AUTOCHECKPOINT_PAGES instead of SQLite's default 1000 pages. On the live record
+    that pass was the dominant in-transaction cost of a sync (stage 27's diagnosis), and
+    this bound is what keeps it inside the 5000 ms acceptance bound on max_lock_hold_ms."""
+    assert store.WAL_AUTOCHECKPOINT_PAGES < 1000, "the bound must stay below SQLite's default"
+    conn = store.open_record()
+    assert conn is not None
+    try:
+        assert conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0] == store.WAL_AUTOCHECKPOINT_PAGES
+    finally:
+        conn.close()
 
 
 def test_sync_end_written_when_nothing_committed(live_env):
