@@ -140,6 +140,12 @@ ground = "TOKEN_SHAPED.sub masks token-shaped strings in the text of a failed la
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/instruction-sandbox-live.py::redacted_reply::pattern.sub"]
+class = "structural"
+ground = "TOKEN_SHAPED.sub masks token-shaped strings in the raw CLI reply excerpt before it enters the recorded evidence; output redaction, no verdict depends on the match."
+hits = 1
+reviewed_by = "code-reviewer"
+
 [sites."scripts/lib/hook_script.py::<module>::re.compile"]
 class = "structural"
 ground = "Compile the shell `VAR=value` assignment pattern; shell-command syntax."
